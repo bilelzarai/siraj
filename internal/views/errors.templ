@@ -1,0 +1,29 @@
+package views
+
+templ ErrorPage(c Ctx, code int, titleKey, bodyKey string) {
+	@Base(c, c.T(titleKey)) {
+		<div class="shell shell--narrow" style="padding-block:60px">
+			<div class="card card--pad-lg center stack">
+				<div style="font-size:3.4rem;line-height:1" aria-hidden="true">{ errorGlyph(code) }</div>
+				<h1>{ c.T(titleKey) }</h1>
+				<p class="muted">{ c.T(bodyKey) }</p>
+				<div>
+					<a class="btn btn--primary" href={ templ.SafeURL(homeHref(c)) }>
+						{ c.T("error.home") }
+					</a>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+func errorGlyph(code int) string {
+	switch code {
+	case 404:
+		return "🧭"
+	case 403:
+		return "🔒"
+	default:
+		return "⚠️"
+	}
+}

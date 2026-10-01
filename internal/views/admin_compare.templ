@@ -1,0 +1,180 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// Two questions read down the same fields. Shared by all three screens that
+// raise a duplicate: the import preview, content health, and the question form.
+// DraftAnchor addresses the panel comparing the question being written with
+// one it resembles.
+func DraftAnchor(rightID int) string { return fmt.Sprintf("draft-%d", rightID) }
+
+func DuplicateAnchor(leftID, rightID int) string {
+	return fmt.Sprintf("dup-%d-%d", leftID, rightID)
+}
+
+// CompareChrome is everything about a comparison panel that depends on which
+// screen is showing it: what the two columns are called, where the panel is
+// addressed, and what closing it goes back to.
+type CompareChrome struct {
+	Anchor     string
+	Title      string
+	LeftLabel  string
+	RightLabel string
+	CloseHref  string
+}
+
+// comparePanel is two questions read down the same fields.
+//
+// Hidden until its anchor is the one in the address bar, which is a CSS rule
+// and no script: the panels are part of the page that was already rendered, so
+// opening one costs nothing and works with the back button.
+//
+// Every language both sides have is shown, whichever language raised the flag.
+// Two prompts can be word-for-word in French and about different battles in
+// Arabic, and this is the screen where that has to be visible.
+templ comparePanel(c Ctx, cmp *models.QuestionCompare, chrome CompareChrome) {
+	<section class="cmp" id={ chrome.Anchor }>
+		<div class="cmp__head">
+			<span class="card__title">{ chrome.Title }</span>
+			if cmp.Identical {
+				<span class="tag tag--danger">{ c.T("admin.compare.identical") }</span>
+			} else {
+				<span class="tag tag--warning">{ c.T("admin.compare.differs", cmp.Differences) }</span>
+			}
+			// The percentage that raised the pair, kept for continuity with the
+			// list above — but second to what the panel itself found, which is
+			// the answer the number could only gesture at.
+			<span class="tag tiny">{ c.T("admin.compare.score", cmp.Percent) }</span>
+			<a class="btn btn--ghost btn--sm" href={ templ.SafeURL(chrome.CloseHref) }>
+				{ c.T("admin.compare.close") }
+			</a>
+		</div>
+		<p class="tiny muted">{ c.T("admin.compare.hint") }</p>
+		<div class="cmp__row cmp__row--head">
+			<span class="cmp__label"></span>
+			@compareHead(c, chrome.LeftLabel, cmp.LeftID)
+			@compareHead(c, chrome.RightLabel, cmp.RightID)
+		</div>
+		@compareRow(c, c.T("game.setup.category"), cmp.Category, "", "")
+		@compareRow(c, c.T("game.setup.difficulty"), cmp.Difficulty, "", "")
+		@compareRow(c, c.T("admin.question.points"), cmp.Points, "", "")
+		{{
+			answer := models.ComparePair{
+				Left:  AnswerKey(c.Locale, cmp.LeftCorrect),
+				Right: AnswerKey(c.Locale, cmp.RightCorrect),
+				Same:  cmp.CorrectSame(),
+			}
+		}}
+		@compareRow(c, c.T("admin.question.correct"), answer, "", "")
+		for _, loc := range cmp.Locales {
+			<div class="cmp__locale">
+				<div class="cmp__locale-head">
+					<span aria-hidden="true">{ loc.Flag }</span>
+					<span class="bold">{ loc.Name }</span>
+					if !loc.InLeft {
+						<span class="tag tag--warning tiny">{ c.T("admin.compare.onlyRight") }</span>
+					}
+					if !loc.InRight {
+						<span class="tag tag--success tiny">{ c.T("admin.compare.onlyLeft") }</span>
+					}
+				</div>
+				@compareRow(c, c.T("admin.questions.prompt"), loc.Prompt, loc.Dir, loc.Code)
+				for i, choice := range loc.Choices {
+					@compareChoice(c, cmp, loc, i, choice)
+				}
+				if loc.Explanation.Filled() {
+					@compareRow(c, c.T("admin.question.explanation"), loc.Explanation, loc.Dir, loc.Code)
+				}
+			</div>
+		}
+	</section>
+}
+
+// compareHead names one column, and links it to the question behind it when
+// there is one — a file row being previewed has no page to open yet.
+templ compareHead(c Ctx, label string, id int) {
+	<span class="cmp__side">
+		if label != "" {
+			{ label }
+			{ " " }
+		}
+		if id > 0 {
+			@questionRef(c, id, "")
+		}
+	</span>
+}
+
+// compareRow is one field on both sides. A row where the two agree is left
+// plain: what an admin is hunting for is the row where they do not.
+templ compareRow(c Ctx, label string, pair models.ComparePair, dir, lang string) {
+	<div class={ "cmp__row", templ.KV("cmp__row--diff", !pair.Same) }>
+		<span class="cmp__label">{ label }</span>
+		// A category slug or a number belongs to no language, and tagging it
+		// with one would hand a "quran" to a right-to-left run it is not part of.
+		<div
+			class="cmp__side"
+			if dir != "" {
+				dir={ dir }
+				lang={ lang }
+			}
+		>
+			@compareText(pair.LeftDiff, pair.Left, "left")
+		</div>
+		<div
+			class="cmp__side"
+			if dir != "" {
+				dir={ dir }
+				lang={ lang }
+			}
+		>
+			@compareText(pair.RightDiff, pair.Right, "right")
+		</div>
+	</div>
+}
+
+// compareChoice is a compareRow that also says which answer is the right one,
+// per side — two questions can share every word of their choices and differ
+// only in which of them is marked correct.
+templ compareChoice(c Ctx, cmp *models.QuestionCompare, loc models.CompareLocale, i int, pair models.ComparePair) {
+	<div class={ "cmp__row", templ.KV("cmp__row--diff", !pair.Same) }>
+		<span class="cmp__label">{ AnswerKey(c.Locale, i) }</span>
+		<div class="cmp__side" dir={ loc.Dir } lang={ loc.Code }>
+			// Marked per side, and only where there is an answer to mark: a tick
+			// floating beside a dash would read as a claim about a choice that
+			// this side does not have.
+			if i == cmp.LeftCorrect && pair.Left != "" {
+				<span class="cmp__correct" title={ c.T("admin.question.correctMark") }>✓</span>
+			}
+			@compareText(pair.LeftDiff, pair.Left, "left")
+		</div>
+		<div class="cmp__side" dir={ loc.Dir } lang={ loc.Code }>
+			if i == cmp.RightCorrect && pair.Right != "" {
+				<span class="cmp__correct" title={ c.T("admin.question.correctMark") }>✓</span>
+			}
+			@compareText(pair.RightDiff, pair.Right, "right")
+		</div>
+	</div>
+}
+
+// compareText prints one side, marking the runs the other side does not have.
+// With no diff to draw it prints the text whole — either because the two match,
+// or because one side has nothing to line up against.
+templ compareText(spans []models.DiffSpan, whole string, side string) {
+	if len(spans) > 0 {
+		for _, span := range spans {
+			if span.Same {
+				{ span.Text }
+			} else {
+				<mark class={ "cmp__diff", "cmp__diff--" + side }>{ span.Text }</mark>
+			}
+		}
+	} else if whole != "" {
+		{ whole }
+	} else {
+		<span class="cmp__none" aria-hidden="true">—</span>
+	}
+}

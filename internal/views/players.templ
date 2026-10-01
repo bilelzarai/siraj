@@ -1,0 +1,149 @@
+package views
+
+import (
+	"github.com/google/uuid"
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// Several people, one device.
+//
+// The panel below is the whole of it: who is at this keyboard, whose turn it
+// is, and a box to add somebody. Passing the phone is a form post rather than a
+// sign-in, because the people taking turns are not accounts — they are players,
+// and they exist for as long as the game does.
+
+// SeatData is who is playing at this device.
+type SeatData struct {
+	// Playing reports that a round is actually in progress. Without it the
+	// chip said "their turn" about a guest holding a seat cookie left over
+	// from a match that finished days ago — a turn in a game nobody is
+	// playing.
+	Playing bool
+	// Host is the account, or the anonymous visitor, who owns the device.
+	Host *models.User
+	// Players is everyone else they have added to it.
+	Players []*models.User
+	// Acting is whose turn the next move is. The host when nobody has taken
+	// the phone.
+	Acting *models.User
+	// Max is how many players one device can hold.
+	Max int
+}
+
+// Any reports whether anybody has been added, which is what decides between a
+// panel and a single line inviting somebody to add one.
+func (s SeatData) Any() bool { return len(s.Players) > 0 }
+
+// Full reports whether the device has as many people at it as a match can hold.
+func (s SeatData) Full() bool { return len(s.Players) >= s.Max }
+
+// ActingID is whose turn it is, or the host when nobody has taken the phone.
+func (s SeatData) ActingID() uuid.UUID {
+	if s.Acting != nil {
+		return s.Acting.ID
+	}
+	if s.Host != nil {
+		return s.Host.ID
+	}
+	return uuid.Nil
+}
+
+// IsActing reports whether this id currently holds the device.
+func (s SeatData) IsActing(id uuid.UUID) bool { return s.ActingID() == id }
+
+// ActingName is who the screen says is playing.
+func (s SeatData) ActingName() string {
+	if s.Acting != nil {
+		return s.Acting.DisplayName
+	}
+	if s.Host != nil {
+		return s.Host.DisplayName
+	}
+	return ""
+}
+
+// SharedDevice is the panel: who is here, whose turn it is, and how to add
+// somebody else.
+//
+// It is deliberately one component used on both the setup screen and the
+// challenge list. The two questions it answers — "who can be in this match" and
+// "whose turn is it now" — are the same question at two moments, and splitting
+// them into two panels is how they drift into disagreeing.
+templ SharedDevice(c Ctx, d SeatData) {
+	if d.Host != nil {
+		<section class="card stack-sm seats" data-seats>
+			<div class="row row--between row--wrap" style="gap:8px">
+				<h2 class="section-title" style="margin:0">{ c.T("players.title") }</h2>
+				<span class="tiny muted">{ c.T("players.hint") }</span>
+			</div>
+			<div class="seats__list">
+				@seatChip(c, d, d.Host.ID, d.Host.DisplayName, true)
+				for _, p := range d.Players {
+					@seatChip(c, d, p.ID, p.DisplayName, false)
+				}
+			</div>
+			if !d.Full() && !d.Playing {
+				<form class="row" style="gap:8px" method="post" action="/players">
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<input type="hidden" name="request_key" value={ NewRequestKey() }/>
+					<input
+						class="input input--sm"
+						type="text"
+						name="name"
+						maxlength="40"
+						required
+						placeholder={ c.T("players.namePlaceholder") }
+						aria-label={ c.T("players.namePlaceholder") }
+					/>
+					<button class="btn btn--soft btn--sm" type="submit">{ c.T("players.add") }</button>
+				</form>
+			} else if d.Full() {
+				<p class="tiny muted">{ c.T("players.tooMany", d.Max) }</p>
+			}
+		</section>
+	}
+}
+
+// seatChip is one person at the device: their name, whether it is their turn,
+// and the way to hand it to them.
+templ seatChip(c Ctx, d SeatData, id uuid.UUID, name string, isHost bool) {
+	<div class={ "seat", templ.KV("is-on", d.IsActing(id)) }>
+		<form method="post" action="/players/seat">
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<input type="hidden" name="player" value={ id.String() }/>
+			<button
+				class="seat__take"
+				type="submit"
+				disabled?={ d.IsActing(id) }
+				aria-pressed={ boolAttr(d.IsActing(id)) }
+			>
+				<span class="avatar avatar--sm" style={ AvatarStyle(id.String()) }>{ Initial(name) }</span>
+				<span class="truncate">{ name }</span>
+				if d.IsActing(id) && d.Playing {
+					<span class="tag tag--on">{ c.T("players.turn") }</span>
+				}
+			</button>
+		</form>
+		if !isHost && !d.Playing {
+			<form method="post" action={ templ.SafeURL("/players/" + id.String() + "/remove") } data-confirm={ c.T("players.removeConfirm", name) }>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<button class="seat__drop" type="submit" aria-label={ c.T("players.remove") } title={ c.T("players.remove") }>✕</button>
+			</form>
+		}
+	</div>
+}
+
+// PlayingAs is the line the round itself carries when the device is being
+// shared: whose answer the next tap is about.
+//
+// Without it a round played on one phone is four rounds that all look the same,
+// and the only way to know whether you are answering for yourself is to
+// remember whether you pressed the button.
+templ PlayingAs(c Ctx, actor *models.User) {
+	if actor != nil && actor.IsLocalPlayer() {
+		<div class="play__as">
+			<span class="avatar avatar--sm" style={ AvatarStyle(actor.ID.String()) }>{ Initial(actor.DisplayName) }</span>
+			<span class="truncate">{ c.T("players.playingAs", actor.DisplayName) }</span>
+		</div>
+	}
+}

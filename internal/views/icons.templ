@@ -1,0 +1,231 @@
+package views
+
+// Inline SVG for every control whose icon carries meaning.
+//
+// Emoji were the original choice and they are wrong for this job: 👁️ and 🙈
+// render differently on every platform, the monkey collapses into an
+// unreadable brown shape at 16px, and neither inherits the text colour. These
+// icons use currentColor, so they follow the theme and the button state.
+//
+// Decorative icons that are content rather than controls — category symbols,
+// badge art — stay as emoji on purpose.
+
+// IconEye is the "password is hidden, press to reveal" state.
+templ IconEye() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"></path>
+		<circle cx="12" cy="12" r="2.8"></circle>
+	</svg>
+}
+
+// IconEyeOff is the "password is visible, press to hide" state.
+templ IconEyeOff() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<path d="M10.6 6.1A9.6 9.6 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-2.4 3.2"></path>
+		<path d="M6.6 6.8A17 17 0 0 0 2 12s3.5 6.5 10 6.5a9.9 9.9 0 0 0 4.2-.9"></path>
+		<path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path>
+		<line x1="3" y1="3" x2="21" y2="21"></line>
+	</svg>
+}
+
+// IconSun, IconMoon and IconMonitor label the three appearance settings.
+templ IconSun() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<circle cx="12" cy="12" r="4"></circle>
+		<path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+	</svg>
+}
+
+templ IconMoon() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
+	</svg>
+}
+
+templ IconMonitor() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<rect x="2.5" y="4" width="19" height="12.5" rx="2"></rect>
+		<path d="M8.5 20.5h7M12 16.5v4"></path>
+	</svg>
+}
+
+// IconGlobe is the language switcher.
+templ IconGlobe() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<circle cx="12" cy="12" r="9"></circle>
+		<path d="M3 12h18M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z"></path>
+	</svg>
+}
+
+// IconAlert marks a field or form that failed validation.
+templ IconAlert() {
+	<svg
+		class="icon icon--sm"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="2"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<circle cx="12" cy="12" r="9"></circle>
+		<path d="M12 7.5v5M12 16.2v.1"></path>
+	</svg>
+}
+
+// ThemeIcon renders the icon for one appearance setting.
+templ ThemeIcon(theme string) {
+	switch theme {
+		case "light":
+			@IconSun()
+		case "dark":
+			@IconMoon()
+		default:
+			@IconMonitor()
+	}
+}
+
+// The composer's four controls. They were emoji — 📎 🎙️ 😊 ➤ — which is
+// exactly the job this file exists for: three of them render as a different
+// picture on every platform, the microphone loses its shape at 20px, and none
+// of them take the colour of the button they sit in.
+
+// IconPaperclip attaches a file.
+templ IconPaperclip() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<path d="M21 11.5 12.5 20a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.9-7.8"></path>
+	</svg>
+}
+
+// IconMic records a voice note.
+templ IconMic() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<rect x="9" y="2.5" width="6" height="12" rx="3"></rect>
+		<path d="M5.5 11a6.5 6.5 0 0 0 13 0"></path>
+		<line x1="12" y1="17.5" x2="12" y2="21.5"></line>
+	</svg>
+}
+
+// IconSmile opens the emoji picker.
+templ IconSmile() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<circle cx="12" cy="12" r="9.2"></circle>
+		<path d="M8.5 14.2a4.4 4.4 0 0 0 7 0"></path>
+		<line x1="9" y1="9.5" x2="9.01" y2="9.5"></line>
+		<line x1="15" y1="9.5" x2="15.01" y2="9.5"></line>
+	</svg>
+}
+
+// IconSend sends what has been written. It points the way the language runs,
+// because the stylesheet flips it under RTL.
+templ IconSend() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<path d="M4 12 20.5 4 13 20.5l-2-7.2z"></path>
+		<path d="m11 13.3 9.5-9.3"></path>
+	</svg>
+}
+
+// IconPlay and IconPause drive the voice-note player.
+templ IconPlay() {
+	<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+		<path d="M8 5.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8a.8.8 0 0 0-1.2.7Z"></path>
+	</svg>
+}
+
+templ IconPause() {
+	<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+		<rect x="6.5" y="4.5" width="4" height="15" rx="1.3"></rect>
+		<rect x="13.5" y="4.5" width="4" height="15" rx="1.3"></rect>
+	</svg>
+}

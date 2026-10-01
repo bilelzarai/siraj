@@ -1,0 +1,390 @@
+package views
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// The admin shell: navigation, chrome, and the pieces every admin screen uses.
+// AdminChrome is the admin-only navigation state.
+type AdminChrome struct {
+	Path            string
+	PendingReview   int
+	AwaitingSupport int
+	// PoorlyRated is how many questions players have marked down far enough to
+	// need looking at. It rides in the chrome so the red badge is on the nav
+	// from whichever admin screen you are on, rather than only being noticed
+	// by someone who thought to go and check.
+	PoorlyRated int
+}
+
+func (a AdminChrome) On(prefix string) bool {
+	if prefix == "/admin" {
+		return a.Path == "/admin"
+	}
+	return strings.HasPrefix(a.Path, prefix)
+}
+
+// adminShell wraps every admin screen with its own sidebar navigation.
+templ adminShell(c Ctx, a AdminChrome, title string) {
+	@Base(c, title) {
+		<div class="shell shell--wide">
+			@BackLink(c, "/app", c.T("nav.home"))
+			<div class="admin">
+				<nav class="admin__nav" aria-label={ c.T("admin.title") }>
+					@adminNavLink(c, a, "/admin", "📊", c.T("admin.nav.dashboard"), 0)
+					@adminNavLink(c, a, "/admin/users", "👥", c.T("admin.nav.users"), 0)
+					@adminNavLink(c, a, "/admin/support", "🎧", c.T("admin.nav.support"), a.AwaitingSupport)
+					@adminNavLink(c, a, "/admin/questions", "❓", c.T("admin.nav.questions"), 0)
+					@adminNavLink(c, a, "/admin/review", "🔍", c.T("admin.nav.review"), a.PendingReview)
+					@adminNavLink(c, a, "/admin/comments", "💬", c.T("admin.nav.comments"), 0)
+					@adminNavLink(c, a, "/admin/rated", "⭐", c.T("admin.nav.rated"), a.PoorlyRated)
+					@adminNavLink(c, a, "/admin/integrity", "🧹", c.T("admin.nav.integrity"), 0)
+					@adminNavLink(c, a, "/admin/audit", "📋", c.T("admin.nav.audit"), 0)
+				</nav>
+				<div class="admin__body stack">
+					<h1 style="font-size:1.5rem">{ title }</h1>
+					{ children... }
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ adminNavLink(c Ctx, a AdminChrome, href, icon, label string, badge int) {
+	<a
+		class={ "admin__nav-link", templ.KV("is-active", a.On(href)) }
+		href={ templ.SafeURL(href) }
+	>
+		<span aria-hidden="true">{ icon }</span>
+		<span class="truncate">{ label }</span>
+		if badge > 0 {
+			<span class="count-dot">{ fmt.Sprint(badge) }</span>
+		}
+	</a>
+}
+
+// coverageCell colours the count against the 100-per-difficulty target, so
+// the thin spots are obvious at a glance.
+templ coverageCell(n int) {
+	<td>
+		<span class={ "tag", coverageClass(n) }>
+			<span class="num">{ fmt.Sprint(n) }</span>
+		</span>
+	</td>
+}
+
+func (d AdminNewUserData) Err(field string) string {
+	if d.Errors == nil {
+		return ""
+	}
+	return d.Errors[field]
+}
+
+func (d AdminNewUserData) Problems(c Ctx) []FieldProblem {
+	var out []FieldProblem
+	for _, pair := range [][2]string{
+		{"display_name", "auth.field.displayName"},
+		{"username", "auth.field.username"},
+		{"email", "auth.field.email"},
+		{"password", "auth.field.password"},
+	} {
+		if msg := d.Err(pair[0]); msg != "" {
+			out = append(out, FieldProblem{ID: pair[0], Label: c.T(pair[1]), Message: msg})
+		}
+	}
+	return out
+}
+
+func (d AdminQuestionsData) forced(id int) bool { return d.ForceIDs[id] }
+
+// pending reports whether a refused delete is waiting to be confirmed, which
+// is what turns the bulk bar's button from "delete" into "delete anyway".
+func (d AdminQuestionsData) pending() bool { return len(d.ForceIDs) > 0 }
+
+// Flagged counts the rows the importer stopped on, whether or not they have a
+// panel behind them.
+func (d AdminImportData) Flagged() int {
+	n := 0
+	for _, row := range d.Result.Report {
+		if row.SimilarID > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// Comparable reports whether a flagged row has a comparison to open. A question
+// deleted between the duplicate sweep and the report has none, and a link that
+// scrolls to nothing is worse than no link.
+func (d AdminImportData) Comparable(line int) bool {
+	for _, cmp := range d.Compare {
+		if cmp.Line == line {
+			return true
+		}
+	}
+	return false
+}
+
+// Undecided counts the flagged rows still waiting on an answer. They are the
+// difference between "this file added 297" and "this file added 300", and
+// without saying so the preview reads as though three rows simply vanished.
+func (d AdminImportData) Undecided() int {
+	n := 0
+	for _, row := range d.Result.Report {
+		if row.SimilarID > 0 && row.Outcome == "pending" {
+			n++
+		}
+	}
+	return n
+}
+
+// translateAction asks the provider for one locale. The result lands with
+// needs_review set and shows up in the queue above, never straight in front of
+// a player.
+templ translateAction(c Ctx, id int, locale string) {
+	<form
+		method="post"
+		action={ templ.SafeURL(fmt.Sprintf("/admin/review/%d/translate", id)) }
+		data-confirm={ c.T("admin.review.translateConfirm", locale) }
+	>
+		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+		<input type="hidden" name="locale" value={ locale }/>
+		<button
+			class="btn btn--soft btn--sm"
+			type="submit"
+			title={ c.T("admin.review.translateTo", locale) }
+		>
+			<span aria-hidden="true">🌐</span>
+			<span class="num">{ locale }</span>
+		</button>
+	</form>
+}
+
+// reviewAction is the pair of decisions a reviewer can take on one locale.
+// Approving clears the flag and lets players see it; rejecting deletes the
+// translation, which is why it asks first.
+templ reviewAction(c Ctx, id int, locale string) {
+	<div class="row" style="gap:4px;align-items:center">
+		<span class="tag num">{ locale }</span>
+		<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/review/%d/approve", id)) }>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<input type="hidden" name="locale" value={ locale }/>
+			<button
+				class="btn btn--soft btn--sm"
+				type="submit"
+				aria-label={ c.T("admin.review.approve", locale) }
+				title={ c.T("admin.review.approve", locale) }
+			>
+				<span aria-hidden="true">✓</span>
+			</button>
+		</form>
+		<form
+			method="post"
+			action={ templ.SafeURL(fmt.Sprintf("/admin/review/%d/reject", id)) }
+			data-confirm={ c.T("admin.review.rejectConfirm", locale) }
+		>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<input type="hidden" name="locale" value={ locale }/>
+			<button
+				class="btn btn--ghost btn--sm"
+				type="submit"
+				aria-label={ c.T("admin.review.reject", locale) }
+				title={ c.T("admin.review.reject", locale) }
+			>
+				<span aria-hidden="true">✕</span>
+			</button>
+		</form>
+	</div>
+}
+
+// CompareFor is the comparison behind one pair, or nil when there is none —
+// the pair's own panel, rendered beside it rather than at the foot of the page.
+func (d AdminIntegrityData) CompareFor(leftID, rightID int) *models.QuestionCompare {
+	for _, cmp := range d.Compare {
+		if cmp.LeftID == leftID && cmp.RightID == rightID {
+			return cmp
+		}
+	}
+	return nil
+}
+
+// Comparable reports whether a pair has a panel to open. A question deleted
+// between the sweep and the render has none, and a link that scrolls to nothing
+// is worse than no link.
+func (d AdminIntegrityData) Comparable(leftID, rightID int) bool {
+	for _, cmp := range d.Compare {
+		if cmp.LeftID == leftID && cmp.RightID == rightID {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------- shared --
+
+// ------------------------------------------------------------- Go helpers --
+
+// coverageRow flattens the per-difficulty counts into one row per category.
+type coverageRow struct {
+	Name, Icon         string
+	Easy, Medium, Hard int
+}
+
+func coverageByCategory(rows []models.CoverageRow) []coverageRow {
+	order := []int{}
+	byID := map[int]*coverageRow{}
+
+	for _, r := range rows {
+		row, ok := byID[r.CategoryID]
+		if !ok {
+			row = &coverageRow{Name: r.CategoryName, Icon: r.CategoryIcon}
+			byID[r.CategoryID] = row
+			order = append(order, r.CategoryID)
+		}
+		switch r.Difficulty {
+		case 1:
+			row.Easy = r.Count
+		case 2:
+			row.Medium = r.Count
+		case 3:
+			row.Hard = r.Count
+		}
+	}
+
+	out := make([]coverageRow, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byID[id])
+	}
+	return out
+}
+
+// coverageClass grades a count against the 100-per-difficulty target.
+func coverageClass(n int) string {
+	switch {
+	case n >= 100:
+		return "tag--success"
+	case n >= 50:
+		return "tag--warning"
+	default:
+		return "tag--danger"
+	}
+}
+
+func localeTagClass(n int) string {
+	if n >= 3 {
+		return "tag--success"
+	}
+	return "tag--warning"
+}
+
+func outcomeClass(outcome string) string {
+	switch outcome {
+	case "add":
+		return "tag--success"
+	case "update":
+		return "tag--info"
+	case "skip", "duplicate":
+		return "tag--warning"
+	case "pending":
+		return "tag--info"
+	default:
+		return "tag--danger"
+	}
+}
+
+func translatorAlertClass(available bool) string {
+	if available {
+		return "alert--success"
+	}
+	return "alert--warning"
+}
+
+func roleIcon(role string) string {
+	switch role {
+	case models.RoleAdmin:
+		return "🛡️"
+	case models.RoleModerator:
+		return "🔧"
+	default:
+		return "🎮"
+	}
+}
+
+// Blank reports whether this language was left untouched, in which case it is
+// simply not part of the submission — a question can be written one language at
+// a time rather than all three at once.
+func (f QuestionLocaleForm) Blank() bool {
+	if strings.TrimSpace(f.Prompt) != "" || strings.TrimSpace(f.Explanation) != "" {
+		return false
+	}
+	for _, choice := range f.Choices {
+		if strings.TrimSpace(choice) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// Choice is the value of one choice box, tolerating a short slice.
+func (f QuestionLocaleForm) Choice(i int) string {
+	if i < 0 || i >= len(f.Choices) {
+		return ""
+	}
+	return f.Choices[i]
+}
+
+func (d AdminQuestionFormData) Locale(code string) QuestionLocaleForm {
+	if d.Locales == nil {
+		return QuestionLocaleForm{}
+	}
+	return d.Locales[code]
+}
+
+// Comparable reports whether a flagged match has a panel behind it.
+func (d AdminQuestionFormData) Comparable(rightID int) bool {
+	for _, cmp := range d.Compare {
+		if cmp.RightID == rightID {
+			return true
+		}
+	}
+	return false
+}
+
+func (d AdminQuestionFormData) LocaleError(code string) string {
+	if d.Errors == nil {
+		return ""
+	}
+	return d.Errors[code]
+}
+
+func (d AdminQuestionFormData) Title(c Ctx) string {
+	if d.ID > 0 {
+		return c.T("admin.question.edit", d.ID)
+	}
+	return c.T("admin.question.new")
+}
+
+// decisionsFirst floats the rows still waiting on an answer to the top of the
+// report.
+//
+// A three-hundred row file puts its three questions wherever the file happened
+// to put them — line 677 of 900, in the screenshot that prompted this. Nobody
+// scrolls a report looking for the rows that need them; they read the top and
+// press Apply.
+func decisionsFirst(rows []models.ImportRow) []models.ImportRow {
+	out := make([]models.ImportRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Outcome == "pending" {
+			out = append(out, row)
+		}
+	}
+	for _, row := range rows {
+		if row.Outcome != "pending" {
+			out = append(out, row)
+		}
+	}
+	return out
+}

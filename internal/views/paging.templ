@@ -1,0 +1,56 @@
+package views
+
+import "fmt"
+
+// Pager is one list's navigation: how many rows to show, where you are, and
+// the way to the next page.
+//
+// One component for every list. There were two — an admin pager and a
+// hand-rolled prev/next on the history screen — with different markup and
+// different behaviour for the same job, and neither offered a choice of size.
+type Pager struct {
+	Page, Pages, Total, Size int
+	Sizes                    []int
+	// First and Last are the rows on screen, so "showing 21–40 of 96" can be
+	// said outright rather than left to be worked out.
+	First, Last int
+	// PageHref and SizeHref rebuild the address, keeping the filters the list
+	// was showing.
+	PageHref func(int) string
+	SizeHref func(int) string
+}
+
+templ PagerBar(c Ctx, p Pager) {
+	if p.Total > 0 {
+		<div class="pager">
+			<span class="pager__count tiny muted">
+				{ c.T("common.showing", p.First, p.Last, p.Total) }
+			</span>
+			<div class="pager__sizes" role="group" aria-label={ c.T("common.rowsPerPage") }>
+				<span class="tiny muted">{ c.T("common.rowsPerPage") }</span>
+				for _, size := range p.Sizes {
+					if size == p.Size {
+						<span class="pager__size is-on" aria-current="true">{ fmt.Sprint(size) }</span>
+					} else {
+						<a class="pager__size" href={ templ.SafeURL(p.SizeHref(size)) }>{ fmt.Sprint(size) }</a>
+					}
+				}
+			</div>
+			if p.Pages > 1 {
+				<div class="pager__pages">
+					if p.Page > 1 {
+						<a class="btn btn--ghost btn--sm" href={ templ.SafeURL(p.PageHref(p.Page - 1)) }>
+							{ c.T("common.back") }
+						</a>
+					}
+					<span class="small muted num">{ fmt.Sprintf("%d / %d", p.Page, p.Pages) }</span>
+					if p.Page < p.Pages {
+						<a class="btn btn--ghost btn--sm" href={ templ.SafeURL(p.PageHref(p.Page + 1)) }>
+							{ c.T("game.next") }
+						</a>
+					}
+				</div>
+			}
+		</div>
+	}
+}

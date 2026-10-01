@@ -1,0 +1,129 @@
+package views
+
+import "github.com/bilelzarai/siraj/internal/service"
+
+// ------------------------------------------------------------- forgotten --
+
+type ForgotData struct {
+	Email   string
+	General string
+	Sent    bool
+}
+
+templ Forgot(c Ctx, d ForgotData) {
+	@Base(c, c.T("auth.forgot.title")) {
+		<div class="shell shell--narrow stack">
+			@BackLink(c, "/login", c.T("auth.login.title"))
+			<div class="card card--pad-lg stack">
+				<div>
+					<h1 style="font-size:1.4rem">{ c.T("auth.forgot.title") }</h1>
+					<p class="small muted">{ c.T("auth.forgot.subtitle") }</p>
+				</div>
+				if d.Sent {
+					// The same message whether or not the address is registered:
+					// a different one here would confirm who has an account.
+					<div class="alert alert--success" role="status">
+						<span aria-hidden="true">✉️</span>
+						<div>{ c.T("auth.forgot.sent") }</div>
+					</div>
+					<a class="btn btn--ghost" href="/login">{ c.T("auth.login.title") }</a>
+				} else {
+					@FormProblems(c, d.General, nil)
+					<form method="post" action="/forgot" class="stack" novalidate>
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						@TextField(c, TextFieldOpts{
+							ID:           "email",
+							Name:         "email",
+							Type:         "email",
+							Dir:          "ltr",
+							Label:        c.T("auth.field.email"),
+							Value:        d.Email,
+							Autocomplete: "email",
+							Required:     true,
+						})
+						<button class="btn btn--primary btn--lg" type="submit">
+							{ c.T("auth.forgot.send") }
+						</button>
+					</form>
+				}
+			</div>
+		</div>
+	}
+}
+
+// ----------------------------------------------------------- new password --
+
+type ResetData struct {
+	Token   string
+	Expired bool
+	Errors  map[string]string
+}
+
+func (d ResetData) Err(field string) string {
+	if d.Errors == nil {
+		return ""
+	}
+	return d.Errors[field]
+}
+
+func (d ResetData) Problems(c Ctx) []FieldProblem {
+	var out []FieldProblem
+	for _, pair := range [][2]string{
+		{"password", "auth.field.newPassword"},
+		{"password_confirm", "auth.field.passwordConfirm"},
+	} {
+		if msg := d.Err(pair[0]); msg != "" {
+			out = append(out, FieldProblem{ID: pair[0], Label: c.T(pair[1]), Message: msg})
+		}
+	}
+	return out
+}
+
+templ Reset(c Ctx, d ResetData) {
+	@Base(c, c.T("auth.reset.title")) {
+		<div class="shell shell--narrow stack">
+			@BackLink(c, "/login", c.T("auth.login.title"))
+			<div class="card card--pad-lg stack">
+				if d.Expired {
+					<div>
+						<h1 style="font-size:1.4rem">{ c.T("auth.reset.expiredTitle") }</h1>
+						<p class="small muted">{ c.T("auth.reset.expiredBody", int(service.ResetTTL.Minutes())) }</p>
+					</div>
+					<a class="btn btn--primary" href="/forgot">{ c.T("auth.forgot.title") }</a>
+				} else {
+					<div>
+						<h1 style="font-size:1.4rem">{ c.T("auth.reset.title") }</h1>
+						<p class="small muted">{ c.T("auth.reset.subtitle") }</p>
+					</div>
+					@FormProblems(c, "", d.Problems(c))
+					<form method="post" action="/reset" class="stack" novalidate>
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<input type="hidden" name="token" value={ d.Token }/>
+						@PasswordField(c, PasswordFieldOpts{
+							ID:           "password",
+							Name:         "password",
+							Label:        c.T("auth.field.newPassword"),
+							Autocomplete: "new-password",
+							Required:     true,
+							MinLength:    8,
+							Hint:         c.T("auth.passwordHint"),
+							Error:        d.Err("password"),
+						})
+						@PasswordField(c, PasswordFieldOpts{
+							ID:           "password_confirm",
+							Name:         "password_confirm",
+							Label:        c.T("auth.field.passwordConfirm"),
+							Autocomplete: "new-password",
+							Required:     true,
+							MinLength:    8,
+							Error:        d.Err("password_confirm"),
+						})
+						<button class="btn btn--primary btn--lg" type="submit">
+							{ c.T("auth.reset.submit") }
+						</button>
+					</form>
+				}
+			</div>
+		</div>
+	}
+}

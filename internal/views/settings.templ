@@ -1,0 +1,201 @@
+package views
+
+import (
+	"strings"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+type SettingsData struct {
+	User           *models.User
+	Sessions       []*models.Session
+	CurrentSessID  string
+	PasswordError  string
+	PasswordErrors map[string]string
+}
+
+func (d SettingsData) PwErr(field string) string {
+	if d.PasswordErrors == nil {
+		return ""
+	}
+	return d.PasswordErrors[field]
+}
+
+func (d SettingsData) PwProblems(c Ctx) []FieldProblem {
+	var out []FieldProblem
+	for _, pair := range [][2]string{
+		{"current_password", "auth.field.currentPassword"},
+		{"new_password", "auth.field.newPassword"},
+	} {
+		if msg := d.PwErr(pair[0]); msg != "" {
+			out = append(out, FieldProblem{ID: pair[0], Label: c.T(pair[1]), Message: msg})
+		}
+	}
+	return out
+}
+
+templ Settings(c Ctx, d SettingsData) {
+	@Base(c, c.T("settings.title")) {
+		<div class="shell shell--narrow stack-lg">
+			<div>
+				@BackLink(c, "/profile", c.T("nav.profile"))
+				<h1>{ c.T("settings.title") }</h1>
+			</div>
+			<section class="card stack">
+				<div class="card__head" style="margin:0">
+					<span class="card__title">{ c.T("settings.language") }</span>
+				</div>
+				<p class="small muted">{ c.T("settings.language.help") }</p>
+				<div class="choice-grid">
+					for _, loc := range c.Locales() {
+						<form method="post" action="/settings/locale">
+							<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+							<input type="hidden" name="locale" value={ loc.Code }/>
+							<input type="hidden" name="redirect" value="/settings"/>
+							<button
+								class={ "chip-radio__face", templ.KV("is-selected", loc.Code == c.Locale) }
+								type="submit"
+								style={ localeButtonStyle(loc.Code == c.Locale) }
+							>
+								<span aria-hidden="true">{ loc.Flag }</span>
+								<span>{ loc.Name }</span>
+							</button>
+						</form>
+					}
+				</div>
+			</section>
+			<section class="card stack">
+				<div class="card__head" style="margin:0">
+					<span class="card__title">{ c.T("settings.theme") }</span>
+				</div>
+				<div class="segment" role="group">
+					<button class="segment__item" type="button" data-theme-set="light">
+						☀️ { c.T("settings.theme.light") }
+					</button>
+					<button class="segment__item" type="button" data-theme-set="dark">
+						🌙 { c.T("settings.theme.dark") }
+					</button>
+					<button class="segment__item" type="button" data-theme-set="system">
+						🖥️ { c.T("settings.theme.system") }
+					</button>
+				</div>
+			</section>
+			<section class="card stack">
+				<div class="card__head" style="margin:0">
+					<span class="card__title">{ c.T("settings.password.title") }</span>
+				</div>
+				@FormProblems(c, d.PasswordError, d.PwProblems(c))
+				<form method="post" action="/settings/password" class="stack" novalidate>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					@PasswordField(c, PasswordFieldOpts{
+						ID:           "current_password",
+						Name:         "current_password",
+						Label:        c.T("auth.field.currentPassword"),
+						Autocomplete: "current-password",
+						Required:     true,
+						Error:        d.PwErr("current_password"),
+					})
+					@PasswordField(c, PasswordFieldOpts{
+						ID:           "new_password",
+						Name:         "new_password",
+						Label:        c.T("auth.field.newPassword"),
+						Autocomplete: "new-password",
+						Required:     true,
+						MinLength:    8,
+						Hint:         c.T("auth.passwordHint"),
+						Error:        d.PwErr("new_password"),
+					})
+					<button class="btn btn--primary" type="submit">{ c.T("settings.password.save") }</button>
+				</form>
+			</section>
+			<section class="card stack">
+				<div class="card__head" style="margin:0">
+					<span class="card__title">{ c.T("settings.sessions.title") }</span>
+				</div>
+				<div class="stack-sm">
+					for _, s := range d.Sessions {
+						<div class="panel row row--between">
+							<div style="min-width:0">
+								<div class="small truncate">{ deviceLabel(s.UserAgent) }</div>
+								<div class="tiny muted">{ s.IP } · { c.Tr.RelativeTime(s.CreatedAt) }</div>
+							</div>
+							if s.ID == d.CurrentSessID {
+								<span class="tag tag--accent">{ c.T("settings.sessions.current") }</span>
+							}
+						</div>
+					}
+				</div>
+				if len(d.Sessions) > 1 {
+					<form method="post" action="/settings/sessions/revoke">
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<button class="btn btn--ghost btn--sm" type="submit">
+							{ c.T("settings.sessions.revoke") }
+						</button>
+					</form>
+				}
+			</section>
+			<section class="card stack">
+				<div class="card__head" style="margin:0">
+					<span class="card__title" style="color:var(--danger)">{ c.T("settings.danger") }</span>
+				</div>
+				<p class="small muted">{ c.T("settings.delete.confirm") }</p>
+				// Two fields, doing two different jobs: the username is the
+				// deliberate step that stops a mis-click, the password is what
+				// proves the owner is the one asking. The username alone is on
+				// screen, so a borrowed session could type it.
+				<form method="post" action="/settings/delete" class="row row--wrap" style="gap:10px" data-confirm={ c.T("settings.delete.confirm") }>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<input
+						class="input"
+						name="username"
+						type="text"
+						dir="ltr"
+						required
+						autocomplete="off"
+						placeholder={ d.User.Username }
+						style="flex:1;min-width:160px"
+						aria-label={ c.T("settings.delete.confirm") }
+					/>
+					<input
+						class="input"
+						name="password"
+						type="password"
+						required
+						autocomplete="current-password"
+						placeholder={ c.T("settings.delete.password") }
+						style="flex:1;min-width:160px"
+						aria-label={ c.T("settings.delete.password") }
+					/>
+					<button class="btn btn--danger" type="submit">{ c.T("settings.delete") }</button>
+				</form>
+			</section>
+		</div>
+	}
+}
+
+func localeButtonStyle(selected bool) string {
+	if selected {
+		return "width:100%;border-color:var(--accent);background:var(--accent-soft);color:var(--accent-ink)"
+	}
+	return "width:100%"
+}
+
+// deviceLabel reduces a user-agent string to something a person recognises.
+func deviceLabel(ua string) string {
+	switch {
+	case ua == "":
+		return "—"
+	case strings.Contains(ua, "Android"):
+		return "Android"
+	case strings.Contains(ua, "iPhone"), strings.Contains(ua, "iPad"):
+		return "iOS"
+	case strings.Contains(ua, "Mac OS X"):
+		return "macOS"
+	case strings.Contains(ua, "Windows"):
+		return "Windows"
+	case strings.Contains(ua, "Linux"):
+		return "Linux"
+	default:
+		return "—"
+	}
+}

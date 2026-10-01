@@ -1,0 +1,92 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+type QuestionCommentsData struct {
+	QuestionID int64
+	Prompt     string
+	Comments   []*models.QuestionComment
+	Mine       string
+}
+
+templ QuestionComments(c Ctx, d QuestionCommentsData) {
+	@Base(c, c.T("comments.title")) {
+		<div class="shell shell--narrow stack">
+			@BackLink(c, "/history", c.T("history.title"))
+			<section class="card stack-sm">
+				<h1 style="font-size:1.1rem">{ c.T("comments.title") }</h1>
+				// The question keeps its own language and direction, so an Arabic
+				// prompt is not reflowed by a French page.
+				<p class="muted small" dir={ ContentDir(c.Locale) } lang={ c.Locale }>{ d.Prompt }</p>
+			</section>
+			<form method="post" action={ templ.SafeURL(fmt.Sprintf("/questions/%d/comments", d.QuestionID)) } class="card stack-sm">
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				@TextAreaField(c, TextAreaOpts{
+					ID:          "body",
+					Name:        "body",
+					Label:       c.T("comments.yours"),
+					Value:       d.Mine,
+					Placeholder: c.T("comments.placeholder"),
+					Rows:        4,
+					MaxLength:   2000,
+					Required:    true,
+				})
+				<div class="row" style="justify-content:flex-end">
+					<button class="btn btn--primary" type="submit">
+						if d.Mine == "" {
+							{ c.T("comments.post") }
+						} else {
+							{ c.T("comments.update") }
+						}
+					</button>
+				</div>
+			</form>
+			if len(d.Comments) == 0 {
+				@Empty("💬", c.T("comments.empty"))
+			} else {
+				<div class="stack-sm">
+					for _, cm := range d.Comments {
+						@questionComment(c, cm)
+					}
+				</div>
+			}
+		</div>
+	}
+}
+
+templ questionComment(c Ctx, cm *models.QuestionComment) {
+	<article class="card stack-sm">
+		<div class="row row--between" style="gap:8px">
+			<span class="tiny bold">
+				if cm.Anonymous() {
+					{ c.T("comments.deletedAuthor") }
+				} else {
+					<a href={ templ.SafeURL("/u/" + cm.AuthorUsername) }>{ cm.AuthorName }</a>
+				}
+			</span>
+			<span class="tiny muted">{ c.Tr.RelativeTime(cm.CreatedAt) }</span>
+		</div>
+		// Player-authored text: rendered as text, never as markup, and tagged
+		// with the language it was written in so bidi text is not reordered.
+		<p class="small" dir={ ContentDir(cm.Locale) } lang={ cm.Locale }>{ cm.Body }</p>
+	</article>
+}
+
+// CommentLink is the entry point from the review screen.
+templ CommentLink(c Ctx, questionID int, count int) {
+	<a
+		class="btn btn--ghost btn--sm"
+		href={ templ.SafeURL(fmt.Sprintf("/questions/%d/comments", questionID)) }
+	>
+		<span aria-hidden="true">💬</span>
+		if count > 0 {
+			<span class="num">{ fmt.Sprint(count) }</span>
+		} else {
+			<span>{ c.T("comments.add") }</span>
+		}
+	</a>
+}

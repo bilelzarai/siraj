@@ -1,0 +1,463 @@
+package views
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// Dashboard, content health, poorly-rated questions, remarks, audit trail.
+// ------------------------------------------------------------- dashboard --
+
+type AdminDashboardData struct {
+	Stats  *models.PlatformStats
+	Recent []*models.AuditEntry
+}
+
+templ AdminDashboard(c Ctx, a AdminChrome, d AdminDashboardData) {
+	@adminShell(c, a, c.T("admin.nav.dashboard")) {
+		<section class="grid grid--stats">
+			@StatTile("👥", fmt.Sprint(d.Stats.Users), c.T("admin.stat.users"))
+			@StatTile("🟢", fmt.Sprint(d.Stats.ActiveToday), c.T("admin.stat.activeToday"))
+			@StatTile("✨", fmt.Sprint(d.Stats.NewThisWeek), c.T("admin.stat.newThisWeek"))
+			@StatTile("🛡️", fmt.Sprint(d.Stats.Admins+d.Stats.Moderators), c.T("admin.stat.staff"))
+			@StatTile("❓", fmt.Sprint(d.Stats.ActiveQuestions), c.T("admin.stat.questions"))
+			@StatTile("🌐", fmt.Sprint(d.Stats.Translations), c.T("admin.stat.translations"))
+			@StatTile("🎮", fmt.Sprint(d.Stats.RoundsPlayed), c.T("admin.stat.rounds"))
+			@StatTile("⚔️", fmt.Sprint(d.Stats.Duels), c.T("admin.stat.duels"))
+		</section>
+		if d.Stats.PendingReview > 0 {
+			<a class="alert alert--warning" href="/admin/review" style="align-items:center">
+				<span aria-hidden="true">🔍</span>
+				<span>{ c.T("admin.review.pending", d.Stats.PendingReview) }</span>
+			</a>
+		}
+		<section class="card stack">
+			<div class="card__head" style="margin:0">
+				<span class="card__title">{ c.T("admin.coverage.title") }</span>
+				<span class="tiny muted">{ c.T("admin.coverage.help") }</span>
+			</div>
+			if len(d.Stats.Coverage) == 0 {
+				@Empty("📭", c.T("admin.coverage.empty"))
+			} else {
+				<div class="scroll-x">
+					<table class="table">
+						<thead>
+							<tr>
+								<th>{ c.T("game.setup.category") }</th>
+								<th>{ c.T("game.difficulty.1") }</th>
+								<th>{ c.T("game.difficulty.2") }</th>
+								<th>{ c.T("game.difficulty.3") }</th>
+								<th>{ c.T("admin.coverage.total") }</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, row := range coverageByCategory(d.Stats.Coverage) {
+								<tr>
+									<td>
+										<span aria-hidden="true">{ row.Icon }</span>
+										{ row.Name }
+									</td>
+									@coverageCell(row.Easy)
+									@coverageCell(row.Medium)
+									@coverageCell(row.Hard)
+									<td class="num bold">{ fmt.Sprint(row.Easy + row.Medium + row.Hard) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</section>
+		if len(d.Recent) > 0 {
+			<section class="card card--flush">
+				<div class="card__head" style="padding:18px 20px 0;margin:0">
+					<span class="card__title">{ c.T("admin.nav.audit") }</span>
+					<a class="tiny bold" style="color:var(--accent)" href="/admin/audit">
+						{ c.T("common.viewAll") }
+					</a>
+				</div>
+				@auditList(c, d.Recent)
+			</section>
+		}
+	}
+}
+
+// -------------------------------------------------------------- integrity --
+
+type AdminIntegrityData struct {
+	Issues     []*models.IntegrityIssue
+	Duplicates []*models.DuplicatePair
+	// Compare is the side-by-side behind each pair, in the same order.
+	Compare []*models.QuestionCompare
+	// Locale is the language the sweep was run in. The same two questions are
+	// near-duplicates once per language they share, so the list is filtered to
+	// one and the comparison carries the rest.
+	Locale string
+	// SweptAt is when this list was computed. The sweep is held for a few
+	// minutes rather than re-run on every visit, and a list that is not live
+	// should say when it was.
+	SweptAt time.Time
+}
+
+templ AdminIntegrity(c Ctx, a AdminChrome, d AdminIntegrityData) {
+	@adminShell(c, a, c.T("admin.nav.integrity")) {
+		<section class="grid grid--2">
+			@StatTile("🧹", fmt.Sprint(len(d.Issues)), c.T("admin.integrity.issues"))
+			@StatTile("👯", fmt.Sprint(len(d.Duplicates)), c.T("admin.integrity.duplicates"))
+		</section>
+		<section class="card stack">
+			<div class="card__head" style="margin:0">
+				<span class="card__title">{ c.T("admin.integrity.issues") }</span>
+			</div>
+			if len(d.Issues) == 0 {
+				@Empty("✅", c.T("admin.integrity.clean"))
+			} else {
+				<div class="scroll-x" style="max-height:420px;overflow-y:auto">
+					<table class="table">
+						<thead>
+							<tr>
+								<th class="num">#</th>
+								<th>{ c.T("admin.integrity.kind") }</th>
+								<th>{ c.T("admin.integrity.detail") }</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, issue := range d.Issues {
+								<tr>
+									// Every one of these is a question with a
+									// field to fix. Printing the id as text left
+									// the admin to copy it into a search.
+									<td class="num tiny">
+										@questionRef(c, issue.QuestionID, issue.Detail)
+									</td>
+									<td><span class="tag tag--warning tiny">{ issue.Kind }</span></td>
+									<td class="tiny">{ issue.Detail }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</section>
+		<section id="duplicates" class="card stack">
+			<div class="card__head" style="margin:0">
+				<span class="card__title">{ c.T("admin.integrity.duplicates") }</span>
+				<span class="tiny muted">{ c.T("admin.integrity.duplicatesHelp") }</span>
+				if !d.SweptAt.IsZero() {
+					<span class="tiny faint">{ c.T("admin.integrity.sweptAt", c.Tr.RelativeTime(d.SweptAt)) }</span>
+				}
+			</div>
+			// One language at a time. The same pair is a near-duplicate in every
+			// language it is written in, and listing it once per language made a
+			// sweep of sixty read as a sweep of twenty — the same twenty, three
+			// times over. Switching here does not switch the interface: reading
+			// the Arabic duplicates should not mean reading an Arabic screen.
+			<div class="row" style="gap:6px;flex-wrap:wrap">
+				<span class="tiny muted">{ c.T("admin.integrity.duplicatesLang") }</span>
+				for _, loc := range c.Locales() {
+					<a
+						class={ "lang-pick", templ.KV("lang-pick--on", loc.Code == d.Locale) }
+						href={ templ.SafeURL("/admin/integrity?loc=" + loc.Code + "#duplicates") }
+						if loc.Code == d.Locale {
+							aria-current="true"
+						}
+					>
+						<span aria-hidden="true">{ loc.Flag }</span>
+						{ " " }
+						{ loc.Name }
+					</a>
+				}
+			</div>
+			if len(d.Duplicates) == 0 {
+				@Empty("✅", c.T("admin.integrity.noDuplicates"))
+			} else {
+				// Said rather than left to be discovered: a pair without a
+				// "compare" link is otherwise indistinguishable from one whose
+				// link was missed.
+				if len(d.Duplicates) > len(d.Compare) {
+					<p class="tiny muted">{ c.T("admin.compare.partial", len(d.Compare)) }</p>
+				}
+				<div class="stack-sm">
+					for _, pair := range d.Duplicates {
+						@duplicatePair(c, d, pair)
+					}
+				</div>
+			}
+		</section>
+	}
+}
+
+// ------------------------------------------------------------------ audit --
+templ AdminAudit(c Ctx, a AdminChrome, d AdminAuditData) {
+	{{ entries := d.Entries }}
+	@adminShell(c, a, c.T("admin.nav.audit")) {
+		if len(entries) == 0 {
+			@Empty("📋", c.T("admin.audit.empty"))
+		} else {
+			<div class="card card--flush">
+				@auditList(c, entries)
+			</div>
+			@PagerBar(c, d.Pager)
+		}
+	}
+}
+
+templ auditList(c Ctx, entries []*models.AuditEntry) {
+	<div class="scroll-x">
+		<table class="table">
+			<thead>
+				<tr>
+					<th>{ c.T("admin.audit.when") }</th>
+					<th>{ c.T("admin.audit.actor") }</th>
+					<th>{ c.T("admin.audit.action") }</th>
+					<th>{ c.T("admin.audit.target") }</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, e := range entries {
+					<tr>
+						<td class="tiny muted">{ c.Tr.RelativeTime(e.CreatedAt) }</td>
+						<td class="tiny bold">{ e.ActorUsername }</td>
+						<td><span class="tag tiny">{ e.Action }</span></td>
+						<td class="tiny muted truncate" style="max-width:28ch">
+							if e.TargetKind != "" {
+								{ e.TargetKind }
+							}
+							{ auditDetail(e) }
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// auditDetail renders the jsonb payload compactly.
+func auditDetail(e *models.AuditEntry) string {
+	if len(e.Detail) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(e.Detail))
+	for k, v := range e.Detail {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	}
+	return " " + strings.Join(parts, " ")
+}
+
+// ------------------------------------------------------ comment moderation --
+
+type AdminCommentsData struct {
+	Comments      []*models.QuestionComment
+	IncludeHidden bool
+	Pager         Pager
+}
+
+templ AdminComments(c Ctx, a AdminChrome, d AdminCommentsData) {
+	@adminShell(c, a, c.T("admin.nav.comments")) {
+		<p class="small muted">{ c.T("admin.comments.help") }</p>
+		<div class="tabs">
+			@tabItem(c, "/admin/comments", c.T("admin.comments.all"), d.IncludeHidden)
+			@tabItem(c, "/admin/comments?hidden=0", c.T("admin.comments.visibleOnly"), !d.IncludeHidden)
+		</div>
+		if len(d.Comments) == 0 {
+			@Empty("💬", c.T("admin.comments.empty"))
+		} else {
+			<div class="stack-sm">
+				for _, cm := range d.Comments {
+					@adminCommentRow(c, cm)
+				}
+				@PagerBar(c, d.Pager)
+			</div>
+		}
+	}
+}
+
+templ adminCommentRow(c Ctx, cm *models.QuestionComment) {
+	<article class={ "card", "stack-sm", templ.KV("is-inactive", cm.Hidden) }>
+		<div class="row row--between row--wrap" style="gap:8px">
+			<span class="row" style="gap:8px;align-items:center">
+				if cm.Anonymous() {
+					<span class="tiny muted">{ c.T("comments.deletedAuthor") }</span>
+				} else {
+					<a class="tiny bold" href={ templ.SafeURL("/u/" + cm.AuthorUsername) }>
+						{ cm.AuthorName }
+					</a>
+				}
+				<a class="tiny muted" href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", cm.QuestionID)) }>
+					{ fmt.Sprintf("#%d", cm.QuestionID) }
+				</a>
+				<span class="tag tiny num">{ cm.Locale }</span>
+				if cm.Hidden {
+					<span class="tag tag--danger tiny">{ c.T("admin.comments.isHidden") }</span>
+				}
+			</span>
+			<span class="row" style="gap:8px;align-items:center">
+				<span class="tiny muted">{ c.Tr.RelativeTime(cm.CreatedAt) }</span>
+				if cm.Hidden {
+					@adminCommentAction(c, cm.ID, "show", "btn--soft", c.T("admin.comments.show"))
+				} else {
+					@adminCommentAction(c, cm.ID, "hide", "btn--ghost", c.T("admin.comments.hide"))
+				}
+			</span>
+		</div>
+		// Player-authored text: rendered as text, never as markup, and tagged
+		// with the language it was written in so bidi text is not reordered.
+		<p class="small" dir={ ContentDir(cm.Locale) } lang={ cm.Locale }>{ cm.Body }</p>
+	</article>
+}
+
+templ adminCommentAction(c Ctx, id int64, action, variant, label string) {
+	<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/comments/%d/%s", id, action)) }>
+		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+		<button class={ "btn", "btn--sm", variant } type="submit">{ label }</button>
+	</form>
+}
+
+// ------------------------------------------------------------ poor ratings --
+
+type AdminAuditData struct {
+	Entries []*models.AuditEntry
+	Pager   Pager
+}
+
+type AdminRatedData struct {
+	Questions []*models.RatedQuestion
+	Threshold string
+	MinVotes  int
+	Pager     Pager
+}
+
+// AdminRated is the red light: questions players keep marking down.
+//
+// A note has to be read before it means anything, and nobody reads a queue
+// that never shouts. A number does not need reading — a question that keeps
+// scoring two or less puts itself on this list and a badge on the nav.
+templ AdminRated(c Ctx, a AdminChrome, d AdminRatedData) {
+	@adminShell(c, a, c.T("admin.rated.title")) {
+		<section class="card stack">
+			<div class="card__head" style="margin:0">
+				<span class="card__title">{ c.T("admin.rated.title") }</span>
+				<span class="tiny muted">{ c.T("admin.rated.help", d.Threshold, d.MinVotes) }</span>
+			</div>
+			if len(d.Questions) == 0 {
+				@Empty("✅", c.T("admin.rated.none"))
+			} else {
+				<div class="stack-sm">
+					for _, q := range d.Questions {
+						<div class="panel row row--between row--wrap" style="gap:12px">
+							<div style="flex:1;min-width:220px">
+								<div class="tiny muted">
+									<span aria-hidden="true">{ q.CategoryIcon }</span>
+									{ q.CategoryName }
+								</div>
+								<div class="small">
+									@questionRef(c, q.ID, q.Prompt)
+									{ " " }
+									{ q.Prompt }
+								</div>
+							</div>
+							<div class="row" style="gap:10px;align-items:center">
+								<span class="stars stars--static" aria-hidden="true">
+									for i := 1; i <= models.MaxStars; i++ {
+										<span class={ "stars__one", templ.KV("is-on", i <= q.Stars()) }>★</span>
+									}
+								</span>
+								<span class="tag tag--danger num">
+									{ c.T("admin.rated.average", fmt.Sprintf("%.1f", q.Average)) }
+								</span>
+								<span class="tiny muted">{ c.T("admin.rated.votes", q.Votes) }</span>
+								<form
+									method="post"
+									action={ templ.SafeURL(fmt.Sprintf("/admin/rated/%d/dismiss", q.ID)) }
+								>
+									<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+									<button class="btn btn--ghost btn--sm" type="submit">
+										{ c.T("admin.rated.dismiss") }
+									</button>
+								</form>
+								<a
+									class="btn btn--soft btn--sm"
+									href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }
+								>
+									{ c.T("common.edit") }
+								</a>
+							</div>
+						</div>
+					}
+				</div>
+				@PagerBar(c, d.Pager)
+			}
+		</section>
+	}
+}
+
+// duplicatePair is one possible duplicate: the two questions, the way to read
+// them side by side, and the two decisions that take the pair off the list.
+//
+// The comparison opens *inside* this block rather than at the foot of the page.
+// Collecting the panels at the bottom meant pressing "compare" jumped you away
+// from the row you were working on and left you to find your way back — on a
+// screen whose whole job is working through sixty of them in order.
+//
+// Delete is not offered. It cascades into every answered round, and the two
+// answers that matter here are "these are different questions" and "retire the
+// weaker one", neither of which destroys anybody's history.
+templ duplicatePair(c Ctx, d AdminIntegrityData, pair *models.DuplicatePair) {
+	{{ anchor := DuplicateAnchor(pair.LeftID, pair.RightID) }}
+	<div class="dup-pair">
+		<div class="dup-pair__head">
+			<span class="tag tag--danger num">{ fmt.Sprintf("%d%%", pair.Percent()) }</span>
+			<div class="dup-pair__actions">
+				if d.Comparable(pair.LeftID, pair.RightID) {
+					// Opens in place, below this pair. The anchor is the pair
+					// itself, so the address bar names what you are reading.
+					<a class="dup-choice__open" href={ templ.SafeURL("#" + anchor) }>
+						{ c.T("common.compare") }
+					</a>
+				}
+				@duplicateVerdict(c, pair, "distinct", 0, "btn--ghost", c.T("admin.integrity.notDuplicate"))
+			</div>
+		</div>
+		<div class="dup-pair__side">
+			<div class="tiny">
+				@questionRef(c, pair.LeftID, pair.LeftPrompt)
+				{ " " }
+				{ pair.LeftPrompt }
+			</div>
+			@duplicateVerdict(c, pair, "retire", pair.LeftID, "btn--soft", c.T("admin.integrity.retireThis"))
+		</div>
+		<div class="dup-pair__side">
+			<div class="tiny">
+				@questionRef(c, pair.RightID, pair.RightPrompt)
+				{ " " }
+				{ pair.RightPrompt }
+			</div>
+			@duplicateVerdict(c, pair, "retire", pair.RightID, "btn--soft", c.T("admin.integrity.retireThis"))
+		</div>
+		if cmp := d.CompareFor(pair.LeftID, pair.RightID); cmp != nil {
+			@comparePanel(c, cmp, CompareChrome{
+				Anchor:    anchor,
+				Title:     c.T("admin.integrity.compareTitle", cmp.LeftID, cmp.RightID),
+				CloseHref: "#duplicates",
+			})
+		}
+	</div>
+}
+
+// duplicateVerdict is one decision, as its own small form so the button says
+// exactly what it does.
+templ duplicateVerdict(c Ctx, pair *models.DuplicatePair, verdict string, retire int, variant, label string) {
+	<form method="post" action="/admin/integrity/verdict" class="dup-pair__verdict">
+		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+		<input type="hidden" name="left" value={ fmt.Sprint(pair.LeftID) }/>
+		<input type="hidden" name="right" value={ fmt.Sprint(pair.RightID) }/>
+		<input type="hidden" name="verdict" value={ verdict }/>
+		if retire > 0 {
+			<input type="hidden" name="retire" value={ fmt.Sprint(retire) }/>
+		}
+		<button class={ "btn", "btn--sm", variant } type="submit">{ label }</button>
+	</form>
+}

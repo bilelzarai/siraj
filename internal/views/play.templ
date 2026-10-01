@@ -1,0 +1,1070 @@
+package views
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+
+	"github.com/bilelzarai/siraj/internal/models"
+	"github.com/bilelzarai/siraj/internal/repository"
+	"github.com/bilelzarai/siraj/internal/service"
+)
+
+type SetupData struct {
+	Categories  []*models.Category
+	SelectedCat int
+	// SelectedDiff and SelectedCount are echoed back so a rejected submission
+	// re-opens on the choices that were made, not on the defaults.
+	SelectedDiff  int
+	SelectedCount int
+	Error         string
+	// Availability is how many questions each category and difficulty can
+	// actually draw in this locale. The form uses it to mark and disable the
+	// combinations the bank cannot fill, instead of letting a player pick one
+	// and be told afterwards.
+	Availability repository.Availability
+	// Opponent is set when the form is used to send a duel invitation. It is
+	// the first of Invited, kept for the one-against-one wording.
+	Opponent *models.UserCard
+	// Invited is everyone the match is being opened with, and Friends is who
+	// else could be. A match takes one opponent or nine, and the same screen
+	// makes both: ticking one friend is the duel it always was.
+	Invited []*models.UserCard
+	Friends []*models.UserCard
+	// RematchOf points at the match this one replays, so a series can be
+	// followed and the invitations come pre-ticked.
+	RematchOf string
+	// Sets is the host's own collections, offered as a source for the round.
+	Sets []*models.QuestionSet
+	// Source is which of the three a rejected submission had chosen, so the
+	// form re-opens on the one being worked on rather than resetting to the
+	// bank and hiding what was typed.
+	Source string
+	// Room is the room the host is standing in, and RoomPeers is who else is
+	// in it. They are the only people who can be challenged without being
+	// friends, and they stop being so the moment anybody leaves.
+	Room      *models.Conversation
+	RoomPeers []*models.UserCard
+	// Seats is who is sitting at this device. A match can be played entirely
+	// on one phone, passed from person to person.
+	Seats SeatData
+	// Format is duel or team, echoed back so a rejected submission re-opens on
+	// the shape that was chosen.
+	Format string
+	// PlayerSource is which of the three groups the match is with. One group
+	// per match: the screen shows that group's list and no other, because a
+	// form that lets you tick a friend and a guest at your device is a form
+	// offering something the server will refuse.
+	PlayerSource string
+}
+
+// ChosenSource is the group the form is working on, defaulting to whichever of
+// the three actually has anybody in it.
+func (d SetupData) ChosenSource() string {
+	if models.ValidSource(d.PlayerSource) {
+		return d.PlayerSource
+	}
+	switch {
+	case len(d.Friends) > 0:
+		return models.SourceFriends
+	case len(d.RoomPeers) > 0:
+		return models.SourceRoom
+	case d.Seats.Any():
+		return models.SourceDevice
+	}
+	return models.SourceFriends
+}
+
+// HasSource reports whether one of the three has anybody to offer.
+func (d SetupData) HasSource(source string) bool {
+	switch source {
+	case models.SourceFriends:
+		return len(d.Friends) > 0
+	case models.SourceRoom:
+		return len(d.RoomPeers) > 0
+	case models.SourceDevice:
+		return d.Seats.Any()
+	}
+	return false
+}
+
+// CanInvite reports whether there is anybody to open a match with: a friend, a
+// person in the room, or a guest at this device.
+func (d SetupData) CanInvite() bool {
+	return len(d.Friends) > 0 || len(d.RoomPeers) > 0 || d.Seats.Any()
+}
+
+// Pickable is everyone who could be put on a side, flattened into one list for
+// the team panel — friends and room members by username, guests at the device
+// by id, because that is what each of them is posted as.
+type Pickable struct {
+	Key  string
+	Name string
+	Team int
+}
+
+// Pickable lists everybody the team panel has a row for.
+//
+// The chosen group and nobody else. It used to list all three at once — so a
+// match with friends asked which side the guests at this device were on, for a
+// match they could not be in. Every row was a question about somebody the form
+// had already decided was not playing.
+//
+// Sides default to one, and the rows for a device match alternate, which is the
+// arrangement somebody setting up "us two against those two" would otherwise
+// make by hand every time.
+func (d SetupData) Pickable() []Pickable {
+	switch d.ChosenSource() {
+	case models.SourceRoom:
+		return cards(d.RoomPeers, 1)
+	case models.SourceDevice:
+		out := make([]Pickable, 0, len(d.Seats.Players))
+		for i, p := range d.Seats.Players {
+			// Alternating, so a device of four opens as two against two
+			// rather than four against the host.
+			out = append(out, Pickable{
+				Key: p.ID.String(), Name: p.DisplayName, Team: 1 + (i+1)%2,
+			})
+		}
+		return out
+	default:
+		return cards(d.Friends, 1)
+	}
+}
+
+// cards turns one group into team rows.
+func cards(people []*models.UserCard, side int) []Pickable {
+	out := make([]Pickable, 0, len(people))
+	seen := map[string]bool{}
+	for _, p := range people {
+		if seen[p.Username] {
+			continue
+		}
+		seen[p.Username] = true
+		out = append(out, Pickable{Key: p.Username, Name: p.DisplayName, Team: side})
+	}
+	return out
+}
+
+// countOptions are the round lengths on offer, smallest first.
+var countOptions = []int{5, 10, 15, 20}
+
+// chosenCount is which length starts selected. A length the selection cannot
+// reach must not be the one pre-selected — without JavaScript that submits a
+// number the server then has to quietly shrink, so the player asks for twenty
+// questions and is given eight with no explanation.
+func chosenCount(available, requested int) int {
+	best := 0
+	for _, option := range countOptions {
+		if option > available {
+			break
+		}
+		best = option
+		if option == requested {
+			return option
+		}
+	}
+	return best
+}
+
+// availabilityJSON hands the whole count table to the client as data, so the
+// difficulty chips and the length menu can react to a category change without
+// a round trip. The server still decides; this only stops the dead ends being
+// presented as live options.
+func availabilityJSON(a repository.Availability) string {
+	type entry struct {
+		Category   int `json:"category"`
+		Difficulty int `json:"difficulty"`
+		Count      int `json:"count"`
+	}
+	out := make([]entry, 0, len(a.ByCategory)*4+4)
+	for difficulty, n := range a.Any {
+		out = append(out, entry{Category: 0, Difficulty: difficulty, Count: n})
+	}
+	for categoryID, byDiff := range a.ByCategory {
+		for difficulty, n := range byDiff {
+			out = append(out, entry{Category: categoryID, Difficulty: difficulty, Count: n})
+		}
+	}
+	// Stable order keeps the rendered attribute from churning between requests.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Category != out[j].Category {
+			return out[i].Category < out[j].Category
+		}
+		return out[i].Difficulty < out[j].Difficulty
+	})
+
+	encoded, err := json.Marshal(struct {
+		Min     int     `json:"min"`
+		Max     int     `json:"max"`
+		Entries []entry `json:"entries"`
+	}{Min: service.MinQuestions, Max: service.MaxQuestions, Entries: out})
+	if err != nil {
+		return `{"min":0,"max":0,"entries":[]}`
+	}
+	return string(encoded)
+}
+
+templ Setup(c Ctx, d SetupData) {
+	@Base(c, c.T("game.setup.title")) {
+		<div class="shell shell--narrow stack">
+			if d.Opponent != nil {
+				@BackLink(c, "/challenges", c.T("challenge.title"))
+			} else {
+				@BackLink(c, "/app", c.T("nav.home"))
+			}
+			if d.Opponent != nil {
+				<div class="card row" style="gap:14px">
+					@Avatar(d.Opponent, "md")
+					<div>
+						<div class="eyebrow">{ c.T("challenge.new") }</div>
+						<div class="bold">{ c.T("challenge.sendTo", d.Opponent.DisplayName) }</div>
+					</div>
+				</div>
+			}
+			// Several people, one phone. The panel is above the form because
+			// who is at the device decides who can be in the match, and being
+			// asked to tick somebody who is not on the list yet is the wrong
+			// way round.
+			@SharedDevice(c, d.Seats)
+			<div class="card card--pad-lg stack">
+				<h1 style="font-size:1.5rem">
+					if d.Opponent != nil {
+						{ c.T("challenge.new") }
+					} else {
+						{ c.T("game.setup.title") }
+					}
+				</h1>
+				@FormError(c, d.Error)
+				<form
+					method="post"
+					action={ templ.SafeURL(setupAction(d)) }
+					class="stack"
+					data-setup
+					data-availability={ availabilityJSON(d.Availability) }
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					if d.RematchOf != "" {
+						<input type="hidden" name="rematch_of" value={ d.RematchOf }/>
+					}
+					// Who is playing. One friend is the duel this always was;
+					// ticking more makes a match, on the same screen, with no
+					// mode to choose first.
+					if d.CanInvite() {
+						<div class="field">
+							<span class="label">
+								{ c.T("challenge.players") }
+								<span class="tiny faint">
+									{ c.T("challenge.playersHint", models.MaxChallengePlayers-1) }
+								</span>
+							</span>
+							<input type="hidden" name="request_key" value={ NewRequestKey() }/>
+							// One group per match, so the form asks which
+							// before it asks who. A single list of friends and
+							// room members and guests, all tickable together,
+							// was a form offering a match the server refuses:
+							// the three are not interchangeable and a
+							// scoreboard across them compares nothing.
+							{{ chosen := d.ChosenSource() }}
+							<div class="segment scroll-x" role="tablist" data-source-group>
+								for _, source := range []string{models.SourceFriends, models.SourceRoom, models.SourceDevice} {
+									<label class={ "segment__item", templ.KV("is-on", chosen == source), templ.KV("is-empty", !d.HasSource(source)) }>
+										<input
+											type="radio"
+											name="player_source"
+											value={ source }
+											checked?={ chosen == source }
+											disabled?={ !d.HasSource(source) }
+										/>
+										{ c.T(models.SourceLabelKey(source)) }
+									</label>
+								}
+							</div>
+							<div data-source-pool={ models.SourceFriends } hidden?={ chosen != models.SourceFriends }>
+								if len(d.Friends) > 0 {
+									<div class="pick-grid">
+										for _, friend := range d.Friends {
+											@playerPick(c, friend, d.IsInvited(friend.Username))
+										}
+									</div>
+								} else {
+									<p class="muted small">{ c.T("challenge.dialogEmpty") }</p>
+								}
+							</div>
+							// The people in the room you are in. They are
+							// challengeable and are not friends, which is the
+							// whole reason rooms exist — and the only people
+							// besides friends who are.
+							<div data-source-pool={ models.SourceRoom } hidden?={ chosen != models.SourceRoom }>
+								if len(d.RoomPeers) > 0 {
+									<p class="sheet__label">
+										if d.Room != nil {
+											{ c.T("people.inRoom", d.Room.Name()) }
+										} else {
+											{ c.T("people.inYourRoom") }
+										}
+									</p>
+									<div class="pick-grid">
+										for _, peer := range d.RoomPeers {
+											@playerPick(c, peer, d.IsInvited(peer.Username))
+										}
+									</div>
+								} else {
+									<p class="muted small">{ c.T("rooms.joinFirst") }</p>
+								}
+							</div>
+							// And whoever is sitting at this device. They need
+							// no invitation: they are already here.
+							<div data-source-pool={ models.SourceDevice } hidden?={ chosen != models.SourceDevice }>
+								if d.Seats.Any() {
+									<div class="pick-grid">
+										for _, player := range d.Seats.Players {
+											<label class="pick">
+												<input type="checkbox" name="local" value={ player.ID.String() }/>
+												<span class="pick__face">
+													<span class="avatar avatar--xs" style={ AvatarStyle(player.ID.String()) }>
+														{ Initial(player.DisplayName) }
+													</span>
+													<span class="truncate">{ player.DisplayName }</span>
+												</span>
+											</label>
+										}
+									</div>
+								} else {
+									<p class="muted small">{ c.T("players.noneHere") }</p>
+								}
+							</div>
+							// One against one, or sides. A team match adds the
+							// scores up per side; with everybody on one side it
+							// would be a free-for-all with a different label, so
+							// the server refuses that rather than drawing a
+							// scoreboard that means nothing.
+							// Sides are only on offer once there are enough
+							// people for a side to be a side. With two players
+							// every arrangement is one against one, and adding
+							// the scores up per side is addition with one
+							// number in it — so the option is disabled until a
+							// third person is ticked, with the reason beside
+							// it rather than a refusal after the fact.
+							<div class="choice-grid" data-format-pick>
+								<label class="chip-radio">
+									<input type="radio" name="format" value="duel" checked?={ d.Format != models.FormatTeam }/>
+									<span class="chip-radio__face">
+										<span aria-hidden="true">⚔️</span>
+										<span>{ c.T("challenge.format.duel") }</span>
+									</span>
+								</label>
+								<label class="chip-radio" data-format-team>
+									<input type="radio" name="format" value="team" checked?={ d.Format == models.FormatTeam }/>
+									<span class="chip-radio__face">
+										<span aria-hidden="true">🛡️</span>
+										<span>{ c.T("challenge.format.team") }</span>
+									</span>
+								</label>
+							</div>
+							<p class="tiny muted" data-format-locked hidden>
+								{ c.T("challenge.teamsLocked", models.MinTeamPlayers) }
+							</p>
+							<div class="teams" data-team-pane hidden?={ d.Format != models.FormatTeam }>
+								<p class="tiny muted">{ c.T("challenge.teamsHint") }</p>
+								<label class="field field--inline">
+									<span class="label">{ c.T("challenge.yourSide") }</span>
+									@teamSelect(c, "host_team", 1)
+								</label>
+								// A row per person who is actually playing. The
+								// script hides the rest as the ticks change;
+								// with no script they all show and the server
+								// reads only the sides of the people invited.
+								for _, person := range d.Pickable() {
+									<label
+										class="field field--inline"
+										data-team-row={ person.Key }
+									>
+										<span class="label truncate">{ person.Name }</span>
+										@teamSelect(c, "team_"+person.Key, person.Team)
+									</label>
+								}
+								<p class="tiny muted" data-team-empty hidden>{ c.T("challenge.pickFirst") }</p>
+							</div>
+						</div>
+					} else if d.Opponent != nil {
+						<input type="hidden" name="opponent" value={ d.Opponent.Username }/>
+						<input type="hidden" name="request_key" value={ NewRequestKey() }/>
+					}
+					// Where the questions come from. They are exclusive — a round
+					// is played on one source — so the form asks once and then
+					// shows only what that answer needs, instead of three
+					// sections of which two are ignored.
+					if len(d.Friends) > 0 {
+						<div class="field">
+							<span class="label">
+								{ c.T("challenge.source") }
+								<span class="tiny faint">{ c.T("challenge.sourceHint") }</span>
+							</span>
+							<div class="choice-grid" data-source-pick>
+								<label class="chip-radio">
+									<input type="radio" name="source" value="bank" checked/>
+									<span class="chip-radio__face">
+										<span aria-hidden="true">📚</span>
+										<span>{ c.T("challenge.source.bank") }</span>
+									</span>
+								</label>
+								<label class={ "chip-radio", templ.KV("is-empty", !d.HasPlayableSet()) }>
+									<input type="radio" name="source" value="set" disabled?={ !d.HasPlayableSet() }/>
+									<span class="chip-radio__face">
+										<span aria-hidden="true">✍️</span>
+										<span>{ c.T("challenge.source.set") }</span>
+									</span>
+								</label>
+								<label class="chip-radio">
+									<input type="radio" name="source" value="write"/>
+									<span class="chip-radio__face">
+										<span aria-hidden="true">✚</span>
+										<span>{ c.T("challenge.source.write") }</span>
+									</span>
+								</label>
+							</div>
+						</div>
+					}
+					// Questions you have already written, kept from before.
+					if len(d.Sets) > 0 {
+						<div class="field" data-source-pane="set" hidden?={ d.Source != "set" }>
+							<span class="label">{ c.T("sets.useSet") }</span>
+							<div class="choice-grid">
+								<label class="chip-radio">
+									<input type="radio" name="set" value="" checked/>
+									<span class="chip-radio__face">
+										<span>{ c.T("sets.none") }</span>
+									</span>
+								</label>
+								for _, set := range d.Sets {
+									// A set too small to fill a round is shown
+									// and disabled, with what it needs. Hiding
+									// it would leave somebody looking for a set
+									// they know they wrote.
+									<label class={ "chip-radio", templ.KV("is-empty", !set.Playable()) }>
+										<input
+											type="radio"
+											name="set"
+											value={ set.ID.String() }
+											disabled?={ !set.Playable() }
+										/>
+										<span class="chip-radio__face">
+											<span class="truncate">{ set.Name }</span>
+											if set.Playable() {
+												<span class="chip-radio__count num">{ fmt.Sprint(set.Count) }</span>
+											} else {
+												<span class="chip-radio__count">{ c.T("sets.needsMore", set.Needed()) }</span>
+											}
+										</span>
+									</label>
+								}
+							</div>
+						</div>
+					}
+					// Or write new ones, here and now. They are never drawn into
+					// anybody's solo round and never reach the bank: the people
+					// who see them are the friends you invited.
+					if len(d.Friends) > 0 {
+						<div class="authored" data-source-pane="write" hidden?={ d.Source != "write" }>
+							<div class="authored__summary">
+								{ c.T("challenge.writeOwn") }
+								<span class="tiny faint">{ c.T("challenge.writeOwnAtLeast", models.MinSetQuestions) }</span>
+							</div>
+							<div class="authored__rows" data-authored>
+								@authoredRow(c, 0, DraftRow{})
+							</div>
+							<button class="btn btn--ghost btn--sm" type="button" data-authored-add>
+								{ c.T("challenge.addQuestion") }
+							</button>
+						</div>
+					}
+					<div class="field" data-source-pane="bank" hidden?={ d.Source != "" && d.Source != "bank" }>
+						<span class="label">{ c.T("game.setup.category") }</span>
+						<div class="choice-grid">
+							@catRadio(c, 0, "🎲", c.T("game.setup.category.all"), d.SelectedCat == 0, d.Availability.Count(0, 0))
+							for _, cat := range d.Categories {
+								@catRadio(c, cat.ID, cat.Icon, cat.Name, d.SelectedCat == cat.ID, d.Availability.Count(cat.ID, 0))
+							}
+						</div>
+					</div>
+					<div class="field" data-source-pane="bank" hidden?={ d.Source != "" && d.Source != "bank" }>
+						<span class="label">{ c.T("game.setup.difficulty") }</span>
+						// Difficulties the chosen category cannot fill are disabled, not
+						// hidden: a thin bank should be visible here rather than
+						// discovered by pressing Start and being refused.
+						<div class="choice-grid">
+							for _, level := range difficultyChoices {
+								@diffRadio(c, level.Level, level.Icon, d.SelectedDiff == level.Level, d.Availability.Count(d.SelectedCat, level.Level))
+							}
+						</div>
+						<span class="tiny muted" data-setup-note role="status"></span>
+					</div>
+					// How long the round is applies to anything drawn. Questions
+					// written here and now are the round, so there is nothing to
+					// choose.
+					<div class="field" data-source-pane="bank set" hidden?={ d.Source == "write" }>
+						<label class="label" for="count">{ c.T("game.setup.length") }</label>
+						<select class="select" id="count" name="count" data-setup-count>
+							for _, option := range countOptions {
+								<option
+									value={ fmt.Sprint(option) }
+									selected?={ chosenCount(d.Availability.Count(d.SelectedCat, d.SelectedDiff), d.SelectedCount) == option }
+									disabled?={ d.Availability.Count(d.SelectedCat, d.SelectedDiff) < option }
+								>{ fmt.Sprint(option) }</option>
+							}
+						</select>
+					</div>
+					if d.Opponent != nil {
+						<div class="field">
+							<label class="label" for="message">{ c.T("challenge.message") }</label>
+							<input
+								class="input"
+								id="message"
+								name="message"
+								type="text"
+								maxlength="200"
+								placeholder={ c.T("challenge.messagePlaceholder") }
+							/>
+						</div>
+					}
+					<button class="btn btn--primary btn--block btn--lg" type="submit">
+						if d.Opponent != nil {
+							{ c.T("challenge.send") }
+						} else {
+							{ c.T("game.setup.start") }
+						}
+					</button>
+					<template data-i18n-setup-too-few>{ c.T("game.setup.tooFew") }</template>
+					<template data-i18n-setup-capped>{ c.T("game.setup.capped") }</template>
+				</form>
+			</div>
+		</div>
+	}
+}
+
+// difficultyChoices is the row of difficulty chips, in the order shown.
+var difficultyChoices = []struct {
+	Level int
+	Icon  string
+}{
+	{0, "🎯"},
+	{1, "🌱"},
+	{2, "🔥"},
+	{3, "💎"},
+}
+
+templ catRadio(c Ctx, id int, icon, name string, checked bool, available int) {
+	<label class={ "chip-radio", templ.KV("is-empty", available < service.MinQuestions) }>
+		<input
+			type="radio"
+			name="category"
+			value={ fmt.Sprint(id) }
+			checked?={ checked }
+			disabled?={ available < service.MinQuestions }
+			data-setup-category
+		/>
+		<span class="chip-radio__face">
+			<span aria-hidden="true">{ icon }</span>
+			<span class="truncate">{ name }</span>
+			<span class="chip-radio__count num" aria-label={ c.T("game.setup.available", available) }>
+				{ fmt.Sprint(available) }
+			</span>
+		</span>
+	</label>
+}
+
+templ diffRadio(c Ctx, level int, icon string, checked bool, available int) {
+	<label class={ "chip-radio", templ.KV("is-empty", available < service.MinQuestions) }>
+		<input
+			type="radio"
+			name="difficulty"
+			value={ fmt.Sprint(level) }
+			checked?={ checked }
+			disabled?={ available < service.MinQuestions }
+			data-setup-difficulty
+		/>
+		<span class="chip-radio__face">
+			<span aria-hidden="true">{ icon }</span>
+			<span>{ c.T(DifficultyKey(level)) }</span>
+			<span
+				class="chip-radio__count num"
+				data-setup-count-for={ fmt.Sprint(level) }
+				aria-label={ c.T("game.setup.available", available) }
+			>
+				{ fmt.Sprint(available) }
+			</span>
+		</span>
+	</label>
+}
+
+// setupAction is where the form posts: a match when there is anybody to invite,
+// a solo round otherwise. The screens are the same shape; what differs is
+// whether anyone else is in it.
+func setupAction(d SetupData) string {
+	if d.Opponent != nil || len(d.Friends) > 0 {
+		return "/challenges/new"
+	}
+	return "/play/start"
+}
+
+// --------------------------------------------------------------- the round --
+
+type RoundData struct {
+	Session  *models.GameSession
+	Question *models.Question
+	Streak   int
+
+	// ElapsedMS is how long the server has already counted against this
+	// question. The clock starts when the question is first served and keeps
+	// running across a reload, so the ring has to resume from here rather
+	// than restart — otherwise switching language mid-round hands back a full
+	// timer on screen while the server scores the real elapsed time.
+	ElapsedMS int
+
+	// Actor is the player this round belongs to, which is not always the
+	// person signed in: on a shared device the phone is handed over and the
+	// round is somebody else's.
+	Actor *models.User
+	// Unforgiving marks a round that cannot be paused and cannot be resumed —
+	// a challenge. The screen says so before the player finds out by losing a
+	// question to it.
+	Unforgiving bool
+	// HotSeat marks a match being played round one device. The verdict is held
+	// back until everybody here has answered, so the screen must not offer one
+	// — and the way out is stopping for the whole table, not for one player.
+	HotSeat bool
+}
+
+// quitConfirm is what leaving asks. A solo round is kept and can be picked up
+// again; a challenge round is not, and the question being looked at is lost the
+// moment the page is.
+func quitConfirm(c Ctx, d RoundData) string {
+	switch {
+	case d.HotSeat:
+		// One phone, so there is no leaving for one person: the match stops
+		// for the table.
+		return c.T("hotseat.stopConfirm")
+	case d.Unforgiving:
+		return c.T("game.quit.confirmChallenge")
+	}
+	return c.T("game.quit.confirm")
+}
+
+templ Round(c Ctx, d RoundData) {
+	@Bare(c, c.T("nav.play")) {
+		<div class="play">
+			if d.HotSeat && d.Actor != nil {
+				<div class="play__as play__as--turn">
+					<span class="avatar avatar--sm" style={ AvatarStyle(d.Actor.ID.String()) }>
+						{ Initial(d.Actor.DisplayName) }
+					</span>
+					<span class="truncate">{ c.T("hotseat.yourTurn", d.Actor.DisplayName) }</span>
+				</div>
+			} else {
+				@PlayingAs(c, d.Actor)
+			}
+			<div class="play__bar">
+				// Quitting a challenge costs the question on screen and cannot
+				// be undone, so the confirmation says which of the two this is
+				// rather than asking the same question about both.
+				<form
+					method="post"
+					action="/play/quit"
+					data-confirm={ quitConfirm(c, d) }
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button
+						class="btn btn--ghost btn--icon"
+						type="submit"
+						aria-label={ c.T("game.quit") }
+						title={ c.T("game.quit") }
+					>
+						<span aria-hidden="true">✕</span>
+					</button>
+				</form>
+				<div style="flex:1">
+					<div class="tiny muted" style="margin-block-end:5px">
+						{ c.T("game.progress", d.Session.Cursor + 1, d.Session.TotalQuestions) }
+					</div>
+					<div class="bar bar--thin">
+						<div
+							class="bar__fill"
+							style={ fmt.Sprintf("width:%d%%", Percent(d.Session.Cursor, d.Session.TotalQuestions)) }
+						></div>
+					</div>
+				</div>
+				<div class="play__meta">
+					// In a hot seat the score bar is the same leak as the
+					// scoreboard: the next player reads the one before them off
+					// it. Their own total comes back at the end with everybody
+					// else's.
+					if !d.HotSeat {
+						<span>{ c.T("game.score") } <b class="num" data-score>{ fmt.Sprint(d.Session.Score) }</b></span>
+					}
+					<span data-streak-wrap class={ templ.KV("sr-only", d.Streak < 2) }>
+						🔥 <b class="num" data-streak>{ fmt.Sprint(d.Streak) }</b>
+					</span>
+				</div>
+				// The round runs on the Bare layout, which has no navbar — so
+				// without this the language switcher is unreachable for the
+				// whole round, which is exactly when a player hits a question
+				// they would rather read in another language.
+				@localeMenu(c)
+				@timerRing()
+			</div>
+			<article
+				class="question"
+				lang={ d.Question.Locale }
+				dir={ ContentDir(d.Question.Locale) }
+				data-round
+				data-position={ fmt.Sprint(d.Session.Cursor) }
+				data-limit={ fmt.Sprint(service.QuestionTimeLimitMS) }
+				data-elapsed={ fmt.Sprint(d.ElapsedMS) }
+			>
+				<div class="question__cat">
+					<span aria-hidden="true">{ d.Question.CategoryIcon }</span>
+					<span>{ d.Question.CategoryName }</span>
+					<span class="tag">{ c.T(DifficultyKey(d.Question.Difficulty)) }</span>
+				</div>
+				<h1 class="question__text">{ d.Question.Prompt }</h1>
+				<div class="answers" data-answers role="radiogroup" aria-label={ d.Question.Prompt }>
+					for i, choice := range d.Question.Choices {
+						<button
+							class="answer"
+							type="button"
+							role="radio"
+							aria-checked="false"
+							data-choice={ fmt.Sprint(i) }
+						>
+							<span class="answer__key" aria-hidden="true">{ AnswerKey(c.Locale, i) }</span>
+							<span>{ choice }</span>
+						</button>
+					}
+				</div>
+				<div data-verdict hidden></div>
+				// Offered only after the reveal: the note is about the question
+				// you have just seen answered, not a hint you write beforehand.
+				// Shown with the note, after the reveal, and for the same reason:
+				// it is a judgement about a question you have just answered, not a
+				// vote you cast before reading it. A number where the note is
+				// prose — nobody has to read it for a bad question to surface.
+				<div class="q-rate" data-rate hidden>
+					<span class="tiny muted">{ c.T("rating.prompt") }</span>
+					<div class="stars" role="radiogroup" aria-label={ c.T("rating.prompt") }>
+						for i := 1; i <= models.MaxStars; i++ {
+							<button
+								class="stars__one"
+								type="button"
+								role="radio"
+								aria-checked="false"
+								data-star={ fmt.Sprint(i) }
+								aria-label={ c.T("rating.stars", i) }
+								title={ c.T("rating.stars", i) }
+							>★</button>
+						}
+					</div>
+					<span class="tiny muted" data-rate-status role="status"></span>
+				</div>
+				<details class="q-note" data-note hidden>
+					<summary>{ c.T("comments.inRound") }</summary>
+					<textarea
+						class="textarea"
+						data-note-body
+						rows="3"
+						maxlength="2000"
+						placeholder={ c.T("comments.placeholder") }
+					></textarea>
+					<div class="row" style="justify-content:flex-end;gap:8px">
+						<span class="tiny muted" data-note-status role="status"></span>
+						<button class="btn btn--soft btn--sm" type="button" data-note-save>
+							{ c.T("comments.post") }
+						</button>
+					</div>
+				</details>
+				<div class="row" style="margin-block-start:20px;justify-content:flex-end;gap:10px">
+					// Picking an answer only selects it. The clock keeps running until
+					// this button is pressed, so the player can change their mind.
+					<button class="btn btn--primary btn--lg" type="button" data-confirm-answer disabled>
+						<span aria-hidden="true">✓</span>
+						<span>{ c.T("game.confirm") }</span>
+					</button>
+					<button class="btn btn--primary btn--lg" type="button" data-next hidden>
+						<span data-next-label>{ c.T("game.next") }</span>
+						<span aria-hidden="true" data-next-arrow>→</span>
+					</button>
+				</div>
+			</article>
+			<template data-i18n-correct>{ c.T("game.correct") }</template>
+			<template data-i18n-wrong>{ c.T("game.wrong") }</template>
+			<template data-i18n-timeup>{ c.T("game.timeUp") }</template>
+			<template data-i18n-answer-was>{ c.T("game.correctAnswerWas") }</template>
+			<template data-i18n-next>{ c.T("game.next") }</template>
+			<template data-i18n-finish>{ c.T("game.finish") }</template>
+			<template data-i18n-error>{ c.T("error.500.body") }</template>
+			<template data-i18n-pick>{ c.T("game.pickFirst") }</template>
+			<template data-i18n-locked>{ c.T("hotseat.locked") }</template>
+			<template data-i18n-note-saved>{ c.T("comments.saved") }</template>
+			<template data-i18n-rate-thanks>{ c.T("rating.thanks") }</template>
+		</div>
+	}
+}
+
+templ timerRing() {
+	<div class="timer" data-timer>
+		<svg viewBox="0 0 44 44" width="46" height="46" aria-hidden="true">
+			<circle class="timer__track" cx="22" cy="22" r="19" fill="none" stroke-width="4"></circle>
+			<circle
+				class="timer__fill"
+				cx="22"
+				cy="22"
+				r="19"
+				fill="none"
+				stroke-width="4"
+				stroke-dasharray="119.4"
+				stroke-dashoffset="0"
+				data-timer-ring
+			></circle>
+		</svg>
+		<span class="timer__text" data-timer-text>25</span>
+	</div>
+}
+
+// ------------------------------------------------------------- the result --
+
+type ResultData struct {
+	// WroteQuestions is true when the viewer wrote questions for this match, so
+	// the offer to keep them is only made to the person who could.
+	WroteQuestions bool
+	Session        *models.GameSession
+	XPEarned       int
+	NewBadges      []*models.Badge
+	Challenge      *models.Challenge
+	Friends        []*models.UserCard
+}
+
+templ Result(c Ctx, d ResultData) {
+	@Base(c, c.T("result.title")) {
+		<div class="shell shell--narrow stack">
+			@BackLink(c, "/app", c.T("nav.home"))
+			<section class="result-hero stack-sm">
+				<span class="eyebrow">{ c.T("result.score") }</span>
+				<div class="result-hero__score num">{ fmt.Sprint(d.Session.Score) }</div>
+				<p class="bold">{ c.T(service.Praise(d.Session.Accuracy())) }</p>
+			</section>
+			// Questions you wrote for this match are worth keeping if they were
+			// any good — one press, rather than writing them again next week.
+			if d.Challenge != nil && d.WroteQuestions {
+				<form
+					method="post"
+					action={ templ.SafeURL("/challenges/" + d.Challenge.ID.String() + "/keep") }
+					class="row"
+					style="justify-content:center"
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--soft btn--sm" type="submit">{ c.T("sets.keepThese") }</button>
+				</form>
+			}
+			if d.Challenge != nil {
+				// Tagged with the duel it is showing, so the stream can tell
+				// whether an arriving result is about this screen. A duel that
+				// settled while the opponent was looking at the scoreboard used
+				// to leave a dash beside their name until they reloaded.
+				<section
+					class="stack-sm"
+					data-duel={ d.Challenge.ID.String() }
+					if d.Challenge.Outcome(c.User.ID) == "" {
+						data-duel-waiting="1"
+					}
+				>
+					@DuelScoreboard(c, d.Challenge)
+					if outcome := d.Challenge.Outcome(c.Seated(d.Challenge)); outcome != "" {
+						<div class={ "alert", duelAlertClass(outcome) } style="justify-content:center">
+							<span class="bold">{ c.T("challenge.result." + outcome) }</span>
+						</div>
+					} else {
+						<p class="center small muted">{ waitingFor(c, d.Challenge) }</p>
+					}
+				</section>
+			}
+			<section class="grid grid--4">
+				@StatTile("✅", fmt.Sprintf("%d/%d", d.Session.CorrectCount, d.Session.TotalQuestions), c.T("result.correct"))
+				@StatTile("🎯", fmt.Sprintf("%d%%", d.Session.Accuracy()), c.T("result.accuracy"))
+				@StatTile("⚡", fmt.Sprint(d.Session.BestStreak), c.T("result.bestStreak"))
+				@StatTile("⭐", fmt.Sprintf("+%d", d.XPEarned), c.T("result.xpEarned"))
+				@StatTile("⏱️", c.Tr.Duration(d.Session.DurationMS), c.T("result.duration"))
+			</section>
+			if len(d.NewBadges) > 0 {
+				<section class="stack-sm">
+					<h2 style="font-size:1.05rem">{ c.T("result.newBadges") }</h2>
+					for _, b := range d.NewBadges {
+						<div class="badge-pop">
+							<span class="badge-pop__icon" aria-hidden="true">{ b.Icon }</span>
+							<div>
+								<div class="bold">{ b.Name }</div>
+								<div class="tiny muted">{ b.Description }</div>
+							</div>
+						</div>
+					}
+				</section>
+			}
+			<section class="row row--wrap" style="gap:10px">
+				<a class="btn btn--primary" href="/play">{ c.T("result.playAgain") }</a>
+				<a class="btn btn--ghost" href={ templ.SafeURL("/history/" + d.Session.ID.String()) }>
+					{ c.T("result.review") }
+				</a>
+				if len(d.Friends) > 0 {
+					<a class="btn btn--soft" href="/challenges/new">{ c.T("result.challenge") }</a>
+				}
+			</section>
+		</div>
+	}
+}
+
+func duelAlertClass(outcome string) string {
+	switch outcome {
+	case "win":
+		return "alert--success"
+	case "loss":
+		return "alert--error"
+	default:
+		return "alert--info"
+	}
+}
+
+// HasPlayableSet reports whether any of this player's collections can fill a
+// round — if none can, choosing "one of my sets" would offer a dead end.
+func (d SetupData) HasPlayableSet() bool {
+	for _, set := range d.Sets {
+		if set.Playable() {
+			return true
+		}
+	}
+	return false
+}
+
+// IsInvited reports whether this friend is already on the invitation list, so a
+// rejected submission and a rematch both come back with the right ones ticked.
+func (d SetupData) IsInvited(username string) bool {
+	for _, card := range d.Invited {
+		if card.Username == username {
+			return true
+		}
+	}
+	return d.Opponent != nil && d.Opponent.Username == username
+}
+
+// authoredRow is one question the host is writing: what is asked, four answers,
+// and which of them is right.
+//
+// The correct answer is a radio among the four rather than a separate field,
+// because "which of these is right" is the question being answered and a number
+// typed into a box is a way to get it wrong.
+// DraftRow is a question being written: what has been typed so far, and what is
+// wrong with it. Carried back on a rejected submission so nobody retypes six
+// questions because the fourth was missing an answer.
+type DraftRow struct {
+	Prompt      string
+	Choices     []string
+	Correct     int
+	Explanation string
+	Error       string
+}
+
+// Choice is one answer box's current value.
+func (d DraftRow) Choice(i int) string {
+	if i < len(d.Choices) {
+		return d.Choices[i]
+	}
+	return ""
+}
+
+templ authoredRow(c Ctx, index int, row DraftRow) {
+	// The radio group is named per row. Sharing one name across the form made
+	// every row a single group, so marking the answer in one question unmarked
+	// it in all the others — and the server then read one value for six rows.
+	{{ group := fmt.Sprintf("q_correct_%d", index) }}
+	<fieldset class={ "authored__row", templ.KV("authored__row--bad", row.Error != "") } data-row={ fmt.Sprint(index) }>
+		<legend class="tiny muted">{ c.T("challenge.questionN", index+1) }</legend>
+		if row.Error != "" {
+			<p class="tiny" style="color:var(--danger)">{ row.Error }</p>
+		}
+		// A placeholder is a hint, not a name: it disappears the moment
+		// somebody types and screen readers do not reliably announce it. The
+		// visible hint stays and the field gets a name of its own.
+		<input
+			class="input"
+			name="q_prompt"
+			type="text"
+			maxlength="300"
+			value={ row.Prompt }
+			placeholder={ c.T("challenge.questionPrompt") }
+			aria-label={ c.T("challenge.questionPrompt") }
+		/>
+		<div class="authored__choices">
+			for i := 0; i < 4; i++ {
+				<label class="authored__choice">
+					<input
+						type="radio"
+						name={ group }
+						data-correct
+						value={ fmt.Sprint(i) }
+						checked?={ i == row.Correct }
+						aria-label={ c.T("admin.question.markCorrect", i+1) }
+					/>
+					<span class="authored__key" aria-hidden="true">{ AnswerKey(c.Locale, i) }</span>
+					<input
+						class="input"
+						name={ fmt.Sprintf("q_choice%d", i) }
+						type="text"
+						maxlength="200"
+						value={ row.Choice(i) }
+						placeholder={ c.T("admin.question.choiceN", i+1) }
+						aria-label={ c.T("admin.question.choiceN", i+1) }
+					/>
+				</label>
+			}
+		</div>
+		<input
+			class="input"
+			name="q_explanation"
+			type="text"
+			maxlength="300"
+			value={ row.Explanation }
+			placeholder={ c.T("challenge.questionWhy") }
+			aria-label={ c.T("challenge.questionWhy") }
+		/>
+	</fieldset>
+}
+
+// playerPick is one friend, as a checkbox that looks like a person.
+// teamSelect is which side one person is on. A menu rather than a pair of
+// radios because a match can have up to four sides and four radios per person
+// is a wall.
+templ teamSelect(c Ctx, name string, selected int) {
+	<select class="input input--sm" name={ name }>
+		for n := 1; n <= models.MaxTeams; n++ {
+			<option value={ fmt.Sprint(n) } selected?={ n == selected }>
+				{ c.T("challenge.team", n) }
+			</option>
+		}
+	</select>
+}
+
+templ playerPick(c Ctx, friend *models.UserCard, on bool) {
+	<label class="pick">
+		<input type="checkbox" name="opponent" value={ friend.Username } checked?={ on }/>
+		<span class="pick__face">
+			<span
+				class={ "avatar", "avatar--xs", templ.KV("avatar--photo", HasAvatarPhoto(friend.AvatarSeed)) }
+				style={ AvatarStyle(AvatarSeedFor(friend.ID, friend.AvatarSeed, friend.Username)) }
+			>
+				if !HasAvatarPhoto(friend.AvatarSeed) {
+					{ Initial(friend.DisplayName) }
+				}
+			</span>
+			<span class="truncate">{ friend.DisplayName }</span>
+		</span>
+	</label>
+}
+

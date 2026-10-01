@@ -1,0 +1,521 @@
+[
+  {
+    "id": 101, "category": "quran", "difficulty": 1, "correct": 2,
+    "t": {
+      "ar": { "prompt": "كم عدد سور القرآن الكريم؟", "choices": ["110", "112", "114", "116"], "explanation": "القرآن الكريم يتكوّن من 114 سورة، أولها الفاتحة وآخرها الناس." },
+      "en": { "prompt": "How many surahs are there in the Qur'an?", "choices": ["110", "112", "114", "116"], "explanation": "The Qur'an contains 114 surahs, beginning with Al-Fatiha and ending with An-Nas." },
+      "fr": { "prompt": "Combien de sourates compte le Coran ?", "choices": ["110", "112", "114", "116"], "explanation": "Le Coran compte 114 sourates, de Al-Fatiha à An-Nas." }
+    }
+  },
+  {
+    "id": 102, "category": "quran", "difficulty": 1, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما أطول سورة في القرآن الكريم؟", "choices": ["آل عمران", "البقرة", "النساء", "الأعراف"], "explanation": "سورة البقرة هي أطول سور القرآن، وتضم 286 آية." },
+      "en": { "prompt": "Which is the longest surah in the Qur'an?", "choices": ["Aal-'Imran", "Al-Baqarah", "An-Nisa", "Al-A'raf"], "explanation": "Al-Baqarah is the longest surah, with 286 verses." },
+      "fr": { "prompt": "Quelle est la plus longue sourate du Coran ?", "choices": ["Al-'Imran", "Al-Baqara", "An-Nisa", "Al-A'raf"], "explanation": "Al-Baqara est la plus longue sourate, avec 286 versets." }
+    }
+  },
+  {
+    "id": 103, "category": "quran", "difficulty": 2, "correct": 3,
+    "t": {
+      "ar": { "prompt": "ما أقصر سورة في القرآن الكريم؟", "choices": ["الإخلاص", "الناس", "العصر", "الكوثر"], "explanation": "سورة الكوثر هي أقصر سور القرآن، وتتكوّن من ثلاث آيات." },
+      "en": { "prompt": "Which is the shortest surah in the Qur'an?", "choices": ["Al-Ikhlas", "An-Nas", "Al-'Asr", "Al-Kawthar"], "explanation": "Al-Kawthar is the shortest surah, consisting of three verses." },
+      "fr": { "prompt": "Quelle est la plus courte sourate du Coran ?", "choices": ["Al-Ikhlas", "An-Nas", "Al-'Asr", "Al-Kawthar"], "explanation": "Al-Kawthar est la plus courte sourate, avec trois versets." }
+    }
+  },
+  {
+    "id": 104, "category": "quran", "difficulty": 2, "correct": 1,
+    "t": {
+      "ar": { "prompt": "أي سورة لا تبدأ بالبسملة؟", "choices": ["الكهف", "التوبة", "مريم", "الفتح"], "explanation": "سورة التوبة هي السورة الوحيدة التي لا تُفتتح بالبسملة." },
+      "en": { "prompt": "Which surah does not begin with the Basmalah?", "choices": ["Al-Kahf", "At-Tawbah", "Maryam", "Al-Fath"], "explanation": "At-Tawbah is the only surah that does not open with the Basmalah." },
+      "fr": { "prompt": "Quelle sourate ne commence pas par la Basmalah ?", "choices": ["Al-Kahf", "At-Tawba", "Maryam", "Al-Fath"], "explanation": "At-Tawba est la seule sourate à ne pas débuter par la Basmalah." }
+    }
+  },
+  {
+    "id": 105, "category": "quran", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "من أي سورة نزلت أول آيات القرآن الكريم؟", "choices": ["العلق", "المدثر", "الفاتحة", "القلم"], "explanation": "أول ما نزل قوله تعالى: {اقْرَأْ بِاسْمِ رَبِّكَ الَّذِي خَلَقَ} من سورة العلق." },
+      "en": { "prompt": "The first revealed verses of the Qur'an belong to which surah?", "choices": ["Al-'Alaq", "Al-Muddaththir", "Al-Fatiha", "Al-Qalam"], "explanation": "The first revelation was \"Read in the name of your Lord who created\" from Surah Al-'Alaq." },
+      "fr": { "prompt": "Les premiers versets révélés appartiennent à quelle sourate ?", "choices": ["Al-'Alaq", "Al-Muddaththir", "Al-Fatiha", "Al-Qalam"], "explanation": "La première révélation fut « Lis, au nom de ton Seigneur qui a créé » de la sourate Al-'Alaq." }
+    }
+  },
+  {
+    "id": 106, "category": "quran", "difficulty": 1, "correct": 0,
+    "t": {
+      "ar": { "prompt": "في أي سورة توجد آية الكرسي؟", "choices": ["البقرة", "آل عمران", "النور", "يس"], "explanation": "آية الكرسي هي الآية 255 من سورة البقرة." },
+      "en": { "prompt": "In which surah is Ayat al-Kursi found?", "choices": ["Al-Baqarah", "Aal-'Imran", "An-Nur", "Ya-Sin"], "explanation": "Ayat al-Kursi is verse 255 of Surah Al-Baqarah." },
+      "fr": { "prompt": "Dans quelle sourate se trouve le Verset du Trône ?", "choices": ["Al-Baqara", "Al-'Imran", "An-Nur", "Ya-Sin"], "explanation": "Ayat al-Kursi est le verset 255 de la sourate Al-Baqara." }
+    }
+  },
+  {
+    "id": 107, "category": "quran", "difficulty": 1, "correct": 2,
+    "t": {
+      "ar": { "prompt": "كم عدد آيات سورة الفاتحة؟", "choices": ["5", "6", "7", "8"], "explanation": "سورة الفاتحة سبع آيات، وتسمى السبع المثاني." },
+      "en": { "prompt": "How many verses does Surah Al-Fatiha have?", "choices": ["5", "6", "7", "8"], "explanation": "Al-Fatiha has seven verses and is called \"the seven oft-repeated\"." },
+      "fr": { "prompt": "Combien de versets compte la sourate Al-Fatiha ?", "choices": ["5", "6", "7", "8"], "explanation": "Al-Fatiha compte sept versets, appelés « les sept répétés »." }
+    }
+  },
+  {
+    "id": 108, "category": "quran", "difficulty": 3, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما السورة الوحيدة التي سُمّيت باسم امرأة؟", "choices": ["النساء", "مريم", "المجادلة", "الممتحنة"], "explanation": "سورة مريم هي السورة الوحيدة المسماة باسم امرأة، وهي مريم ابنة عمران." },
+      "en": { "prompt": "Which is the only surah named after a woman?", "choices": ["An-Nisa", "Maryam", "Al-Mujadila", "Al-Mumtahina"], "explanation": "Surah Maryam is the only surah named after a woman — Maryam, daughter of 'Imran." },
+      "fr": { "prompt": "Quelle est la seule sourate portant le nom d'une femme ?", "choices": ["An-Nisa", "Maryam", "Al-Mujadila", "Al-Mumtahina"], "explanation": "Maryam est la seule sourate nommée d'après une femme, Maryam fille de 'Imran." }
+    }
+  },
+
+  {
+    "id": 201, "category": "seerah", "difficulty": 1, "correct": 2,
+    "t": {
+      "ar": { "prompt": "في أي عام وُلد النبي محمد ﷺ؟", "choices": ["عام الحزن", "عام الوفد", "عام الفيل", "عام الرمادة"], "explanation": "وُلد النبي ﷺ في عام الفيل، الموافق لسنة 570 ميلادية تقريبًا." },
+      "en": { "prompt": "In which year was the Prophet Muhammad ﷺ born?", "choices": ["The Year of Sorrow", "The Year of Delegations", "The Year of the Elephant", "The Year of Ashes"], "explanation": "The Prophet ﷺ was born in the Year of the Elephant, around 570 CE." },
+      "fr": { "prompt": "En quelle année est né le Prophète Muhammad ﷺ ?", "choices": ["L'Année de la Tristesse", "L'Année des Délégations", "L'Année de l'Éléphant", "L'Année des Cendres"], "explanation": "Le Prophète ﷺ naquit l'Année de l'Éléphant, vers 570 de notre ère." }
+    }
+  },
+  {
+    "id": 202, "category": "seerah", "difficulty": 1, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما اسم والدة النبي ﷺ؟", "choices": ["حليمة السعدية", "آمنة بنت وهب", "فاطمة بنت أسد", "بركة أم أيمن"], "explanation": "أمه آمنة بنت وهب، وتوفيت وهو ابن ست سنين." },
+      "en": { "prompt": "What was the name of the Prophet's ﷺ mother?", "choices": ["Halimah as-Sa'diyyah", "Aminah bint Wahb", "Fatimah bint Asad", "Barakah Umm Ayman"], "explanation": "His mother was Aminah bint Wahb, who died when he was six years old." },
+      "fr": { "prompt": "Quel était le nom de la mère du Prophète ﷺ ?", "choices": ["Halima as-Sa'diyya", "Amina bint Wahb", "Fatima bint Asad", "Baraka Umm Ayman"], "explanation": "Sa mère était Amina bint Wahb, décédée alors qu'il avait six ans." }
+    }
+  },
+  {
+    "id": 203, "category": "seerah", "difficulty": 1, "correct": 0,
+    "t": {
+      "ar": { "prompt": "في أي غار نزل الوحي على النبي ﷺ أول مرة؟", "choices": ["غار حراء", "غار ثور", "غار الكهف", "غار المرسلات"], "explanation": "نزل الوحي أول مرة في غار حراء بجبل النور قرب مكة." },
+      "en": { "prompt": "In which cave did the Prophet ﷺ first receive revelation?", "choices": ["Cave of Hira", "Cave of Thawr", "Cave of the Sleepers", "Cave of Mursalat"], "explanation": "The first revelation came in the Cave of Hira on Jabal an-Nur near Makkah." },
+      "fr": { "prompt": "Dans quelle grotte le Prophète ﷺ reçut-il la première révélation ?", "choices": ["Grotte de Hira", "Grotte de Thawr", "Grotte des Dormants", "Grotte de Mursalat"], "explanation": "La première révélation eut lieu dans la grotte de Hira, au Jabal an-Nur près de La Mecque." }
+    }
+  },
+  {
+    "id": 204, "category": "seerah", "difficulty": 1, "correct": 3,
+    "t": {
+      "ar": { "prompt": "من أول زوجات النبي ﷺ؟", "choices": ["عائشة بنت أبي بكر", "حفصة بنت عمر", "سودة بنت زمعة", "خديجة بنت خويلد"], "explanation": "خديجة بنت خويلد رضي الله عنها هي أول زوجاته، وأول من آمن به." },
+      "en": { "prompt": "Who was the Prophet's ﷺ first wife?", "choices": ["Aishah bint Abi Bakr", "Hafsah bint 'Umar", "Sawdah bint Zam'ah", "Khadijah bint Khuwaylid"], "explanation": "Khadijah bint Khuwaylid was his first wife and the first person to believe in him." },
+      "fr": { "prompt": "Qui fut la première épouse du Prophète ﷺ ?", "choices": ["Aïcha bint Abi Bakr", "Hafsa bint 'Umar", "Sawda bint Zam'a", "Khadija bint Khuwaylid"], "explanation": "Khadija bint Khuwaylid fut sa première épouse et la première à croire en lui." }
+    }
+  },
+  {
+    "id": 205, "category": "seerah", "difficulty": 2, "correct": 1,
+    "t": {
+      "ar": { "prompt": "من رافق النبي ﷺ في هجرته إلى المدينة؟", "choices": ["عمر بن الخطاب", "أبو بكر الصديق", "علي بن أبي طالب", "عثمان بن عفان"], "explanation": "رافقه أبو بكر الصديق رضي الله عنه، واختبآ في غار ثور ثلاث ليالٍ." },
+      "en": { "prompt": "Who accompanied the Prophet ﷺ on the Hijrah to Madinah?", "choices": ["'Umar ibn al-Khattab", "Abu Bakr as-Siddiq", "'Ali ibn Abi Talib", "'Uthman ibn 'Affan"], "explanation": "Abu Bakr as-Siddiq accompanied him; they hid in the Cave of Thawr for three nights." },
+      "fr": { "prompt": "Qui accompagna le Prophète ﷺ lors de l'Hégire vers Médine ?", "choices": ["'Umar ibn al-Khattab", "Abu Bakr as-Siddiq", "'Ali ibn Abi Talib", "'Uthman ibn 'Affan"], "explanation": "Abu Bakr as-Siddiq l'accompagna ; ils se cachèrent trois nuits dans la grotte de Thawr." }
+    }
+  },
+  {
+    "id": 206, "category": "seerah", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "ما أول غزوة كبرى في الإسلام؟", "choices": ["بدر", "أحد", "الخندق", "خيبر"], "explanation": "غزوة بدر الكبرى وقعت في السنة الثانية للهجرة وسمّاها الله يوم الفرقان." },
+      "en": { "prompt": "What was the first major battle in Islam?", "choices": ["Badr", "Uhud", "The Trench", "Khaybar"], "explanation": "The Battle of Badr took place in 2 AH and is called \"the Day of Criterion\" in the Qur'an." },
+      "fr": { "prompt": "Quelle fut la première grande bataille de l'Islam ?", "choices": ["Badr", "Uhud", "Le Fossé", "Khaybar"], "explanation": "La bataille de Badr eut lieu en l'an 2 de l'Hégire, appelée « le Jour du Discernement »." }
+    }
+  },
+  {
+    "id": 207, "category": "seerah", "difficulty": 2, "correct": 2,
+    "t": {
+      "ar": { "prompt": "ما الاسم القديم للمدينة المنورة قبل الهجرة؟", "choices": ["الطائف", "خيبر", "يثرب", "تبوك"], "explanation": "كانت تُعرف بيثرب، ثم سُميت المدينة المنورة بعد هجرة النبي ﷺ إليها." },
+      "en": { "prompt": "What was Madinah called before the Hijrah?", "choices": ["Ta'if", "Khaybar", "Yathrib", "Tabuk"], "explanation": "It was known as Yathrib, and became al-Madinah after the Prophet's ﷺ migration." },
+      "fr": { "prompt": "Comment s'appelait Médine avant l'Hégire ?", "choices": ["Ta'if", "Khaybar", "Yathrib", "Tabuk"], "explanation": "Elle s'appelait Yathrib avant de devenir al-Madina après l'arrivée du Prophète ﷺ." }
+    }
+  },
+  {
+    "id": 208, "category": "seerah", "difficulty": 3, "correct": 1,
+    "t": {
+      "ar": { "prompt": "في أي سنة هجرية وقع فتح مكة؟", "choices": ["السادسة", "الثامنة", "العاشرة", "الرابعة"], "explanation": "فُتحت مكة في رمضان من السنة الثامنة للهجرة دون قتال يُذكر." },
+      "en": { "prompt": "In which Hijri year did the Conquest of Makkah occur?", "choices": ["6 AH", "8 AH", "10 AH", "4 AH"], "explanation": "Makkah was conquered in Ramadan of 8 AH, almost without fighting." },
+      "fr": { "prompt": "En quelle année de l'Hégire eut lieu la conquête de La Mecque ?", "choices": ["An 6", "An 8", "An 10", "An 4"], "explanation": "La Mecque fut conquise en Ramadan de l'an 8, presque sans combat." }
+    }
+  },
+
+  {
+    "id": 301, "category": "prophets", "difficulty": 1, "correct": 0,
+    "t": {
+      "ar": { "prompt": "من أول الأنبياء عليهم السلام؟", "choices": ["آدم", "نوح", "إدريس", "إبراهيم"], "explanation": "آدم عليه السلام هو أبو البشر وأول الأنبياء." },
+      "en": { "prompt": "Who was the first prophet?", "choices": ["Adam", "Nuh", "Idris", "Ibrahim"], "explanation": "Adam, peace be upon him, was the father of mankind and the first prophet." },
+      "fr": { "prompt": "Qui fut le premier prophète ?", "choices": ["Adam", "Nuh", "Idris", "Ibrahim"], "explanation": "Adam, paix sur lui, fut le père de l'humanité et le premier prophète." }
+    }
+  },
+  {
+    "id": 302, "category": "prophets", "difficulty": 1, "correct": 1,
+    "t": {
+      "ar": { "prompt": "أي نبي بنى السفينة بأمر الله؟", "choices": ["هود", "نوح", "صالح", "لوط"], "explanation": "نوح عليه السلام بنى الفلك بوحي من الله ونجا به المؤمنون من الطوفان." },
+      "en": { "prompt": "Which prophet built the Ark by Allah's command?", "choices": ["Hud", "Nuh", "Salih", "Lut"], "explanation": "Nuh built the Ark by revelation, and the believers were saved from the flood." },
+      "fr": { "prompt": "Quel prophète construisit l'Arche sur ordre d'Allah ?", "choices": ["Hud", "Nuh", "Salih", "Lut"], "explanation": "Nuh construisit l'Arche par révélation, sauvant les croyants du déluge." }
+    }
+  },
+  {
+    "id": 303, "category": "prophets", "difficulty": 2, "correct": 2,
+    "t": {
+      "ar": { "prompt": "من الملقّب بـ«خليل الرحمن»؟", "choices": ["موسى", "عيسى", "إبراهيم", "يعقوب"], "explanation": "إبراهيم عليه السلام هو خليل الرحمن، قال تعالى: {وَاتَّخَذَ اللَّهُ إِبْرَاهِيمَ خَلِيلًا}." },
+      "en": { "prompt": "Which prophet is titled \"Khalil ar-Rahman\" (the Friend of the Most Merciful)?", "choices": ["Musa", "'Isa", "Ibrahim", "Ya'qub"], "explanation": "Ibrahim is called Khalilullah: \"And Allah took Ibrahim as an intimate friend.\"" },
+      "fr": { "prompt": "Quel prophète porte le titre de « Khalil ar-Rahman » ?", "choices": ["Musa", "'Isa", "Ibrahim", "Ya'qub"], "explanation": "Ibrahim est appelé Khalilullah : « Et Allah a pris Ibrahim pour ami intime »." }
+    }
+  },
+  {
+    "id": 304, "category": "prophets", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "من الملقّب بـ«كليم الله»؟", "choices": ["موسى", "هارون", "يوسف", "داود"], "explanation": "موسى عليه السلام كلّمه الله تكليمًا، فلُقّب بكليم الله." },
+      "en": { "prompt": "Which prophet is titled \"Kalimullah\" (the one who spoke with Allah)?", "choices": ["Musa", "Harun", "Yusuf", "Dawud"], "explanation": "Allah spoke directly to Musa, so he is called Kalimullah." },
+      "fr": { "prompt": "Quel prophète porte le titre de « Kalimullah » ?", "choices": ["Musa", "Harun", "Yusuf", "Dawud"], "explanation": "Allah parla directement à Musa, d'où son titre de Kalimullah." }
+    }
+  },
+  {
+    "id": 305, "category": "prophets", "difficulty": 1, "correct": 3,
+    "t": {
+      "ar": { "prompt": "أي نبي التقمه الحوت؟", "choices": ["أيوب", "إلياس", "زكريا", "يونس"], "explanation": "يونس عليه السلام، وسُمّي ذا النون، ونادى في الظلمات: {لَا إِلَٰهَ إِلَّا أَنتَ سُبْحَانَكَ}." },
+      "en": { "prompt": "Which prophet was swallowed by the whale?", "choices": ["Ayyub", "Ilyas", "Zakariyya", "Yunus"], "explanation": "Yunus, also called Dhun-Nun, called out from the darkness: \"There is no god but You, glory be to You.\"" },
+      "fr": { "prompt": "Quel prophète fut avalé par la baleine ?", "choices": ["Ayyub", "Ilyas", "Zakariyya", "Yunus"], "explanation": "Yunus, aussi appelé Dhun-Nun, implora dans les ténèbres : « Point de divinité à part Toi »." }
+    }
+  },
+  {
+    "id": 306, "category": "prophets", "difficulty": 2, "correct": 1,
+    "t": {
+      "ar": { "prompt": "على أي نبي أُنزل الزبور؟", "choices": ["سليمان", "داود", "موسى", "عيسى"], "explanation": "الزبور أُنزل على داود عليه السلام، كما قال تعالى: {وَآتَيْنَا دَاوُودَ زَبُورًا}." },
+      "en": { "prompt": "To which prophet was the Zabur revealed?", "choices": ["Sulayman", "Dawud", "Musa", "'Isa"], "explanation": "The Zabur was given to Dawud: \"And We gave Dawud the Zabur.\"" },
+      "fr": { "prompt": "À quel prophète fut révélé le Zabur ?", "choices": ["Sulayman", "Dawud", "Musa", "'Isa"], "explanation": "Le Zabur fut donné à Dawud : « Et Nous avons donné le Zabur à Dawud »." }
+    }
+  },
+  {
+    "id": 307, "category": "prophets", "difficulty": 2, "correct": 2,
+    "t": {
+      "ar": { "prompt": "أي نبي سُخّرت له الريح والجن؟", "choices": ["إبراهيم", "داود", "سليمان", "يوسف"], "explanation": "سليمان عليه السلام سُخّرت له الريح والجن والطير، وعلّمه الله منطق الطير." },
+      "en": { "prompt": "Which prophet had the wind and the jinn placed at his service?", "choices": ["Ibrahim", "Dawud", "Sulayman", "Yusuf"], "explanation": "Sulayman commanded the wind, the jinn and the birds, and understood their speech." },
+      "fr": { "prompt": "Quel prophète avait le vent et les djinns à son service ?", "choices": ["Ibrahim", "Dawud", "Sulayman", "Yusuf"], "explanation": "Sulayman commandait le vent, les djinns et les oiseaux, et comprenait leur langage." }
+    }
+  },
+  {
+    "id": 308, "category": "prophets", "difficulty": 3, "correct": 0,
+    "t": {
+      "ar": { "prompt": "كم عدد الأنبياء المذكورين بأسمائهم في القرآن الكريم؟", "choices": ["25", "24", "28", "30"], "explanation": "ذُكر خمسة وعشرون نبيًا بأسمائهم صراحة في القرآن الكريم." },
+      "en": { "prompt": "How many prophets are mentioned by name in the Qur'an?", "choices": ["25", "24", "28", "30"], "explanation": "Twenty-five prophets are explicitly named in the Qur'an." },
+      "fr": { "prompt": "Combien de prophètes sont nommés dans le Coran ?", "choices": ["25", "24", "28", "30"], "explanation": "Vingt-cinq prophètes sont explicitement nommés dans le Coran." }
+    }
+  },
+
+  {
+    "id": 401, "category": "fiqh", "difficulty": 1, "correct": 1,
+    "t": {
+      "ar": { "prompt": "كم عدد أركان الإسلام؟", "choices": ["4", "5", "6", "7"], "explanation": "أركان الإسلام خمسة: الشهادتان، الصلاة، الزكاة، الصوم، والحج لمن استطاع." },
+      "en": { "prompt": "How many pillars of Islam are there?", "choices": ["4", "5", "6", "7"], "explanation": "Five: the testimony of faith, prayer, zakat, fasting, and hajj for those able." },
+      "fr": { "prompt": "Combien y a-t-il de piliers de l'Islam ?", "choices": ["4", "5", "6", "7"], "explanation": "Cinq : l'attestation de foi, la prière, la zakat, le jeûne et le hajj pour qui le peut." }
+    }
+  },
+  {
+    "id": 402, "category": "fiqh", "difficulty": 1, "correct": 2,
+    "t": {
+      "ar": { "prompt": "كم عدد ركعات صلاة المغرب؟", "choices": ["2", "4", "3", "5"], "explanation": "صلاة المغرب ثلاث ركعات، وهي الصلاة الوترية من فرائض اليوم." },
+      "en": { "prompt": "How many rak'ahs are in the Maghrib prayer?", "choices": ["2", "4", "3", "5"], "explanation": "Maghrib consists of three rak'ahs — the odd-numbered obligatory prayer of the day." },
+      "fr": { "prompt": "Combien de rak'ahs compte la prière du Maghrib ?", "choices": ["2", "4", "3", "5"], "explanation": "Le Maghrib compte trois rak'ahs, la prière impaire de la journée." }
+    }
+  },
+  {
+    "id": 403, "category": "fiqh", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "ما مقدار زكاة المال النقدي إذا بلغ النصاب وحال عليه الحول؟", "choices": ["2.5%", "5%", "10%", "1%"], "explanation": "زكاة النقود والذهب والفضة ربع العشر، أي 2.5% بعد بلوغ النصاب وحولان الحول." },
+      "en": { "prompt": "What is the zakat rate on monetary wealth once nisab and a lunar year are met?", "choices": ["2.5%", "5%", "10%", "1%"], "explanation": "Zakat on cash, gold and silver is one quarter of a tenth — 2.5%." },
+      "fr": { "prompt": "Quel est le taux de zakat sur les biens monétaires après le nisab et une année lunaire ?", "choices": ["2,5 %", "5 %", "10 %", "1 %"], "explanation": "La zakat sur l'argent, l'or et l'argent métal est d'un quart de dixième, soit 2,5 %." }
+    }
+  },
+  {
+    "id": 404, "category": "fiqh", "difficulty": 1, "correct": 3,
+    "t": {
+      "ar": { "prompt": "كم شوطًا يطوف الحاج حول الكعبة في الطواف؟", "choices": ["3", "5", "9", "7"], "explanation": "الطواف سبعة أشواط تبدأ وتنتهي عند الحجر الأسود." },
+      "en": { "prompt": "How many circuits make up the Tawaf around the Ka'bah?", "choices": ["3", "5", "9", "7"], "explanation": "Tawaf consists of seven circuits, beginning and ending at the Black Stone." },
+      "fr": { "prompt": "Combien de tours compte le Tawaf autour de la Ka'ba ?", "choices": ["3", "5", "9", "7"], "explanation": "Le Tawaf compte sept tours, commençant et finissant à la Pierre Noire." }
+    }
+  },
+  {
+    "id": 405, "category": "fiqh", "difficulty": 1, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما القبلة التي يتوجه إليها المسلمون في الصلاة؟", "choices": ["المسجد الأقصى", "الكعبة المشرفة", "المسجد النبوي", "جبل عرفة"], "explanation": "القبلة هي الكعبة المشرفة في المسجد الحرام بمكة المكرمة." },
+      "en": { "prompt": "Which direction do Muslims face in prayer?", "choices": ["Al-Aqsa Mosque", "The Ka'bah", "The Prophet's Mosque", "Mount Arafat"], "explanation": "The qiblah is the Ka'bah in the Sacred Mosque in Makkah." },
+      "fr": { "prompt": "Vers quelle direction les musulmans prient-ils ?", "choices": ["La mosquée Al-Aqsa", "La Ka'ba", "La mosquée du Prophète", "Le mont Arafat"], "explanation": "La qibla est la Ka'ba, dans la Mosquée sacrée de La Mecque." }
+    }
+  },
+  {
+    "id": 406, "category": "fiqh", "difficulty": 2, "correct": 2,
+    "t": {
+      "ar": { "prompt": "ما الصلاة التي تُؤدّى بعد زوال الشمس مباشرة؟", "choices": ["الفجر", "العصر", "الظهر", "العشاء"], "explanation": "صلاة الظهر تبدأ بعد زوال الشمس عن كبد السماء، وهي أربع ركعات." },
+      "en": { "prompt": "Which prayer is performed just after the sun passes its zenith?", "choices": ["Fajr", "'Asr", "Dhuhr", "'Isha"], "explanation": "Dhuhr begins when the sun declines from its zenith; it is four rak'ahs." },
+      "fr": { "prompt": "Quelle prière suit immédiatement le zénith du soleil ?", "choices": ["Fajr", "'Asr", "Dhuhr", "'Isha"], "explanation": "Le Dhuhr commence après le déclin du soleil de son zénith ; il compte quatre rak'ahs." }
+    }
+  },
+  {
+    "id": 407, "category": "fiqh", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "كم عدد أركان الإيمان؟", "choices": ["6", "5", "7", "4"], "explanation": "أركان الإيمان ستة: الإيمان بالله وملائكته وكتبه ورسله واليوم الآخر والقدر خيره وشره." },
+      "en": { "prompt": "How many articles of faith (arkan al-iman) are there?", "choices": ["6", "5", "7", "4"], "explanation": "Six: belief in Allah, His angels, His books, His messengers, the Last Day, and divine decree." },
+      "fr": { "prompt": "Combien y a-t-il de piliers de la foi (arkan al-iman) ?", "choices": ["6", "5", "7", "4"], "explanation": "Six : croire en Allah, Ses anges, Ses livres, Ses messagers, le Jour dernier et le destin." }
+    }
+  },
+  {
+    "id": 408, "category": "fiqh", "difficulty": 3, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما الطهارة التي تُستعمل عند فقد الماء أو تعذّر استعماله؟", "choices": ["الغسل", "التيمم", "الاستنجاء", "المسح على الخفين"], "explanation": "التيمم بالصعيد الطيب بديل عن الوضوء والغسل عند فقد الماء أو الضرر باستعماله." },
+      "en": { "prompt": "Which form of purification replaces water when it is unavailable or harmful to use?", "choices": ["Ghusl", "Tayammum", "Istinja", "Wiping over socks"], "explanation": "Tayammum with clean earth substitutes for wudu and ghusl when water is unavailable or harmful." },
+      "fr": { "prompt": "Quelle purification remplace l'eau lorsqu'elle est indisponible ou nocive ?", "choices": ["Ghusl", "Tayammum", "Istinja", "Essuyage des chaussettes"], "explanation": "Le tayammum avec de la terre pure remplace les ablutions quand l'eau manque ou nuit." }
+    }
+  },
+
+  {
+    "id": 501, "category": "hadith", "difficulty": 1, "correct": 0,
+    "t": {
+      "ar": { "prompt": "ما أصحّ كتاب في الحديث بعد كتاب الله؟", "choices": ["صحيح البخاري", "سنن أبي داود", "مسند أحمد", "سنن الترمذي"], "explanation": "صحيح البخاري أصحّ الكتب بعد كتاب الله عند جمهور أهل العلم، يليه صحيح مسلم." },
+      "en": { "prompt": "Which hadith collection is considered the most authentic after the Qur'an?", "choices": ["Sahih al-Bukhari", "Sunan Abi Dawud", "Musnad Ahmad", "Sunan at-Tirmidhi"], "explanation": "Sahih al-Bukhari is held by the majority of scholars as the most authentic book after the Qur'an, followed by Sahih Muslim." },
+      "fr": { "prompt": "Quel recueil de hadiths est considéré comme le plus authentique après le Coran ?", "choices": ["Sahih al-Bukhari", "Sunan Abi Dawud", "Musnad Ahmad", "Sunan at-Tirmidhi"], "explanation": "Sahih al-Bukhari est tenu par la majorité des savants pour le plus authentique après le Coran, suivi de Sahih Muslim." }
+    }
+  },
+  {
+    "id": 502, "category": "hadith", "difficulty": 2, "correct": 2,
+    "t": {
+      "ar": { "prompt": "كم عدد كتب «الكتب الستة» في السنة النبوية؟", "choices": ["4", "5", "6", "7"], "explanation": "الكتب الستة: البخاري، مسلم، أبو داود، الترمذي، النسائي، وابن ماجه." },
+      "en": { "prompt": "How many books make up the \"Kutub as-Sittah\"?", "choices": ["4", "5", "6", "7"], "explanation": "The six: Bukhari, Muslim, Abu Dawud, at-Tirmidhi, an-Nasa'i and Ibn Majah." },
+      "fr": { "prompt": "Combien d'ouvrages composent les « Kutub as-Sitta » ?", "choices": ["4", "5", "6", "7"], "explanation": "Les six : Bukhari, Muslim, Abu Dawud, at-Tirmidhi, an-Nasa'i et Ibn Maja." }
+    }
+  },
+  {
+    "id": 503, "category": "hadith", "difficulty": 2, "correct": 1,
+    "t": {
+      "ar": { "prompt": "من أكثر الصحابة روايةً للحديث؟", "choices": ["عبد الله بن عمر", "أبو هريرة", "أنس بن مالك", "عائشة"], "explanation": "أبو هريرة رضي الله عنه أكثر الصحابة رواية، وقد روى أكثر من خمسة آلاف حديث." },
+      "en": { "prompt": "Which companion narrated the largest number of hadiths?", "choices": ["'Abdullah ibn 'Umar", "Abu Hurayrah", "Anas ibn Malik", "'Aishah"], "explanation": "Abu Hurayrah narrated the most, with over five thousand reports attributed to him." },
+      "fr": { "prompt": "Quel compagnon a rapporté le plus grand nombre de hadiths ?", "choices": ["'Abdullah ibn 'Umar", "Abu Hurayra", "Anas ibn Malik", "'Aïcha"], "explanation": "Abu Hurayra en rapporta le plus, avec plus de cinq mille récits qui lui sont attribués." }
+    }
+  },
+  {
+    "id": 504, "category": "hadith", "difficulty": 2, "correct": 3,
+    "t": {
+      "ar": { "prompt": "من روى حديث «إنما الأعمال بالنيات»؟", "choices": ["أبو هريرة", "ابن عباس", "أنس بن مالك", "عمر بن الخطاب"], "explanation": "رواه عمر بن الخطاب رضي الله عنه، وهو أول حديث في صحيح البخاري." },
+      "en": { "prompt": "Who narrated the hadith \"Actions are but by intentions\"?", "choices": ["Abu Hurayrah", "Ibn 'Abbas", "Anas ibn Malik", "'Umar ibn al-Khattab"], "explanation": "Narrated by 'Umar ibn al-Khattab; it is the opening hadith of Sahih al-Bukhari." },
+      "fr": { "prompt": "Qui a rapporté le hadith « Les actes ne valent que par les intentions » ?", "choices": ["Abu Hurayra", "Ibn 'Abbas", "Anas ibn Malik", "'Umar ibn al-Khattab"], "explanation": "Rapporté par 'Umar ibn al-Khattab, c'est le hadith d'ouverture du Sahih al-Bukhari." }
+    }
+  },
+  {
+    "id": 505, "category": "hadith", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "من ألّف كتاب «الموطأ»؟", "choices": ["الإمام مالك", "الإمام الشافعي", "الإمام أحمد", "الإمام أبو حنيفة"], "explanation": "الموطأ من تأليف الإمام مالك بن أنس، وهو من أقدم كتب الحديث والفقه." },
+      "en": { "prompt": "Who compiled \"Al-Muwatta\"?", "choices": ["Imam Malik", "Imam ash-Shafi'i", "Imam Ahmad", "Imam Abu Hanifah"], "explanation": "Al-Muwatta was compiled by Imam Malik ibn Anas, one of the earliest works of hadith and fiqh." },
+      "fr": { "prompt": "Qui a compilé « Al-Muwatta » ?", "choices": ["Imam Malik", "Imam ash-Shafi'i", "Imam Ahmad", "Imam Abu Hanifa"], "explanation": "Al-Muwatta fut compilé par l'imam Malik ibn Anas, l'un des plus anciens ouvrages de hadith et de fiqh." }
+    }
+  },
+  {
+    "id": 506, "category": "hadith", "difficulty": 3, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما تسمية الحديث الذي اتصل سنده بنقل العدل الضابط عن مثله بلا شذوذ ولا علة؟", "choices": ["حسن", "صحيح", "ضعيف", "موضوع"], "explanation": "هذا تعريف الحديث الصحيح عند المحدثين، وهو أعلى مراتب القبول." },
+      "en": { "prompt": "What is a hadith called when its chain is continuous through upright, precise narrators with no irregularity or defect?", "choices": ["Hasan", "Sahih", "Da'if", "Mawdu'"], "explanation": "This is the classical definition of a Sahih hadith — the highest grade of acceptance." },
+      "fr": { "prompt": "Comment nomme-t-on un hadith à chaîne continue de rapporteurs intègres et précis, sans anomalie ni défaut ?", "choices": ["Hasan", "Sahih", "Da'if", "Mawdu'"], "explanation": "C'est la définition classique du hadith Sahih, le plus haut degré d'acceptation." }
+    }
+  },
+  {
+    "id": 507, "category": "hadith", "difficulty": 2, "correct": 2,
+    "t": {
+      "ar": { "prompt": "من جمع «الأربعين النووية»؟", "choices": ["ابن حجر العسقلاني", "ابن رجب الحنبلي", "الإمام النووي", "الإمام الذهبي"], "explanation": "جمعها الإمام يحيى بن شرف النووي، وهي من أشهر المتون الحديثية." },
+      "en": { "prompt": "Who compiled the famous \"Forty Hadith\" collection?", "choices": ["Ibn Hajar al-'Asqalani", "Ibn Rajab al-Hanbali", "Imam an-Nawawi", "Imam adh-Dhahabi"], "explanation": "Compiled by Imam Yahya ibn Sharaf an-Nawawi, it is among the best-known hadith primers." },
+      "fr": { "prompt": "Qui a compilé le célèbre recueil des « Quarante Hadiths » ?", "choices": ["Ibn Hajar al-'Asqalani", "Ibn Rajab al-Hanbali", "Imam an-Nawawi", "Imam adh-Dhahabi"], "explanation": "Compilé par l'imam Yahya ibn Sharaf an-Nawawi, c'est l'un des manuels de hadith les plus connus." }
+    }
+  },
+  {
+    "id": 508, "category": "hadith", "difficulty": 1, "correct": 0,
+    "t": {
+      "ar": { "prompt": "ماذا يُسمّى سلسلة رواة الحديث؟", "choices": ["السند", "المتن", "التخريج", "الشرح"], "explanation": "السند هو سلسلة الرواة الموصلة إلى المتن، والمتن هو نص الحديث نفسه." },
+      "en": { "prompt": "What is the chain of narrators of a hadith called?", "choices": ["Isnad", "Matn", "Takhrij", "Sharh"], "explanation": "The isnad is the chain of transmitters; the matn is the text of the hadith itself." },
+      "fr": { "prompt": "Comment appelle-t-on la chaîne de transmetteurs d'un hadith ?", "choices": ["Isnad", "Matn", "Takhrij", "Sharh"], "explanation": "L'isnad est la chaîne de transmission ; le matn est le texte même du hadith." }
+    }
+  },
+
+  {
+    "id": 601, "category": "history", "difficulty": 1, "correct": 1,
+    "t": {
+      "ar": { "prompt": "من أول الخلفاء الراشدين؟", "choices": ["عمر بن الخطاب", "أبو بكر الصديق", "عثمان بن عفان", "علي بن أبي طالب"], "explanation": "أبو بكر الصديق رضي الله عنه تولى الخلافة بعد وفاة النبي ﷺ سنة 11 هـ." },
+      "en": { "prompt": "Who was the first of the Rightly-Guided Caliphs?", "choices": ["'Umar ibn al-Khattab", "Abu Bakr as-Siddiq", "'Uthman ibn 'Affan", "'Ali ibn Abi Talib"], "explanation": "Abu Bakr as-Siddiq assumed the caliphate after the Prophet's ﷺ death in 11 AH." },
+      "fr": { "prompt": "Qui fut le premier des califes bien guidés ?", "choices": ["'Umar ibn al-Khattab", "Abu Bakr as-Siddiq", "'Uthman ibn 'Affan", "'Ali ibn Abi Talib"], "explanation": "Abu Bakr as-Siddiq prit le califat après la mort du Prophète ﷺ en l'an 11 de l'Hégire." }
+    }
+  },
+  {
+    "id": 602, "category": "history", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "من الخليفة الملقّب بـ«الفاروق»؟", "choices": ["عمر بن الخطاب", "أبو بكر الصديق", "معاوية بن أبي سفيان", "عمر بن عبد العزيز"], "explanation": "عمر بن الخطاب رضي الله عنه لُقّب بالفاروق لتفريقه بين الحق والباطل." },
+      "en": { "prompt": "Which caliph carried the title \"al-Faruq\"?", "choices": ["'Umar ibn al-Khattab", "Abu Bakr as-Siddiq", "Mu'awiyah ibn Abi Sufyan", "'Umar ibn 'Abd al-'Aziz"], "explanation": "'Umar ibn al-Khattab was called al-Faruq — the one who distinguishes truth from falsehood." },
+      "fr": { "prompt": "Quel calife portait le titre d'« al-Faruq » ?", "choices": ["'Umar ibn al-Khattab", "Abu Bakr as-Siddiq", "Mu'awiya ibn Abi Sufyan", "'Umar ibn 'Abd al-'Aziz"], "explanation": "'Umar ibn al-Khattab fut nommé al-Faruq, celui qui distingue le vrai du faux." }
+    }
+  },
+  {
+    "id": 603, "category": "history", "difficulty": 2, "correct": 2,
+    "t": {
+      "ar": { "prompt": "أي خليفة جمع المسلمين على مصحف واحد؟", "choices": ["أبو بكر الصديق", "عمر بن الخطاب", "عثمان بن عفان", "علي بن أبي طالب"], "explanation": "عثمان بن عفان رضي الله عنه نسخ المصاحف ووحّد الناس على قراءة واحدة، فسُمّي جامع القرآن." },
+      "en": { "prompt": "Which caliph united the Muslims on a single written mushaf?", "choices": ["Abu Bakr as-Siddiq", "'Umar ibn al-Khattab", "'Uthman ibn 'Affan", "'Ali ibn Abi Talib"], "explanation": "'Uthman ibn 'Affan had copies made and unified recitation, earning the title \"compiler of the Qur'an\"." },
+      "fr": { "prompt": "Quel calife unifia les musulmans autour d'un seul mushaf ?", "choices": ["Abu Bakr as-Siddiq", "'Umar ibn al-Khattab", "'Uthman ibn 'Affan", "'Ali ibn Abi Talib"], "explanation": "'Uthman ibn 'Affan fit copier les exemplaires et unifia la récitation, d'où son titre de « compilateur du Coran »." }
+    }
+  },
+  {
+    "id": 604, "category": "history", "difficulty": 2, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما عاصمة الدولة الأموية؟", "choices": ["بغداد", "دمشق", "القاهرة", "قرطبة"], "explanation": "اتخذ الأمويون دمشق عاصمةً لدولتهم منذ سنة 41 هـ." },
+      "en": { "prompt": "What was the capital of the Umayyad Caliphate?", "choices": ["Baghdad", "Damascus", "Cairo", "Cordoba"], "explanation": "The Umayyads made Damascus their capital from 41 AH onward." },
+      "fr": { "prompt": "Quelle était la capitale du califat omeyyade ?", "choices": ["Bagdad", "Damas", "Le Caire", "Cordoue"], "explanation": "Les Omeyyades firent de Damas leur capitale à partir de l'an 41 de l'Hégire." }
+    }
+  },
+  {
+    "id": 605, "category": "history", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "ما عاصمة الدولة العباسية؟", "choices": ["بغداد", "دمشق", "سامراء", "الكوفة"], "explanation": "بناها الخليفة أبو جعفر المنصور سنة 145 هـ وسمّاها مدينة السلام." },
+      "en": { "prompt": "What was the capital of the Abbasid Caliphate?", "choices": ["Baghdad", "Damascus", "Samarra", "Kufa"], "explanation": "Built by Caliph al-Mansur in 145 AH, it was named Madinat as-Salam, the City of Peace." },
+      "fr": { "prompt": "Quelle était la capitale du califat abbasside ?", "choices": ["Bagdad", "Damas", "Samarra", "Koufa"], "explanation": "Fondée par le calife al-Mansur en 145 H, elle fut nommée Madinat as-Salam, la Cité de la Paix." }
+    }
+  },
+  {
+    "id": 606, "category": "history", "difficulty": 3, "correct": 3,
+    "t": {
+      "ar": { "prompt": "من قاد فتح الأندلس سنة 92 هـ؟", "choices": ["موسى بن نصير", "عقبة بن نافع", "عبد الرحمن الداخل", "طارق بن زياد"], "explanation": "عبر طارق بن زياد المضيق الذي حمل اسمه وانتصر في معركة وادي لكة." },
+      "en": { "prompt": "Who led the conquest of al-Andalus in 92 AH (711 CE)?", "choices": ["Musa ibn Nusayr", "'Uqbah ibn Nafi'", "'Abd ar-Rahman ad-Dakhil", "Tariq ibn Ziyad"], "explanation": "Tariq ibn Ziyad crossed the strait that bears his name and prevailed at the Battle of Guadalete." },
+      "fr": { "prompt": "Qui mena la conquête d'al-Andalus en 92 H (711) ?", "choices": ["Musa ibn Nusayr", "'Uqba ibn Nafi'", "'Abd ar-Rahman ad-Dakhil", "Tariq ibn Ziyad"], "explanation": "Tariq ibn Ziyad traversa le détroit qui porte son nom et l'emporta à la bataille du Guadalete." }
+    }
+  },
+  {
+    "id": 607, "category": "history", "difficulty": 3, "correct": 1,
+    "t": {
+      "ar": { "prompt": "من استعاد بيت المقدس سنة 583 هـ / 1187م؟", "choices": ["نور الدين زنكي", "صلاح الدين الأيوبي", "قطز", "بيبرس"], "explanation": "استعاد صلاح الدين الأيوبي القدس بعد انتصاره في معركة حطين." },
+      "en": { "prompt": "Who retook Jerusalem in 583 AH / 1187 CE?", "choices": ["Nur ad-Din Zangi", "Salah ad-Din al-Ayyubi", "Qutuz", "Baybars"], "explanation": "Salah ad-Din recovered Jerusalem following his victory at the Battle of Hattin." },
+      "fr": { "prompt": "Qui reprit Jérusalem en 583 H / 1187 ?", "choices": ["Nur ad-Din Zangi", "Salah ad-Din al-Ayyubi", "Qutuz", "Baybars"], "explanation": "Salah ad-Din reprit Jérusalem après sa victoire à la bataille de Hattin." }
+    }
+  },
+  {
+    "id": 608, "category": "history", "difficulty": 3, "correct": 2,
+    "t": {
+      "ar": { "prompt": "ضد من انتصر المسلمون في معركة عين جالوت سنة 658 هـ؟", "choices": ["الروم", "الفرس", "المغول", "الصليبيين"], "explanation": "أوقفت عين جالوت الزحف المغولي بقيادة سيف الدين قطز والظاهر بيبرس." },
+      "en": { "prompt": "Whom did the Muslims defeat at the Battle of Ain Jalut in 658 AH?", "choices": ["The Byzantines", "The Persians", "The Mongols", "The Crusaders"], "explanation": "Ain Jalut halted the Mongol advance, under the command of Qutuz and Baybars." },
+      "fr": { "prompt": "Qui les musulmans vainquirent-ils à la bataille d'Ain Jalut en 658 H ?", "choices": ["Les Byzantins", "Les Perses", "Les Mongols", "Les Croisés"], "explanation": "Ain Jalut stoppa l'avancée mongole, sous le commandement de Qutuz et Baybars." }
+    }
+  },
+
+  {
+    "id": 701, "category": "ramadan", "difficulty": 1, "correct": 2,
+    "t": {
+      "ar": { "prompt": "ما ترتيب شهر رمضان في التقويم الهجري؟", "choices": ["السابع", "الثامن", "التاسع", "العاشر"], "explanation": "رمضان هو الشهر التاسع في التقويم الهجري، بين شعبان وشوال." },
+      "en": { "prompt": "Which month of the Hijri calendar is Ramadan?", "choices": ["7th", "8th", "9th", "10th"], "explanation": "Ramadan is the ninth month of the Hijri calendar, between Sha'ban and Shawwal." },
+      "fr": { "prompt": "Quel mois du calendrier hégirien est le Ramadan ?", "choices": ["7e", "8e", "9e", "10e"], "explanation": "Le Ramadan est le neuvième mois du calendrier hégirien, entre Sha'ban et Shawwal." }
+    }
+  },
+  {
+    "id": 702, "category": "ramadan", "difficulty": 1, "correct": 0,
+    "t": {
+      "ar": { "prompt": "ما اسم وجبة ما قبل الفجر في رمضان؟", "choices": ["السحور", "الإفطار", "الغبقة", "القائلة"], "explanation": "السحور سنة مباركة، قال ﷺ: «تسحّروا فإن في السحور بركة»." },
+      "en": { "prompt": "What is the pre-dawn meal in Ramadan called?", "choices": ["Suhoor", "Iftar", "Ghabqa", "Qaylulah"], "explanation": "Suhoor is a blessed sunnah: \"Take suhoor, for in suhoor there is blessing.\"" },
+      "fr": { "prompt": "Comment s'appelle le repas pris avant l'aube pendant le Ramadan ?", "choices": ["Suhoor", "Iftar", "Ghabqa", "Qaylula"], "explanation": "Le suhoor est une sunna bénie : « Prenez le suhoor, car il y a en lui une bénédiction »." }
+    }
+  },
+  {
+    "id": 703, "category": "ramadan", "difficulty": 1, "correct": 3,
+    "t": {
+      "ar": { "prompt": "في أي العشر تُلتمس ليلة القدر؟", "choices": ["العشر الأولى", "العشر الوسطى", "أول الشهر", "العشر الأواخر"], "explanation": "قال ﷺ: «تحرّوا ليلة القدر في الوتر من العشر الأواخر من رمضان»." },
+      "en": { "prompt": "In which ten nights is Laylat al-Qadr sought?", "choices": ["The first ten", "The middle ten", "The start of the month", "The last ten"], "explanation": "The Prophet ﷺ said: \"Seek Laylat al-Qadr in the odd nights of the last ten of Ramadan.\"" },
+      "fr": { "prompt": "Dans quelles dix nuits recherche-t-on Laylat al-Qadr ?", "choices": ["Les dix premières", "Les dix du milieu", "Le début du mois", "Les dix dernières"], "explanation": "Le Prophète ﷺ a dit : « Recherchez Laylat al-Qadr dans les nuits impaires des dix dernières du Ramadan »." }
+    }
+  },
+  {
+    "id": 704, "category": "ramadan", "difficulty": 1, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما اسم صلاة القيام الجماعية في ليالي رمضان؟", "choices": ["الضحى", "التراويح", "الاستخارة", "الكسوف"], "explanation": "التراويح سنة مؤكدة تُصلى جماعةً بعد العشاء في ليالي رمضان." },
+      "en": { "prompt": "What is the congregational night prayer of Ramadan called?", "choices": ["Duha", "Tarawih", "Istikharah", "Kusuf"], "explanation": "Tarawih is an emphasised sunnah prayed in congregation after 'Isha during Ramadan." },
+      "fr": { "prompt": "Comment s'appelle la prière nocturne en congrégation du Ramadan ?", "choices": ["Duha", "Tarawih", "Istikhara", "Kusuf"], "explanation": "Le Tarawih est une sunna confirmée, priée en groupe après la 'Isha durant le Ramadan." }
+    }
+  },
+  {
+    "id": 705, "category": "ramadan", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "متى يبدأ الإمساك عن الطعام والشراب في الصيام؟", "choices": ["من طلوع الفجر", "من شروق الشمس", "من منتصف الليل", "من أذان الظهر"], "explanation": "يبدأ الصيام من طلوع الفجر الصادق إلى غروب الشمس." },
+      "en": { "prompt": "When does abstaining from food and drink begin in fasting?", "choices": ["At the break of dawn (Fajr)", "At sunrise", "At midnight", "At the Dhuhr call to prayer"], "explanation": "The fast runs from true dawn until sunset." },
+      "fr": { "prompt": "Quand commence l'abstinence de nourriture et de boisson dans le jeûne ?", "choices": ["À l'aube (Fajr)", "Au lever du soleil", "À minuit", "À l'appel du Dhuhr"], "explanation": "Le jeûne va de la véritable aube jusqu'au coucher du soleil." }
+    }
+  },
+  {
+    "id": 706, "category": "ramadan", "difficulty": 2, "correct": 2,
+    "t": {
+      "ar": { "prompt": "ما الزكاة الواجبة قبل صلاة عيد الفطر؟", "choices": ["زكاة المال", "زكاة الزروع", "زكاة الفطر", "زكاة الركاز"], "explanation": "زكاة الفطر طُهرة للصائم وطُعمة للمساكين، وتُخرج قبل صلاة العيد." },
+      "en": { "prompt": "Which zakat is due before the Eid al-Fitr prayer?", "choices": ["Zakat on wealth", "Zakat on crops", "Zakat al-Fitr", "Zakat on treasure"], "explanation": "Zakat al-Fitr purifies the fasting person and feeds the needy; it is given before the Eid prayer." },
+      "fr": { "prompt": "Quelle zakat est due avant la prière de l'Aïd al-Fitr ?", "choices": ["Zakat sur les biens", "Zakat sur les récoltes", "Zakat al-Fitr", "Zakat sur les trésors"], "explanation": "La Zakat al-Fitr purifie le jeûneur et nourrit les nécessiteux ; elle se donne avant la prière de l'Aïd." }
+    }
+  },
+  {
+    "id": 707, "category": "ramadan", "difficulty": 2, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما اسم الاعتكاف في المسجد في العشر الأواخر؟", "choices": ["الخلوة", "الاعتكاف", "الرباط", "التهجد"], "explanation": "الاعتكاف لزوم المسجد لطاعة الله، وكان النبي ﷺ يعتكف العشر الأواخر من رمضان." },
+      "en": { "prompt": "What is the practice of secluding oneself in the mosque during the last ten nights called?", "choices": ["Khalwah", "I'tikaf", "Ribat", "Tahajjud"], "explanation": "I'tikaf means staying in the mosque in devotion; the Prophet ﷺ observed it in the last ten nights of Ramadan." },
+      "fr": { "prompt": "Comment nomme-t-on la retraite à la mosquée durant les dix dernières nuits ?", "choices": ["Khalwa", "I'tikaf", "Ribat", "Tahajjud"], "explanation": "L'i'tikaf est la retraite pieuse à la mosquée ; le Prophète ﷺ l'observait les dix dernières nuits du Ramadan." }
+    }
+  },
+  {
+    "id": 708, "category": "ramadan", "difficulty": 3, "correct": 0,
+    "t": {
+      "ar": { "prompt": "في أي سورة ورد قوله تعالى: {شَهْرُ رَمَضَانَ الَّذِي أُنزِلَ فِيهِ الْقُرْآنُ}؟", "choices": ["البقرة", "القدر", "الدخان", "الإسراء"], "explanation": "وردت في سورة البقرة، الآية 185." },
+      "en": { "prompt": "In which surah is the verse \"The month of Ramadan in which the Qur'an was revealed\"?", "choices": ["Al-Baqarah", "Al-Qadr", "Ad-Dukhan", "Al-Isra"], "explanation": "It appears in Surah Al-Baqarah, verse 185." },
+      "fr": { "prompt": "Dans quelle sourate figure « Le mois de Ramadan au cours duquel le Coran fut révélé » ?", "choices": ["Al-Baqara", "Al-Qadr", "Ad-Dukhan", "Al-Isra"], "explanation": "Ce verset se trouve dans la sourate Al-Baqara, verset 185." }
+    }
+  },
+
+  {
+    "id": 801, "category": "akhlaq", "difficulty": 1, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما تحية المسلم لأخيه المسلم؟", "choices": ["أهلًا وسهلًا", "السلام عليكم", "صباح الخير", "حيّاك الله"], "explanation": "التحية الشرعية «السلام عليكم ورحمة الله وبركاته»، وإفشاء السلام من موجبات المحبة." },
+      "en": { "prompt": "What is the Islamic greeting between Muslims?", "choices": ["Ahlan wa sahlan", "As-salamu 'alaykum", "Sabah al-khayr", "Hayyaka Allah"], "explanation": "The prescribed greeting is \"As-salamu 'alaykum wa rahmatullahi wa barakatuh\"; spreading it builds mutual love." },
+      "fr": { "prompt": "Quelle est la salutation islamique entre musulmans ?", "choices": ["Ahlan wa sahlan", "As-salamu 'alaykum", "Sabah al-khayr", "Hayyaka Allah"], "explanation": "La salutation prescrite est « As-salamu 'alaykum wa rahmatullahi wa barakatuh » ; la répandre nourrit l'amour fraternel." }
+    }
+  },
+  {
+    "id": 802, "category": "akhlaq", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "ما اسم ذِكر أخيك بما يكره في غيابه؟", "choices": ["الغيبة", "النميمة", "البهتان", "السخرية"], "explanation": "الغيبة ذكر المرء بما يكره في غيبته، فإن لم يكن فيه فهو البهتان." },
+      "en": { "prompt": "What is it called to mention your brother in his absence with what he dislikes?", "choices": ["Gheebah (backbiting)", "Nameemah (talebearing)", "Buhtan (slander)", "Mockery"], "explanation": "Gheebah is speaking of someone in their absence with what they dislike; if untrue, it becomes buhtan." },
+      "fr": { "prompt": "Comment appelle-t-on le fait d'évoquer son frère en son absence avec ce qu'il déteste ?", "choices": ["Gheeba (médisance)", "Nameema (colportage)", "Buhtan (calomnie)", "Moquerie"], "explanation": "La gheeba consiste à parler de quelqu'un en son absence de ce qu'il déteste ; si c'est faux, cela devient buhtan." }
+    }
+  },
+  {
+    "id": 803, "category": "akhlaq", "difficulty": 1, "correct": 2,
+    "t": {
+      "ar": { "prompt": "أكمل الحديث: «ليس الشديد بالصُّرَعة، إنما الشديد...»", "choices": ["من أطعم الطعام", "من كثر ماله", "الذي يملك نفسه عند الغضب", "من طال عمره"], "explanation": "رواه البخاري ومسلم، والمعنى أن القوة الحقيقية في ضبط النفس عند الغضب." },
+      "en": { "prompt": "Complete the hadith: \"The strong one is not the good wrestler; the strong one is...\"", "choices": ["the one who feeds others", "the one with much wealth", "the one who controls himself when angry", "the one who lives long"], "explanation": "Reported by Bukhari and Muslim — true strength is self-mastery in moments of anger." },
+      "fr": { "prompt": "Complétez le hadith : « Le fort n'est pas le bon lutteur ; le fort est... »", "choices": ["celui qui nourrit autrui", "celui qui possède beaucoup", "celui qui se maîtrise dans la colère", "celui qui vit longtemps"], "explanation": "Rapporté par Bukhari et Muslim : la vraie force est la maîtrise de soi dans la colère." }
+    }
+  },
+  {
+    "id": 804, "category": "akhlaq", "difficulty": 1, "correct": 0,
+    "t": {
+      "ar": { "prompt": "ماذا يقول المسلم قبل الطعام؟", "choices": ["بسم الله", "الحمد لله", "سبحان الله", "الله أكبر"], "explanation": "يُسمّي الله قبل الأكل، ويحمده بعده: «الحمد لله الذي أطعمني هذا»." },
+      "en": { "prompt": "What does a Muslim say before eating?", "choices": ["Bismillah", "Alhamdulillah", "SubhanAllah", "Allahu akbar"], "explanation": "One says Bismillah before eating and praises Allah afterwards: \"Praise be to Allah who fed me this.\"" },
+      "fr": { "prompt": "Que dit un musulman avant de manger ?", "choices": ["Bismillah", "Alhamdulillah", "SubhanAllah", "Allahu akbar"], "explanation": "On dit Bismillah avant de manger, puis on loue Allah ensuite : « Louange à Allah qui m'a nourri »." }
+    }
+  },
+  {
+    "id": 805, "category": "akhlaq", "difficulty": 2, "correct": 3,
+    "t": {
+      "ar": { "prompt": "ما معنى «برّ الوالدين»؟", "choices": ["الإنفاق عليهما فقط", "زيارتهما في العيد", "طاعتهما في كل شيء بلا استثناء", "الإحسان إليهما وطاعتهما بالمعروف"], "explanation": "البرّ إحسان القول والفعل إليهما وطاعتهما في غير معصية الله." },
+      "en": { "prompt": "What does \"birr al-walidayn\" (dutifulness to parents) mean?", "choices": ["Only spending money on them", "Visiting them at Eid", "Obeying them in absolutely everything", "Treating them kindly and obeying them in what is right"], "explanation": "Birr is kindness in word and deed, and obedience in everything that is not disobedience to Allah." },
+      "fr": { "prompt": "Que signifie « birr al-walidayn » (la piété filiale) ?", "choices": ["Seulement subvenir à leurs besoins", "Leur rendre visite à l'Aïd", "Leur obéir en absolument tout", "Les traiter avec bonté et leur obéir dans le bien"], "explanation": "Le birr est la bonté en parole et en acte, et l'obéissance en tout ce qui n'est pas désobéissance à Allah." }
+    }
+  },
+  {
+    "id": 806, "category": "akhlaq", "difficulty": 1, "correct": 1,
+    "t": {
+      "ar": { "prompt": "ما اسم العطاء التطوعي غير الواجب؟", "choices": ["الزكاة", "الصدقة", "الكفارة", "الفدية"], "explanation": "الصدقة عطاء تطوعي، أما الزكاة فركن واجب بشروط وأنصبة محددة." },
+      "en": { "prompt": "What is voluntary giving, outside the obligatory, called?", "choices": ["Zakat", "Sadaqah", "Kaffarah", "Fidyah"], "explanation": "Sadaqah is voluntary charity; zakat is an obligatory pillar with fixed conditions and thresholds." },
+      "fr": { "prompt": "Comment appelle-t-on l'aumône volontaire, hors obligation ?", "choices": ["Zakat", "Sadaqa", "Kaffara", "Fidya"], "explanation": "La sadaqa est une aumône volontaire ; la zakat est un pilier obligatoire aux conditions fixées." }
+    }
+  },
+  {
+    "id": 807, "category": "akhlaq", "difficulty": 2, "correct": 2,
+    "t": {
+      "ar": { "prompt": "أكمل: «خيركم خيركم...»", "choices": ["لجيرانه", "لضيوفه", "لأهله", "لعشيرته"], "explanation": "قال ﷺ: «خيركم خيركم لأهله، وأنا خيركم لأهلي» رواه الترمذي." },
+      "en": { "prompt": "Complete the hadith: \"The best of you are those best to...\"", "choices": ["their neighbours", "their guests", "their families", "their clan"], "explanation": "The Prophet ﷺ said: \"The best of you are those best to their families, and I am the best of you to my family.\"" },
+      "fr": { "prompt": "Complétez le hadith : « Les meilleurs d'entre vous sont ceux qui sont les meilleurs envers... »", "choices": ["leurs voisins", "leurs invités", "leurs familles", "leur clan"], "explanation": "Le Prophète ﷺ a dit : « Les meilleurs d'entre vous sont les meilleurs envers leur famille, et je suis le meilleur envers la mienne »." }
+    }
+  },
+  {
+    "id": 808, "category": "akhlaq", "difficulty": 2, "correct": 0,
+    "t": {
+      "ar": { "prompt": "ما معنى «الحياء» في الحديث: «الحياء شعبة من الإيمان»؟", "choices": ["خُلق يمنع صاحبه من القبيح", "الخجل من مواجهة الناس", "الصمت في المجالس", "الابتعاد عن الناس"], "explanation": "الحياء خلق يبعث على ترك القبيح ويمنع التقصير في حق الله والناس." },
+      "en": { "prompt": "What does \"haya\" mean in the hadith \"Modesty is a branch of faith\"?", "choices": ["A trait that restrains one from what is shameful", "Being too shy to face people", "Staying silent in gatherings", "Withdrawing from people"], "explanation": "Haya is the disposition that holds a person back from the shameful and from falling short toward Allah and people." },
+      "fr": { "prompt": "Que signifie « haya » dans le hadith « La pudeur est une branche de la foi » ?", "choices": ["Un trait qui retient de l'indécent", "La timidité face aux gens", "Le silence en assemblée", "Se retirer des gens"], "explanation": "La haya est la disposition qui retient de l'indécent et du manquement envers Allah et les gens." }
+    }
+  }
+]

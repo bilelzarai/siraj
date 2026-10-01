@@ -1,0 +1,20 @@
+.env
+/bin/
+/tmp/
+*.log
+data/
+
+# Saved pages and scratch captures that land in the working directory.
+*.html
+!internal/**/*.html
+
+# Editor and OS leavings.
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Build and coverage output.
+/dist/
+*.out
+coverage.*

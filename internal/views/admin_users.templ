@@ -1,0 +1,265 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// Accounts.
+// ------------------------------------------------------------------ users --
+
+type AdminUsersData struct {
+	Users     []*models.AdminUser
+	Total     int
+	Pager     Pager
+	Query     string
+	Role      string
+	Status    string
+	Country   string
+	Countries []string
+	// ConfirmDeleteID is the account whose delete button has been pressed once
+	// and is now asking for its username to be typed back.
+	ConfirmDeleteID string
+}
+
+templ AdminUsers(c Ctx, a AdminChrome, d AdminUsersData) {
+	@adminShell(c, a, c.T("admin.nav.users")) {
+		<div class="row row--between row--wrap">
+			<span class="muted small">{ c.T("admin.users.count", d.Total) }</span>
+			<a class="btn btn--primary btn--sm" href="/admin/users/new">
+				<span aria-hidden="true">＋</span> { c.T("admin.users.new") }
+			</a>
+		</div>
+		<form method="get" action="/admin/users" class="card row row--wrap" style="gap:10px">
+			<input
+				class="input"
+				name="q"
+				type="search"
+				value={ d.Query }
+				placeholder={ c.T("admin.users.searchPlaceholder") }
+				style="flex:2;min-width:180px"
+			/>
+			<select class="select" name="role" style="flex:1;min-width:130px">
+				<option value="">{ c.T("admin.users.anyRole") }</option>
+				for _, role := range []string{models.RolePlayer, models.RoleModerator, models.RoleAdmin} {
+					<option value={ role } selected?={ d.Role == role }>
+						{ c.T(models.RoleLabelKey(role)) }
+					</option>
+				}
+			</select>
+			<select class="select" name="status" style="flex:1;min-width:130px">
+				<option value="">{ c.T("admin.users.anyStatus") }</option>
+				<option value="active" selected?={ d.Status == "active" }>{ c.T("admin.users.active") }</option>
+				<option value="suspended" selected?={ d.Status == "suspended" }>{ c.T("admin.users.suspended") }</option>
+			</select>
+			if len(d.Countries) > 0 {
+				<select class="select" name="country" style="flex:1;min-width:130px">
+					<option value="">{ c.T("admin.users.anyCountry") }</option>
+					for _, country := range d.Countries {
+						<option value={ country } selected?={ d.Country == country }>{ country }</option>
+					}
+				</select>
+			}
+			<button class="btn btn--primary" type="submit">{ c.T("common.search") }</button>
+		</form>
+		if len(d.Users) == 0 {
+			@Empty("🔍", c.T("friends.search.empty"))
+		} else {
+			<div class="card card--flush scroll-x">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>{ c.T("leaderboard.player") }</th>
+							<th>{ c.T("admin.users.role") }</th>
+							<th>{ c.T("admin.users.status") }</th>
+							<th class="num">{ c.T("leaderboard.xp") }</th>
+							<th>{ c.T("admin.users.joined") }</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, u := range d.Users {
+							@adminUserRow(c, u, d.ConfirmDeleteID)
+						}
+					</tbody>
+				</table>
+			</div>
+			@PagerBar(c, d.Pager)
+		}
+	}
+}
+
+// confirmDeleteID is the account whose delete button has been pressed once
+// and is now asking for its username to be typed back.
+templ adminUserRow(c Ctx, u *models.AdminUser, confirmDeleteID string) {
+	<tr>
+		<td>
+			<div class="row" style="gap:10px">
+				<span
+					class={ "avatar", "avatar--xs", templ.KV("avatar--photo", HasAvatarPhoto(u.AvatarSeed)) }
+					style={ AvatarStyle(AvatarSeedFor(u.ID, u.AvatarSeed, u.Username)) }
+				>
+					if !HasAvatarPhoto(u.AvatarSeed) {
+						{ Initial(u.DisplayName) }
+					}
+				</span>
+				<div style="min-width:0">
+					<a class="bold small truncate" href={ templ.SafeURL("/u/" + u.Username) }>
+						{ u.DisplayName }
+					</a>
+					<div class="tiny muted truncate">{ u.Email }</div>
+				</div>
+			</div>
+		</td>
+		<td>
+			<form method="post" action={ templ.SafeURL("/admin/users/" + u.ID.String() + "/role") }>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<select class="select select--sm" name="role" onchange="this.form.submit()">
+					for _, role := range []string{models.RolePlayer, models.RoleModerator, models.RoleAdmin} {
+						<option value={ role } selected?={ u.Role == role }>
+							{ c.T(models.RoleLabelKey(role)) }
+						</option>
+					}
+				</select>
+			</form>
+		</td>
+		<td>
+			if u.IsSuspended() {
+				<span class="tag tag--danger" title={ u.SuspendedReason }>
+					{ c.T("admin.users.suspended") }
+				</span>
+			} else {
+				<span class="tag tag--success">{ c.T("admin.users.active") }</span>
+			}
+		</td>
+		<td class="num">{ fmt.Sprint(u.XP) }</td>
+		<td class="tiny muted">{ c.Tr.Date(u.CreatedAt) }</td>
+		<td>
+			<div class="row" style="gap:6px;justify-content:flex-end">
+				if u.IsSuspended() {
+					@adminUserAction(c, u.ID.String(), "reinstate", "btn--soft", c.T("admin.users.reinstate"))
+				} else {
+					@adminUserAction(c, u.ID.String(), "suspend", "btn--ghost", c.T("admin.users.suspend"))
+				}
+				// Two presses, and the second one costs the admin the username.
+				// Pre-filling the confirmation — which is what this used to do —
+				// meant the server check could never fail, leaving a stray click
+				// as the only thing between an admin and a cascade delete.
+				<form
+					class="row"
+					style="gap:6px"
+					method="post"
+					action={ templ.SafeURL("/admin/users/" + u.ID.String() + "/delete") }
+					data-confirm={ c.T("admin.users.deleteConfirm", u.Username) }
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					if confirmDeleteID == u.ID.String() {
+						<input
+							class="input input--sm"
+							type="text"
+							name="confirm"
+							style="max-width:16ch"
+							autocomplete="off"
+							autofocus
+							aria-label={ c.T("admin.users.typeUsername", u.Username) }
+							placeholder={ u.Username }
+						/>
+						<button class="btn btn--danger btn--sm" type="submit">
+							{ c.T("admin.users.deleteAnyway") }
+						</button>
+					} else {
+						<button class="btn btn--ghost btn--sm" type="submit">
+							{ c.T("common.delete") }
+						</button>
+					}
+				</form>
+			</div>
+		</td>
+	</tr>
+}
+
+templ adminUserAction(c Ctx, id, action, variant, label string) {
+	<form method="post" action={ templ.SafeURL("/admin/users/" + id + "/" + action) }>
+		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+		<button class={ "btn", "btn--sm", variant } type="submit">{ label }</button>
+	</form>
+}
+
+// -------------------------------------------------------------- new user --
+
+type AdminNewUserData struct {
+	Username    string
+	Email       string
+	DisplayName string
+	Country     string
+	Role        string
+	Locale      string
+	Errors      map[string]string
+	Error       string
+}
+
+templ AdminNewUser(c Ctx, a AdminChrome, d AdminNewUserData) {
+	@adminShell(c, a, c.T("admin.users.new")) {
+		@BackLink(c, "/admin/users", c.T("admin.nav.users"))
+		@FormProblems(c, d.Error, d.Problems(c))
+		<form method="post" action="/admin/users/new" class="card card--pad-lg stack" novalidate>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			@TextField(c, TextFieldOpts{
+				ID: "display_name", Name: "display_name", Required: true,
+				Label: c.T("auth.field.displayName"), Value: d.DisplayName, Error: d.Err("display_name"),
+			})
+			@TextField(c, TextFieldOpts{
+				ID: "username", Name: "username", Required: true, Dir: "ltr",
+				Label: c.T("auth.field.username"), Value: d.Username, Error: d.Err("username"),
+			})
+			@TextField(c, TextFieldOpts{
+				ID: "email", Name: "email", Type: "email", Required: true, Dir: "ltr",
+				Label: c.T("auth.field.email"), Value: d.Email, Error: d.Err("email"),
+			})
+			@PasswordField(c, PasswordFieldOpts{
+				ID:           "password",
+				Name:         "password",
+				Label:        c.T("auth.field.password"),
+				Autocomplete: "new-password",
+				Required:     true,
+				MinLength:    8,
+				Error:        d.Err("password"),
+				Hint:         c.T("auth.passwordHint"),
+			})
+			<div class="field">
+				<span class="label">{ c.T("admin.users.role") }</span>
+				<div class="choice-grid">
+					for _, role := range []string{models.RolePlayer, models.RoleModerator, models.RoleAdmin} {
+						<label class="chip-radio">
+							<input type="radio" name="role" value={ role } checked?={ d.Role == role }/>
+							<span class="chip-radio__face">
+								<span aria-hidden="true">{ roleIcon(role) }</span>
+								<span>{ c.T(models.RoleLabelKey(role)) }</span>
+							</span>
+						</label>
+					}
+				</div>
+				<span class="tiny faint">{ c.T("admin.users.roleHelp") }</span>
+			</div>
+			<div class="row row--wrap" style="gap:12px">
+				<div class="field" style="flex:1;min-width:160px">
+					<label class="label" for="country">{ c.T("profile.field.country") }</label>
+					<input class="input" id="country" name="country" type="text" maxlength="60" value={ d.Country }/>
+				</div>
+				<div class="field" style="flex:1;min-width:160px">
+					<label class="label" for="locale">{ c.T("settings.language") }</label>
+					<select class="select" id="locale" name="locale">
+						for _, loc := range c.Locales() {
+							<option value={ loc.Code } selected?={ d.Locale == loc.Code }>{ loc.Name }</option>
+						}
+					</select>
+				</div>
+			</div>
+			<div class="row" style="gap:10px">
+				<button class="btn btn--primary" type="submit">{ c.T("admin.users.create") }</button>
+				<a class="btn btn--ghost" href="/admin/users">{ c.T("common.cancel") }</a>
+			</div>
+		</form>
+	}
+}

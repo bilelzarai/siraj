@@ -1,0 +1,92 @@
+package views
+
+import (
+	"fmt"
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+type NotificationsData struct {
+	Pager  Pager
+	Items  []*models.Notification
+	Unread int
+}
+
+templ Notifications(c Ctx, d NotificationsData) {
+	@Base(c, c.T("notifications.title")) {
+		<div class="shell shell--narrow stack" data-live="message.new friend.request friend.accepted challenge.received challenge.declined challenge.played challenge.completed support.reply support.new">
+			@BackLink(c, "/app", c.T("nav.home"))
+			<div class="row row--between row--wrap">
+				<h1 style="font-size:1.4rem">{ c.T("notifications.title") }</h1>
+				if d.Unread > 0 {
+					<form method="post" action="/notifications/read">
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<button class="btn btn--soft btn--sm" type="submit">
+							{ c.T("notifications.markAllRead", d.Unread) }
+						</button>
+					</form>
+				}
+			</div>
+			if len(d.Items) == 0 {
+				@Empty("🔔", c.T("notifications.empty"))
+			} else {
+				<div class="stack-sm">
+					for _, n := range d.Items {
+						@notificationRow(c, n)
+					}
+				</div>
+				@PagerBar(c, d.Pager)
+			}
+		</div>
+	}
+}
+
+// notificationRow links to wherever the thing that happened can be acted on,
+// so the history is a way back into the app rather than a list of dead text.
+templ notificationRow(c Ctx, n *models.Notification) {
+	<a
+		class={ "card", "row", "row--between", templ.KV("is-unread", n.ReadAt == nil) }
+		style="gap:12px;align-items:center"
+		href={ templ.SafeURL(fmt.Sprintf("/notifications/%d/open", n.ID)) }
+	>
+		<span class="row" style="gap:12px;align-items:center;min-width:0">
+			<span class="notif__icon" aria-hidden="true">{ notificationIcon(n.Kind) }</span>
+			<span class="stack-sm" style="min-width:0;gap:2px">
+				<span class="small bold truncate">{ c.T(NotificationKey(n.Kind)) }</span>
+				<span class="tiny muted">{ c.Tr.RelativeTime(n.CreatedAt) }</span>
+			</span>
+		</span>
+		if n.ReadAt == nil {
+			<span class="notif__dot" aria-label={ c.T("notifications.isUnread") }></span>
+		}
+	</a>
+}
+
+// NotificationKey maps a stored kind to its translation key. An unknown kind —
+// one written by an older build — falls back to a generic line rather than
+// rendering the raw identifier at the player.
+func NotificationKey(kind string) string {
+	switch kind {
+	case "friend.request", "friend.accepted",
+		"challenge.received", "challenge.declined", "challenge.cancelled",
+		"challenge.accepted", "challenge.started", "challenge.played",
+		"challenge.completed", "message.new", "support.new", "support.reply":
+		return "notifications.kind." + kind
+	default:
+		return "notifications.kind.other"
+	}
+}
+
+func notificationIcon(kind string) string {
+	switch kind {
+	case "friend.request", "friend.accepted":
+		return "🤝"
+	case "challenge.received", "challenge.declined", "challenge.played", "challenge.completed":
+		return "⚔️"
+	case "message.new":
+		return "💬"
+	case "support.new", "support.reply":
+		return "🎧"
+	default:
+		return "🔔"
+	}
+}

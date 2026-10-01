@@ -1,0 +1,133 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// The translation review queue.
+// ----------------------------------------------------------------- review --
+
+type AdminReviewData struct {
+	Questions []*models.AdminQuestion
+	Total     int
+	// Incomplete is the other half of the work: questions missing a language
+	// entirely, which is what the translate action operates on.
+	Incomplete      []*models.AdminQuestion
+	IncompleteTotal int
+	Translator      string
+	Available       bool
+}
+
+templ AdminReview(c Ctx, a AdminChrome, d AdminReviewData) {
+	@adminShell(c, a, c.T("admin.nav.review")) {
+		<div class={ "alert", translatorAlertClass(d.Available) }>
+			<span aria-hidden="true">🌐</span>
+			<span>
+				if d.Available {
+					{ c.T("admin.review.providerOn", d.Translator) }
+				} else {
+					{ c.T("admin.review.providerOff") }
+				}
+			</span>
+		</div>
+		<p class="small muted">{ c.T("admin.review.help") }</p>
+		<section class="stack-sm">
+			<div class="card__head" style="margin:0">
+				<span class="card__title">{ c.T("admin.review.awaitingTitle") }</span>
+				if d.Total > 0 {
+					<span class="tag tag--warning num">{ fmt.Sprint(d.Total) }</span>
+				}
+			</div>
+			if len(d.Questions) == 0 {
+				@Empty("✅", c.T("admin.review.empty"))
+			} else {
+				<div class="card card--flush scroll-x">
+					<table class="table">
+						<thead>
+							<tr>
+								<th class="num">#</th>
+								<th>{ c.T("admin.questions.prompt") }</th>
+								<th>{ c.T("admin.questions.awaiting") }</th>
+								<th></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, q := range d.Questions {
+								<tr>
+									<td class="num tiny muted">{ fmt.Sprint(q.ID) }</td>
+									<td class="truncate" style="max-width:40ch">{ q.Prompt }</td>
+									<td><span class="tag tag--warning num">{ fmt.Sprint(q.PendingReview) }</span></td>
+									<td>
+										// Only the locales actually waiting. Offering all three
+										// invited approving a translation nobody had written.
+										<div class="row row--wrap" style="gap:12px;justify-content:flex-end">
+											for _, locale := range q.PendingLocales {
+												@reviewAction(c, q.ID, locale)
+											}
+										</div>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</section>
+		// A question can also be waiting on a language nobody has written at
+		// all. Those never appeared anywhere, so the provider configured above
+		// had nothing to act on and the whole feature was unreachable.
+		<section class="stack-sm">
+			<div class="card__head" style="margin:0">
+				<span class="card__title">{ c.T("admin.review.missingTitle") }</span>
+				if d.IncompleteTotal > 0 {
+					<span class="tag num">{ fmt.Sprint(d.IncompleteTotal) }</span>
+				}
+			</div>
+			if len(d.Incomplete) == 0 {
+				@Empty("🌍", c.T("admin.review.missingEmpty"))
+			} else {
+				<div class="card card--flush scroll-x">
+					<table class="table">
+						<thead>
+							<tr>
+								<th class="num">#</th>
+								<th>{ c.T("admin.questions.prompt") }</th>
+								<th>{ c.T("admin.questions.locales") }</th>
+								<th></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, q := range d.Incomplete {
+								<tr>
+									<td class="num tiny muted">{ fmt.Sprint(q.ID) }</td>
+									<td class="truncate" style="max-width:40ch">{ q.Prompt }</td>
+									<td>
+										<span class={ "tag", localeTagClass(q.LocaleCount) }>
+											{ fmt.Sprintf("%d/%d", q.LocaleCount, models.ShippedLocales) }
+										</span>
+									</td>
+									<td>
+										<div class="row row--wrap" style="gap:8px;justify-content:flex-end">
+											for _, locale := range MissingLocales(q.PresentLocales) {
+												if d.Available {
+													@translateAction(c, q.ID, locale)
+												} else {
+													<span class="tag tag--warning num">{ locale }</span>
+												}
+											}
+										</div>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+			if !d.Available {
+				<p class="tiny muted">{ c.T("admin.review.missingManual") }</p>
+			}
+		</section>
+	}
+}

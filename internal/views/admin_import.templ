@@ -1,0 +1,256 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// Bulk upload: the preview, its report, and the decision each flagged row asks.
+// ----------------------------------------------------------------- import --
+
+type AdminImportData struct {
+	Recent  []*models.ImportRun
+	Result  *models.ImportRun
+	Preview bool
+	Error   string
+
+	// Stash is the token for the upload this preview is of, held server-side.
+	// Applying sends this back instead of the file, so the second trip through
+	// the file dialog is gone and there is no way to approve one file and
+	// apply another — there is only ever the one upload.
+	Stash string
+	// Filename is that file's name, so the screen can say which one it is
+	// about to write.
+	Filename string
+
+	// Compare is one panel per flagged row: the incoming question beside the
+	// one it resembles, field by field. Built for the preview only, which is
+	// where the decision is still open.
+	Compare []*models.QuestionCompare
+}
+
+templ AdminImport(c Ctx, a AdminChrome, d AdminImportData) {
+	@adminShell(c, a, c.T("admin.import.title")) {
+		@BackLink(c, "/admin/questions", c.T("admin.nav.questions"))
+		@FormError(c, d.Error)
+		<section class="card stack">
+			<p class="small muted">{ c.T("admin.import.help") }</p>
+			<form method="post" action="/admin/questions/import" enctype="multipart/form-data" class="stack">
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<div class="field">
+					<label class="label" for="file">{ c.T("admin.import.file") }</label>
+					<input class="input" id="file" name="file" type="file" accept=".json,.csv,application/json,text/csv" required/>
+					<span class="tiny faint">{ c.T("admin.import.formats") }</span>
+				</div>
+				<div class="row" style="gap:10px">
+					<button class="btn btn--primary" type="submit" name="commit" value="0">
+						{ c.T("admin.import.preview") }
+					</button>
+					<a class="btn btn--ghost" href="/admin/questions/import/template.csv">
+						{ c.T("admin.import.template") }
+					</a>
+				</div>
+			</form>
+		</section>
+		if d.Result != nil {
+			@importResult(c, d)
+		}
+		if len(d.Recent) > 0 {
+			<section class="card card--flush">
+				<div class="card__head" style="padding:18px 20px 0;margin:0">
+					<span class="card__title">{ c.T("admin.import.history") }</span>
+				</div>
+				<div class="scroll-x">
+					<table class="table">
+						<thead>
+							<tr>
+								<th>{ c.T("admin.import.file") }</th>
+								<th>{ c.T("admin.audit.actor") }</th>
+								<th class="num">+</th>
+								<th class="num">↻</th>
+								<th class="num">⊘</th>
+								<th class="num">✕</th>
+								<th></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, run := range d.Recent {
+								<tr>
+									<td class="truncate" style="max-width:24ch">{ run.Filename }</td>
+									<td class="tiny muted">{ run.ActorUsername }</td>
+									<td class="num">{ fmt.Sprint(run.Added) }</td>
+									<td class="num">{ fmt.Sprint(run.Updated) }</td>
+									<td class="num">{ fmt.Sprint(run.Skipped) }</td>
+									<td class="num">{ fmt.Sprint(run.Rejected) }</td>
+									<td class="tiny muted">
+										if run.Committed {
+											<span class="tag tag--success">{ c.T("admin.import.applied") }</span>
+										} else {
+											<span class="tag">{ c.T("admin.import.previewOnly") }</span>
+										}
+										{ c.Tr.RelativeTime(run.CreatedAt) }
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		}
+	}
+}
+
+templ importResult(c Ctx, d AdminImportData) {
+	<section class="card stack">
+		// Anything that needs an answer goes above the numbers and the report.
+		// Underneath three hundred rows it is not a prompt, it is a footnote.
+		if d.Preview && d.Undecided() > 0 {
+			<div class="alert alert--warning">
+				<span aria-hidden="true">❓</span>
+				<span>{ c.T("admin.import.dup.pending", d.Undecided()) }</span>
+			</div>
+		}
+		if d.Preview && d.Stash != "" && d.Result.Added+d.Result.Updated > 0 {
+			<div class="alert alert--info">
+				<span aria-hidden="true">ℹ️</span>
+				<span>{ c.T("admin.import.confirmHint") }</span>
+			</div>
+		}
+		<div class="card__head" style="margin:0">
+			<span class="card__title">
+				if d.Preview {
+					{ c.T("admin.import.previewTitle") }
+				} else {
+					{ c.T("admin.import.resultTitle") }
+				}
+			</span>
+		</div>
+		<div class="grid grid--4">
+			@StatTile("➕", fmt.Sprint(d.Result.Added), c.T("admin.import.added"))
+			@StatTile("↻", fmt.Sprint(d.Result.Updated), c.T("admin.import.updated"))
+			@StatTile("⊘", fmt.Sprint(d.Result.Skipped), c.T("admin.import.skipped"))
+			@StatTile("✕", fmt.Sprint(d.Result.Rejected), c.T("admin.import.rejected"))
+		</div>
+		if len(d.Result.Report) > 0 {
+			<div id="import-report" class="scroll-x" style="max-height:320px;overflow-y:auto">
+				<table class="table">
+					<thead>
+						<tr>
+							<th class="num">{ c.T("admin.import.line") }</th>
+							<th>{ c.T("admin.import.ref") }</th>
+							<th>{ c.T("admin.import.outcome") }</th>
+							<th>{ c.T("admin.import.reason") }</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, row := range decisionsFirst(d.Result.Report) {
+							<tr>
+								<td class="num tiny muted">{ fmt.Sprint(row.Line) }</td>
+								<td class="tiny truncate" style="max-width:26ch">
+									if id, ok := row.RefID(); ok && row.RefExists {
+										@questionRef(c, id, row.Prompt)
+									} else if id, ok := row.RefID(); ok {
+										// Nothing to open: this id arrives with
+										// the file and is not in the bank yet.
+										@questionRefPlain(c, id, row.Prompt)
+									} else {
+										{ row.Ref }
+									}
+								</td>
+								<td><span class={ "tag", outcomeClass(row.Outcome) }>{ row.Outcome }</span></td>
+								<td class="tiny muted">
+									if row.SimilarID > 0 {
+										{ c.T("admin.import.looksLike", row.Percent) }
+										@questionRef(c, row.SimilarID, row.SimilarPrompt)
+									} else {
+										{ row.Reason }
+									}
+									// The importer no longer decides this. Three
+									// choices, per row, riding along with the apply
+									// form below — see the form= on each input.
+									if d.Preview && row.SimilarID > 0 {
+										@duplicateChoice(c, row.Line, d.Comparable(row.Line))
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+		// Said rather than left to be discovered: a row without a "compare" link
+		// is otherwise indistinguishable from one whose link was missed.
+		if d.Preview && d.Flagged() > len(d.Compare) {
+			<p class="tiny muted">{ c.T("admin.compare.partial", len(d.Compare)) }</p>
+		}
+		// The panels live under the report rather than inside it: the table is a
+		// capped, scrolling box, and two questions read side by side do not fit
+		// in a cell of it. One opens at a time, addressed by the row's own
+		// anchor, so following "compare" scrolls straight to it.
+		for _, cmp := range d.Compare {
+			@comparePanel(c, cmp, CompareChrome{
+				Anchor:     ImportAnchor(cmp.Line),
+				Title:      c.T("admin.import.compare.title", cmp.Line, cmp.RightID),
+				LeftLabel:  c.T("admin.import.compare.file"),
+				RightLabel: c.T("admin.import.compare.bank"),
+				CloseHref:  "#import-report",
+			})
+		}
+		if d.Preview && d.Stash != "" {
+			<form
+				id="import-apply"
+				method="post"
+				action="/admin/questions/import"
+				class="row"
+				style="gap:10px"
+			>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<input type="hidden" name="commit" value="1"/>
+				// The upload itself is held on the server. This names it, so
+				// applying is one press rather than a second file dialog.
+				<input type="hidden" name="stash" value={ d.Stash }/>
+				<button class="btn btn--primary" type="submit">{ c.T("admin.import.apply") }</button>
+			</form>
+		}
+	</section>
+}
+
+// duplicateChoice is the two-way the importer asks instead of deciding.
+//
+// Radios, not buttons: the answer is part of applying the file, so it travels
+// with that form rather than being a request of its own. Unanswered means the
+// row is left out, so a file applied without reading the report can only ever
+// write less than it would have.
+templ duplicateChoice(c Ctx, line int, comparable bool) {
+	<div class="dup-choice" role="group" aria-label={ c.T("admin.import.dup.legend") }>
+		for _, choice := range [][2]string{
+			{"duplicate", "admin.import.dup.duplicate"},
+			{"anyway", "admin.import.dup.anyway"},
+		} {
+			<label class="dup-choice__opt">
+				<input
+					type="radio"
+					form="import-apply"
+					name={ fmt.Sprintf("dup:%d", line) }
+					value={ choice[0] }
+				/>
+				<span>{ c.T(choice[1]) }</span>
+			</label>
+		}
+		if comparable {
+			// Not a third answer, so not a third radio: it opens the two
+			// questions in full, which is where the answer to "is this the same
+			// question?" is — a percentage on its own is not something anyone
+			// can decide from.
+			<a class="dup-choice__open" href={ templ.SafeURL("#" + ImportAnchor(line)) }>
+				{ c.T("common.compare") }
+			</a>
+		}
+	</div>
+}
+
+// Anchors for the comparison panels. Both screens address a panel by the thing
+// that raised it — a row of the file, or the pair of ids — so the link and the
+// panel cannot drift apart.
+func ImportAnchor(line int) string { return fmt.Sprintf("cmp-%d", line) }

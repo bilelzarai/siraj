@@ -1,0 +1,491 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// The three kinds of thread, and the screens that make the two new ones.
+
+// threadSwitch is the panel's three segments: people, groups, rooms.
+//
+// Each carries its own unread total, because news in a tab you are not looking
+// at is exactly the news a badge exists to carry. The line underneath says
+// what the segment is — three words of explanation in the place where the
+// question is actually asked beats a help page nobody opens.
+templ threadSwitch(c Ctx, d MessagesData) {
+	<div class="switch" role="tablist">
+		@switchTab(c, d, models.ConversationDirect, c.T("threads.tab.direct"))
+		@switchTab(c, d, models.ConversationGroup, c.T("threads.tab.group"))
+		@switchTab(c, d, models.ConversationRoom, c.T("threads.tab.room"))
+	</div>
+	<p class="switch__note">{ c.T("threads.note." + d.Tab) }</p>
+}
+
+templ switchTab(c Ctx, d MessagesData, kind, label string) {
+	<a
+		class={ "switch__tab", templ.KV("is-on", d.Tab == kind) }
+		href={ templ.SafeURL("/messages?tab=" + kind) }
+		role="tab"
+		aria-selected={ boolAttr(d.Tab == kind) }
+	>
+		{ label }
+		if d.Counts[kind] > 0 {
+			<span class="count-dot">{ fmt.Sprint(d.Counts[kind]) }</span>
+		}
+	</a>
+}
+
+// threadMark is the face of a thread in the panel: a person for a pair, a
+// mosaic of members for a group, a hexagon for a room.
+//
+// The shape is the fastest way to say which of the three you are looking at —
+// faster than the name, which you have to read.
+templ threadMark(c Ctx, conv *models.Conversation) {
+	switch conv.Kind {
+		case models.ConversationRoom:
+			<span class="mark mark--room" style={ AvatarStyle(conv.ID.String()) } aria-hidden="true">#</span>
+		case models.ConversationGroup:
+			<span class="mark mark--group" aria-hidden="true">
+				for _, m := range conv.Members {
+					<i style={ AvatarStyle(AvatarSeedFor(m.ID, m.AvatarSeed, m.Username)) }>{ Initial(m.DisplayName) }</i>
+				}
+			</span>
+		default:
+			if conv.Other != nil {
+				<span class="chat__ring" style={ AvatarStyle(AvatarSeedFor(conv.Other.ID, conv.Other.AvatarSeed, conv.Other.Username)) }>
+					@AvatarWithPresence(conv.Other, "md")
+				</span>
+			}
+	}
+}
+
+// roomRow is a room in the directory: one anybody can look at, and join if
+// they want to. A room already joined is reached rather than entered.
+templ roomRow(c Ctx, conv *models.Conversation) {
+	<div class="chat__item chat__item--room" data-conv={ conv.ID.String() }>
+		<a class="chat__item-link" href={ templ.SafeURL("/messages/" + conv.ID.String()) }>
+			@threadMark(c, conv)
+			<span class="chat__item-body">
+				<span class="chat__item-name truncate">{ conv.Title }</span>
+				<span class="chat__item-preview truncate">
+					if conv.Topic != "" {
+						{ conv.Topic }
+					} else {
+						{ c.T("threads.members", conv.MemberCount) }
+					}
+				</span>
+			</span>
+		</a>
+		<span class="chat__item-aside">
+			<span class="chat__item-time">{ c.T("threads.members", conv.MemberCount) }</span>
+			if !conv.Joined {
+				<form method="post" action={ templ.SafeURL("/messages/" + conv.ID.String() + "/join") }>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--soft btn--sm" type="submit" title={ c.T("rooms.oneAtATime") }>
+						{ c.T("threads.join") }
+					</button>
+				</form>
+			}
+		</span>
+	</div>
+}
+
+// NewThread is the screen for starting a group or opening a room.
+//
+// One template for both, because they differ in two things: a group picks
+// people and a room states a subject. Two screens that were nine-tenths the
+// same would drift apart.
+templ NewThread(c Ctx, d NewThreadData) {
+	{{ room := d.Kind == models.ConversationRoom }}
+	@Base(c, c.T(titleKey(d.Kind))) {
+		<div class="container container--narrow">
+			<a class="back-link" href="/messages">{ c.T("common.back") }</a>
+			<h1 class="page-title">{ c.T(titleKey(d.Kind)) }</h1>
+			<p class="muted">{ c.T("threads.note." + d.Kind) }</p>
+			<form class="card stack" method="post" action="/messages/new">
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<input type="hidden" name="request_key" value={ NewRequestKey() }/>
+				<input type="hidden" name="kind" value={ d.Kind }/>
+				<label class="field">
+					<span class="label">{ c.T("threads.name") }</span>
+					<input
+						class="input"
+						type="text"
+						name="title"
+						maxlength="60"
+						required
+						autofocus
+						placeholder={ c.T(placeholderKey(d.Kind)) }
+					/>
+				</label>
+				if room {
+					<label class="field">
+						<span class="label">{ c.T("threads.topic") }</span>
+						<input class="input" type="text" name="topic" maxlength="120" placeholder={ c.T("threads.topicHint") }/>
+					</label>
+				} else {
+					<fieldset class="field">
+						<legend class="label">{ c.T("threads.who") }</legend>
+						if len(d.Friends) == 0 {
+							<p class="muted small">{ c.T("threads.noFriends") }</p>
+						} else {
+							<div class="pick">
+								for _, f := range d.Friends {
+									<label class="pick__one">
+										<input type="checkbox" name="member" value={ f.Username }/>
+										@AvatarWithPresence(f, "sm")
+										<span class="truncate">{ f.DisplayName }</span>
+									</label>
+								}
+							</div>
+						}
+					</fieldset>
+				}
+				<button class="btn btn--primary" type="submit">{ c.T("threads.create") }</button>
+			</form>
+		</div>
+	}
+}
+
+// MemberList is who is here, as a panel rather than a page.
+//
+// Rule 5 asks for this in place, and it means it: leaving the thread to read a
+// list of names and coming back is a page load in each direction, a lost scroll
+// position and a lost half-written message, in exchange for information that
+// fits in a column beside what you were already reading.
+//
+// It is the same component the whole way down — rendered into the thread
+// screen, re-fetched on its own when somebody joins, and rendered inside a page
+// for a browser with no script. One list, three ways in.
+templ MemberList(c Ctx, conv *models.Conversation, members []*models.UserCard) {
+	<div class="who__list" data-who-list>
+		for _, m := range members {
+			<div class="who__row">
+				<a class="user-row__link" href={ templ.SafeURL("/u/" + m.Username) }>
+					@AvatarWithPresence(m, "sm")
+					<span class="user-row__body">
+						<span class="user-row__name truncate">{ m.DisplayName }</span>
+						<span class="user-row__meta truncate">{ "@" + m.Username }</span>
+					</span>
+					if conv.OwnerID != nil && *conv.OwnerID == m.ID {
+						<span class="tag">{ c.T("threads.owner") }</span>
+					}
+				</a>
+				// Challenging somebody you are in a room with is the point of
+				// being in one. It is offered here, next to their name, rather
+				// than on a screen they would have to be looked up on.
+				if conv.IsRoom() && c.User != nil && m.ID != c.User.ID {
+					@ChallengeButton(c, m, "btn btn--soft btn--sm", models.SourceRoom)
+				}
+			</div>
+		}
+		if len(members) == 0 {
+			<p class="muted small">{ c.T("threads.nobodyHere") }</p>
+		}
+	</div>
+}
+
+// WhoPanel is the member list in its place on the thread screen: closed until
+// asked for, opened by the menu, closed by the ✕, and never a page change.
+//
+// It opens on :target so it works with no script at all, exactly like the
+// find-in-thread panel beside it.
+templ WhoPanel(c Ctx, conv *models.Conversation, members []*models.UserCard) {
+	<div class="chat__who" id="who" data-who data-conversation={ conv.ID.String() }>
+		<div class="chat__who-head">
+			<h2 class="chat__who-title">
+				{ c.T("threads.who") }
+				<span class="muted small">{ c.T("threads.members", conv.MemberCount) }</span>
+			</h2>
+			<a
+				class="btn btn--ghost btn--icon btn--sm"
+				href={ templ.SafeURL("/messages/" + conv.ID.String()) }
+				aria-label={ c.T("common.close") }
+			>✕</a>
+		</div>
+		@MemberList(c, conv, members)
+		if conv.IsRoom() {
+			<p class="tiny muted">{ c.T("rooms.oneAtATime") }</p>
+		}
+		<form
+			method="post"
+			action={ templ.SafeURL("/messages/" + conv.ID.String() + "/leave") }
+			data-confirm={ c.T("threads.leaveConfirm") }
+		>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<button class="btn btn--danger btn--sm" type="submit">{ c.T("threads.leave") }</button>
+		</form>
+	</div>
+}
+
+// ThreadMembers is the same list as a page of its own, for a browser that
+// followed the link without a script to intercept it.
+templ ThreadMembers(c Ctx, conv *models.Conversation, members []*models.UserCard) {
+	@Base(c, conv.Name()) {
+		<div class="shell shell--narrow stack">
+			@BackLink(c, "/messages/"+conv.ID.String(), conv.Name())
+			@PageHead(conv.Name(), conv.Topic) {
+			}
+			<h2 class="section-title">{ c.T("threads.members", len(members)) }</h2>
+			<div class="card stack-sm">
+				@MemberList(c, conv, members)
+			</div>
+			<form method="post" action={ templ.SafeURL("/messages/" + conv.ID.String() + "/leave") } data-confirm={ c.T("threads.leaveConfirm") }>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<button class="btn btn--danger" type="submit">{ c.T("threads.leave") }</button>
+			</form>
+		</div>
+	}
+}
+
+func titleKey(kind string) string {
+	if kind == models.ConversationRoom {
+		return "threads.newRoom"
+	}
+	return "threads.newGroup"
+}
+
+func placeholderKey(kind string) string {
+	if kind == models.ConversationRoom {
+		return "threads.roomHint"
+	}
+	return "threads.groupHint"
+}
+
+// startSheet is what the + opens: whatever the panel is currently showing,
+// offered as a list you can pick from, and a way to make a new one.
+//
+// It is a panel over the page rather than a page of its own. Starting a
+// conversation is a two-second decision, and sending somebody to another
+// screen to make it — losing the thread they were reading — costs more than
+// the decision does. It opens on :target, so it works with no script at all;
+// the script only adds the escape key.
+templ startSheet(c Ctx, d MessagesData) {
+	<div class="sheet" id="start" data-sheet>
+		<a class="sheet__scrim" href="#" tabindex="-1" aria-hidden="true"></a>
+		<div class="sheet__box" role="dialog" aria-modal="true" aria-label={ c.T("threads.start") }>
+			<div class="sheet__head">
+				<h2 class="sheet__title">{ c.T(sheetTitleKey(d.Tab)) }</h2>
+				<a class="btn btn--ghost btn--icon btn--sm" href="#" aria-label={ c.T("common.close") }>✕</a>
+			</div>
+			<div class="sheet__body">
+				switch d.Tab {
+					case models.ConversationGroup:
+						@sheetThreads(c, d, models.ConversationGroup)
+						@sheetMake(c, models.ConversationGroup, d.AllFriends)
+					case models.ConversationRoom:
+						@sheetThreads(c, d, models.ConversationRoom)
+						if len(d.Rooms) > 0 {
+							<p class="sheet__label">{ c.T("threads.allRooms") }</p>
+							for _, room := range d.Rooms {
+								if !room.Joined {
+									@roomRow(c, room)
+								}
+							}
+						}
+						@sheetMake(c, models.ConversationRoom, nil)
+					default:
+						@peoplePicker(c, d)
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// peoplePicker is the list you choose somebody from, inside the panel.
+//
+// Rule 5 is explicit that finding a player happens in a dialog you pick from
+// and not on another page, and it is right to be: the list is short, it is
+// already loaded, and the search is a filter over it rather than a query.
+// Sending somebody to a search screen to type a name they can see in front of
+// them is a page load in each direction for nothing.
+//
+// The two groups are the two ways somebody is reachable at all — a friend, or a
+// person in the room you are standing in. There is deliberately no third group,
+// because there is no third way.
+templ peoplePicker(c Ctx, d MessagesData) {
+	<div class="picker" data-picker data-scope="message">
+		<label class="picker__search">
+			<span aria-hidden="true">🔍</span>
+			<input
+				class="input input--sm"
+				type="search"
+				autocomplete="off"
+				placeholder={ c.T("people.search") }
+				aria-label={ c.T("people.search") }
+				data-picker-input
+			/>
+		</label>
+		<div class="picker__list" data-picker-list>
+			if len(d.AllFriends) > 0 {
+				<p class="sheet__label">{ c.T("people.friends") }</p>
+				for _, f := range d.AllFriends {
+					@pickerRow(c, f)
+				}
+			}
+			if len(d.RoomPeers) > 0 {
+				<p class="sheet__label">{ c.T("people.inYourRoom") }</p>
+				for _, f := range d.RoomPeers {
+					@pickerRow(c, f)
+				}
+			}
+			if len(d.AllFriends) == 0 && len(d.RoomPeers) == 0 {
+				<p class="muted small">{ c.T("people.nobody") }</p>
+			}
+			// Whatever the search turned up beyond the rows above. A big room
+			// is not rendered whole; typing reaches the rest of it.
+			<div data-picker-remote></div>
+		</div>
+		<p class="picker__empty muted small" data-picker-empty hidden>{ c.T("people.noMatches") }</p>
+	</div>
+}
+
+templ pickerRow(c Ctx, f *models.UserCard) {
+	<a
+		class="chat__item picker__row"
+		href={ templ.SafeURL("/messages/with/" + f.Username) }
+		data-picker-item={ f.DisplayName + " " + f.Username }
+		data-picker-user={ f.Username }
+	>
+		<span class="chat__item-link">
+			<span class="chat__ring" style={ AvatarStyle(AvatarSeedFor(f.ID, f.AvatarSeed, f.Username)) }>
+				@AvatarWithPresence(f, "md")
+			</span>
+			<span class="chat__item-body">
+				<span class="chat__item-name truncate">{ f.DisplayName }</span>
+				<span class="chat__item-preview truncate">{ "@" + f.Username }</span>
+			</span>
+		</span>
+	</a>
+}
+
+// sheetThreads lists what the viewer is already in, of one kind.
+templ sheetThreads(c Ctx, d MessagesData, kind string) {
+	{{ any := false }}
+	for _, conv := range d.Conversations {
+		if conv.Kind == kind {
+			{{ any = true }}
+			<a class="chat__item" href={ templ.SafeURL("/messages/" + conv.ID.String()) }>
+				<span class="chat__item-link">
+					@threadMark(c, conv)
+					<span class="chat__item-body">
+						<span class="chat__item-name truncate">{ conv.Title }</span>
+						<span class="chat__item-preview truncate">{ c.T("threads.members", conv.MemberCount) }</span>
+					</span>
+				</span>
+			</a>
+		}
+	}
+	if !any {
+		<p class="muted small">{ c.T(emptyKey(kind)) }</p>
+	}
+}
+
+// sheetMake is the form for a new one, inside the sheet rather than on a page
+// somewhere else.
+templ sheetMake(c Ctx, kind string, friends []*models.UserCard) {
+	<details class="sheet__make">
+		<summary>{ c.T(titleKey(kind)) }</summary>
+		<form class="stack" method="post" action="/messages/new">
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<input type="hidden" name="request_key" value={ NewRequestKey() }/>
+			<input type="hidden" name="kind" value={ kind }/>
+			<input
+				class="input"
+				type="text"
+				name="title"
+				maxlength="60"
+				required
+				placeholder={ c.T(placeholderKey(kind)) }
+				aria-label={ c.T("threads.name") }
+			/>
+			if kind == models.ConversationRoom {
+				<input
+					class="input"
+					type="text"
+					name="topic"
+					maxlength="120"
+					placeholder={ c.T("threads.topicHint") }
+					aria-label={ c.T("threads.topic") }
+				/>
+			} else {
+				if len(friends) == 0 {
+					<p class="muted small">{ c.T("threads.noFriends") }</p>
+				} else {
+					<div class="pick">
+						for _, f := range friends {
+							<label class="pick__one">
+								<input type="checkbox" name="member" value={ f.Username }/>
+								@AvatarWithPresence(f, "sm")
+								<span class="truncate">{ f.DisplayName }</span>
+							</label>
+						}
+					</div>
+				}
+			}
+			<button class="btn btn--primary" type="submit">{ c.T("threads.create") }</button>
+		</form>
+	</details>
+}
+
+func sheetTitleKey(tab string) string {
+	switch tab {
+	case models.ConversationGroup:
+		return "threads.tab.group"
+	case models.ConversationRoom:
+		return "threads.tab.room"
+	}
+	return "threads.tab.direct"
+}
+
+func emptyKey(kind string) string {
+	if kind == models.ConversationRoom {
+		return "threads.noRooms"
+	}
+	return "threads.noGroups"
+}
+
+// RoomDoor is an open room looked at from outside: what it is, who is in it,
+// and the button that puts you in.
+//
+// It is what the directory's links actually lead to, and it exists because they
+// used to lead to a page saying the room did not exist. A room is advertised to
+// everybody; being told it is missing the moment you look at it is the listing
+// contradicting itself.
+//
+// The messages are deliberately not here. Joining moves you out of whatever
+// room you are in, so it is asked for rather than assumed — and reading a room
+// you have not joined would make the asking pointless.
+templ RoomDoor(c Ctx, conv *models.Conversation, members []*models.UserCard) {
+	<section class="chat__thread chat__thread--door">
+		<a class="chat__back chat__back--always" href="/messages?tab=room">
+			<span aria-hidden="true" data-back-arrow>←</span>
+			<span class="truncate">{ c.T("threads.tab.room") }</span>
+		</a>
+		<div class="door">
+			<div class="door__card card stack">
+				<span class="mark mark--room" style={ AvatarStyle(conv.ID.String()) } aria-hidden="true">#</span>
+				<h1 class="door__title">{ conv.Title }</h1>
+				if conv.Topic != "" {
+					<p class="muted">{ conv.Topic }</p>
+				}
+				<p class="tiny muted">{ c.T("threads.members", conv.MemberCount) }</p>
+				<form method="post" action={ templ.SafeURL("/messages/" + conv.ID.String() + "/join") }>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--primary btn--lg btn--block" type="submit">
+						{ c.T("threads.join") }
+					</button>
+				</form>
+				<p class="tiny muted">{ c.T("rooms.oneAtATime") }</p>
+			</div>
+			// Who is in it is for the people in it. From outside, the count is
+			// the honest answer: a room is a place you can see the size of and
+			// walk into, not a directory of strangers to read — and the
+			// Challenge button beside each name was offering something the
+			// server refuses, since reaching somebody through a room means
+			// being in it with them.
+		</div>
+	</section>
+}

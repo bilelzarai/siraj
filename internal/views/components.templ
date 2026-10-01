@@ -1,0 +1,532 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// Avatar renders a person's generated gradient avatar.
+templ Avatar(u *models.UserCard, size string) {
+	<span
+		class={ "avatar", "avatar--" + size, templ.KV("avatar--photo", HasAvatarPhoto(u.AvatarSeed)) }
+		style={ AvatarStyle(AvatarSeedFor(u.ID, u.AvatarSeed, u.Username)) }
+		title={ u.DisplayName }
+	>
+		if !HasAvatarPhoto(u.AvatarSeed) {
+			{ Initial(u.DisplayName) }
+		}
+	</span>
+}
+
+// AvatarWithPresence adds the online dot.
+templ AvatarWithPresence(u *models.UserCard, size string) {
+	<span
+		class={ "avatar", "avatar--" + size, templ.KV("avatar--photo", HasAvatarPhoto(u.AvatarSeed)) }
+		style={ AvatarStyle(AvatarSeedFor(u.ID, u.AvatarSeed, u.Username)) }
+		title={ u.DisplayName }
+	>
+		if !HasAvatarPhoto(u.AvatarSeed) {
+			{ Initial(u.DisplayName) }
+		}
+		<span class={ "avatar__dot", templ.KV("avatar__dot--on", u.IsOnline()) }></span>
+	</span>
+}
+
+// PasswordField renders a password input with a reveal toggle. The toggle is a
+// real button so it is keyboard reachable, and it never persists the revealed
+// state — every render starts masked.
+templ PasswordField(c Ctx, f PasswordFieldOpts) {
+	<div class="field">
+		<label class="label" for={ f.ID }>{ f.Label }</label>
+		<div class="field__control">
+			if f.MinLength > 0 {
+				<input
+					class="input input--with-action"
+					id={ f.ID }
+					name={ f.Name }
+					type="password"
+					autocomplete={ f.Autocomplete }
+					required?={ f.Required }
+					minlength={ fmt.Sprint(f.MinLength) }
+					aria-invalid={ boolAttr(f.Error != "") }
+					aria-describedby={ describedBy(f.ID, f.Error != "") }
+					data-password-input
+				/>
+			} else {
+				<input
+					class="input input--with-action"
+					id={ f.ID }
+					name={ f.Name }
+					type="password"
+					autocomplete={ f.Autocomplete }
+					required?={ f.Required }
+					aria-invalid={ boolAttr(f.Error != "") }
+					aria-describedby={ describedBy(f.ID, f.Error != "") }
+					data-password-input
+				/>
+			}
+			<button
+				class="field__reveal"
+				type="button"
+				data-password-toggle
+				aria-pressed="false"
+				aria-controls={ f.ID }
+				aria-label={ c.T("auth.showPassword") }
+				title={ c.T("auth.showPassword") }
+				data-label-show={ c.T("auth.showPassword") }
+				data-label-hide={ c.T("auth.hidePassword") }
+			>
+				<span class="reveal-icon" data-reveal-slot="show">
+					@IconEye()
+				</span>
+				<span class="reveal-icon" data-reveal-slot="hide" hidden>
+					@IconEyeOff()
+				</span>
+			</button>
+		</div>
+		if f.Error != "" {
+			@FieldError(f.ID, f.Error)
+		}
+		if f.Hint != "" {
+			<span class="tiny faint">{ f.Hint }</span>
+		}
+	</div>
+}
+
+// PasswordFieldOpts keeps the call sites readable at five-plus parameters.
+type PasswordFieldOpts struct {
+	ID           string
+	Name         string
+	Label        string
+	Autocomplete string
+	Required     bool
+	MinLength    int
+	Error        string
+	Hint         string
+}
+
+// FieldError is the single inline error renderer, so every form marks a bad
+// field the same way and assistive tech announces it the same way.
+templ FieldError(fieldID, message string) {
+	<span class="field__error" id={ fieldID + "-error" } role="alert">
+		@IconAlert()
+		<span>{ message }</span>
+	</span>
+}
+
+// TextField is the shared labelled input. Every form uses it, so a field that
+// fails validation is always named, outlined and described identically.
+templ TextField(c Ctx, f TextFieldOpts) {
+	<div class="field">
+		<label class="label" for={ f.ID }>
+			{ f.Label }
+			if f.Optional {
+				<span class="tiny faint">({ c.T("common.optional") })</span>
+			}
+		</label>
+		<input
+			class="input"
+			id={ f.ID }
+			name={ f.Name }
+			type={ inputType(f.Type) }
+			value={ f.Value }
+			autocomplete={ f.Autocomplete }
+			placeholder={ f.Placeholder }
+			dir={ f.Dir }
+			maxlength={ maxlengthAttr(f.MaxLength) }
+			required?={ f.Required }
+			aria-invalid={ boolAttr(f.Error != "") }
+			aria-describedby={ describedBy(f.ID, f.Error != "") }
+		/>
+		if f.Error != "" {
+			@FieldError(f.ID, f.Error)
+		}
+		if f.Hint != "" {
+			<span class="tiny faint">{ f.Hint }</span>
+		}
+	</div>
+}
+
+type TextFieldOpts struct {
+	ID           string
+	Name         string
+	Label        string
+	Value        string
+	Type         string // text | email | search; defaults to text
+	Autocomplete string
+	Placeholder  string
+	Dir          string
+	MaxLength    int
+	Required     bool
+	Optional     bool
+	Error        string
+	Hint         string
+}
+
+// TextAreaField is the multi-line equivalent, with the same error treatment.
+templ TextAreaField(c Ctx, f TextAreaOpts) {
+	<div class="field">
+		<label class="label" for={ f.ID }>
+			{ f.Label }
+			if f.Optional {
+				<span class="tiny faint">({ c.T("common.optional") })</span>
+			}
+		</label>
+		<textarea
+			class="textarea"
+			id={ f.ID }
+			name={ f.Name }
+			rows={ rowsAttr(f.Rows) }
+			maxlength={ maxlengthAttr(f.MaxLength) }
+			placeholder={ f.Placeholder }
+			required?={ f.Required }
+			aria-invalid={ boolAttr(f.Error != "") }
+			aria-describedby={ describedBy(f.ID, f.Error != "") }
+		>{ f.Value }</textarea>
+		if f.Error != "" {
+			@FieldError(f.ID, f.Error)
+		}
+		if f.Hint != "" {
+			<span class="tiny faint">{ f.Hint }</span>
+		}
+	</div>
+}
+
+type TextAreaOpts struct {
+	ID          string
+	Name        string
+	Label       string
+	Value       string
+	Placeholder string
+	Rows        int
+	MaxLength   int
+	Required    bool
+	Optional    bool
+	Error       string
+	Hint        string
+}
+
+// FormProblems is the banner at the top of a form. It says that something
+// needs attention and leaves the detail to the fields themselves: each one
+// carries its own red outline, alert icon and message, so repeating them here
+// said everything twice.
+templ FormProblems(c Ctx, general string, fields []FieldProblem) {
+	if general != "" || len(fields) > 0 {
+		<div class="alert alert--error" role="alert">
+			@IconAlert()
+			<div style="flex:1;min-width:0">
+				if general != "" {
+					<div>{ general }</div>
+				}
+				if len(fields) > 0 {
+					<div class="small">{ c.T("form.problems") }</div>
+				}
+			</div>
+		</div>
+	}
+}
+
+// FieldProblem marks one field as having failed. Only the count is rendered —
+// the banner deliberately does not repeat what the field itself already says —
+// but the field is named so the callers reporting problems can keep doing so in
+// one shape, and so a future summary that does link to each field has something
+// to link with.
+type FieldProblem struct {
+	ID      string
+	Label   string
+	Message string
+}
+
+// describedBy points an input at its error message for assistive tech.
+func describedBy(fieldID string, hasError bool) string {
+	if !hasError {
+		return ""
+	}
+	return fieldID + "-error"
+}
+
+func inputType(t string) string {
+	if t == "" {
+		return "text"
+	}
+	return t
+}
+
+func maxlengthAttr(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return fmt.Sprint(n)
+}
+
+func rowsAttr(n int) string {
+	if n <= 0 {
+		return "4"
+	}
+	return fmt.Sprint(n)
+}
+
+// BackLink is the return affordance for every screen that is not a tab-bar
+// destination. The arrow is mirrored in CSS, so it points the right way under
+// RTL even before JavaScript runs.
+templ BackLink(c Ctx, href, destination string) {
+	<a class="backlink" href={ templ.SafeURL(href) }>
+		<span class="backlink__arrow" aria-hidden="true">←</span>
+		<span>{ c.T("common.backTo", destination) }</span>
+	</a>
+}
+
+templ Empty(icon, text string) {
+	<div class="empty">
+		<div class="empty__icon" aria-hidden="true">{ icon }</div>
+		<p>{ text }</p>
+	</div>
+}
+
+templ EmptyWithAction(icon, text, href, action string) {
+	<div class="empty">
+		<div class="empty__icon" aria-hidden="true">{ icon }</div>
+		<p>{ text }</p>
+		<a class="btn btn--soft btn--sm" href={ templ.SafeURL(href) }>{ action }</a>
+	</div>
+}
+
+templ StatTile(icon, value, label string) {
+	<div class="stat">
+		<div class="stat__icon" aria-hidden="true">{ icon }</div>
+		<div class="stat__value">{ value }</div>
+		<div class="stat__label">{ label }</div>
+	</div>
+}
+
+// UserRow is the shared listing row, with caller-supplied action buttons.
+// UserRow is a person in a list: their face and name lead to their profile,
+// and whatever actions the list offers sit beside it.
+//
+// The link used to wrap the actions as well, which put buttons inside an
+// anchor — invalid markup, and worse, it meant pressing "Challenge" opened the
+// profile instead. Anything nested in a link is a link, whatever it looks like.
+templ UserRow(c Ctx, u *models.UserCard, subtitle string) {
+	<div class="user-row">
+		<a class="user-row__link" href={ templ.SafeURL("/u/" + u.Username) }>
+			@AvatarWithPresence(u, "sm")
+			<div class="user-row__body">
+				<div class="user-row__name truncate">{ u.DisplayName }</div>
+				<div class="user-row__meta truncate">{ subtitle }</div>
+			</div>
+		</a>
+		<div class="user-row__actions">
+			{ children... }
+		</div>
+	</div>
+}
+
+// FieldErrors renders a form-level error banner.
+templ FormError(c Ctx, msg string) {
+	if msg != "" {
+		<div class="alert alert--error" role="alert">
+			<span aria-hidden="true">⚠️</span>
+			<span>{ msg }</span>
+		</div>
+	}
+}
+
+templ PageHead(title, subtitle string) {
+	<div class="page-head">
+		<div>
+			<h1>{ title }</h1>
+			if subtitle != "" {
+				<p class="muted small">{ subtitle }</p>
+			}
+		</div>
+		{ children... }
+	</div>
+}
+
+templ LevelBar(c Ctx, u *models.User) {
+	<div class="stack-sm">
+		<div class="row row--between">
+			<span class="level-chip">
+				<span aria-hidden="true">⭐</span>
+				{ c.T("profile.level", u.Level()) }
+			</span>
+			<span class="tiny muted num">{ fmt.Sprintf("%d / %d XP", levelEarned(u), levelNeeded(u)) }</span>
+		</div>
+		<div class="bar">
+			<div class="bar__fill" style={ fmt.Sprintf("width:%d%%", u.LevelPercent()) }></div>
+		</div>
+	</div>
+}
+
+// CategoryCard is the tile used on the dashboard and the setup screen.
+templ CategoryCard(c Ctx, cat *models.Category) {
+	<a
+		class="cat-card"
+		href={ templ.SafeURL(fmt.Sprintf("/play?category=%d", cat.ID)) }
+		style={ "--cat-color:" + cat.Color }
+	>
+		<div class="cat-card__icon" aria-hidden="true">{ cat.Icon }</div>
+		<div class="cat-card__name">{ cat.Name }</div>
+		<div class="cat-card__desc truncate">{ cat.Description }</div>
+	</a>
+}
+
+// DuelScoreboard shows both sides of a challenge.
+// DuelScoreboard is the standing in a match: everybody in it, best score first,
+// with the people still to play named rather than left as a dash somebody has
+// to interpret.
+//
+// It was two fixed sides, because a challenge held exactly two people. A match
+// holds up to ten, so the shape is a list — and a list of two still reads as a
+// duel.
+templ DuelScoreboard(c Ctx, ch *models.Challenge) {
+	{{ winner := ch.Winner() }}
+	// Three shapes, because a match has three. A team match is scored by side
+	// and has to be read that way — a list of eight names in score order says
+	// nothing about which side won, which is the only question being asked.
+	//
+	// Two players is a duel and reads best as one: face to face, the two scores
+	// large, the winner's side in green. The list is for everything else —
+	// three people or ten — and a duel squeezed into it lost the shape that
+	// made it readable at a glance.
+	if ch.IsTeamMatch() {
+		@teamStanding(c, ch)
+		@matchStanding(c, ch, winner)
+	} else if len(ch.Players) == 2 {
+		@duelFaceOff(c, ch, winner)
+	} else {
+		@matchStanding(c, ch, winner)
+	}
+}
+
+// teamStanding is the scoreboard of a match played in sides: the total each
+// side has between them, and who is on it.
+//
+// The individual scores are still shown underneath, because they are what each
+// person actually did — but they are the detail, and the side's total is the
+// result.
+templ teamStanding(c Ctx, ch *models.Challenge) {
+	{{ winning := ch.WinningTeam() }}
+	<div class="stack-sm">
+		for _, side := range ch.Teams() {
+			<div class={ "side", templ.KV("is-winner", winning != nil && winning.Number == side.Number) }>
+				<div class="side__players">
+					<b>{ c.T("challenge.team", side.Number) }</b>
+					for _, p := range side.Players {
+						if p.Card != nil {
+							<span class="tiny muted truncate">{ p.Card.DisplayName }</span>
+						}
+					}
+				</div>
+				<div class="row" style="gap:8px;align-items:baseline">
+					<b class="num">{ fmt.Sprint(side.Score) }</b>
+					if !side.Done {
+						<span class="tiny muted">{ c.T("challenge.stillPlaying") }</span>
+					}
+				</div>
+			</div>
+		}
+	</div>
+}
+
+// duelFaceOff is the two-player scoreboard: the original, kept because two
+// players is still what most matches are.
+templ duelFaceOff(c Ctx, ch *models.Challenge, winner *models.ChallengePlayer) {
+	<div class="duel">
+		for i, p := range ch.Ranked() {
+			if i == 1 {
+				<div class="duel__vs">{ c.T("challenge.vs") }</div>
+			}
+			<div class={ "duel__side", duelSideClass(p, winner) }>
+				if p.Card != nil {
+					@Avatar(p.Card, "sm")
+					<div class="duel__name truncate">{ p.Card.DisplayName }</div>
+				}
+				<div class="duel__score">{ scoreText(p.Score) }</div>
+				// A dash on its own was read as a zero. One word says which it
+				// is without changing the shape of the thing.
+				if !p.HasPlayed() {
+					<div class="tiny muted">{ c.T(playerStateKey(p)) }</div>
+				}
+			</div>
+		}
+	</div>
+}
+
+// duelSideClass colours the winning and losing sides once there is a result.
+func duelSideClass(p *models.ChallengePlayer, winner *models.ChallengePlayer) string {
+	if winner == nil {
+		return ""
+	}
+	if winner.UserID == p.UserID {
+		return "duel__side--win"
+	}
+	return "duel__side--lose"
+}
+
+// matchStanding is everybody in a match of three or more, best score first.
+templ matchStanding(c Ctx, ch *models.Challenge, winner *models.ChallengePlayer) {
+	<div class="match">
+		for place, p := range ch.Ranked() {
+			<div
+				class={ "match__row",
+					templ.KV("match__row--win", winner != nil && winner.UserID == p.UserID),
+					templ.KV("match__row--me", p.UserID == c.Seated(ch)) }
+			>
+				<span class="match__place num">
+					if p.HasPlayed() {
+						{ fmt.Sprint(place + 1) }
+					} else {
+						{ "·" }
+					}
+				</span>
+				if p.Card != nil {
+					@Avatar(p.Card, "xs")
+					<span class="match__name truncate">
+						{ p.Card.DisplayName }
+						if p.IsHost {
+							<span class="tag tiny">{ c.T("challenge.host") }</span>
+						}
+					</span>
+				}
+				<span class="match__state tiny muted">{ c.T(playerStateKey(p)) }</span>
+				<span class="match__score num">{ scoreText(p.Score) }</span>
+			</div>
+		}
+	</div>
+}
+
+// playerStateKey says where each person is up to, so "—" beside a name is
+// explained rather than guessed at.
+func playerStateKey(p *models.ChallengePlayer) string {
+	switch p.State {
+	case models.PlayerInvited:
+		return "challenge.state.invited"
+	case models.PlayerJoined:
+		return "challenge.state.playing"
+	case models.PlayerDeclined:
+		return "challenge.state.declined"
+	case models.PlayerEliminated:
+		return "challenge.state.eliminated"
+	default:
+		return "challenge.state.played"
+	}
+}
+
+func scoreText(score *int) string {
+	if score == nil {
+		return "—"
+	}
+	return fmt.Sprint(*score)
+}
+
+func levelEarned(u *models.User) int {
+	earned, _ := u.LevelProgress()
+	return earned
+}
+
+func levelNeeded(u *models.User) int {
+	_, needed := u.LevelProgress()
+	return needed
+}

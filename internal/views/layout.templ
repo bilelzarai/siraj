@@ -1,0 +1,334 @@
+package views
+
+import "fmt"
+
+// Base is the document shell: theme bootstrap, chrome, and the page body.
+templ Base(c Ctx, title string) {
+	<!DOCTYPE html>
+	<html lang={ c.Locale } dir={ c.Dir } data-theme={ c.Theme }>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="color-scheme" content="light dark"/>
+			<meta name="description" content={ c.T("app.description") }/>
+			<title>{ title } · { c.T("app.name") }</title>
+			<link rel="stylesheet" href={ c.Asset("/static/css/app.css") }/>
+			<link rel="icon" href={ c.Asset("/static/img/favicon.svg") } type="image/svg+xml"/>
+			@themeBoot(c)
+		</head>
+		<body>
+			<a class="skip-link" href="#main">{ c.T("common.skipToContent") }</a>
+			@navbar(c)
+			<main id="main">
+				if c.Flash != nil {
+					<div class="shell shell--flush" style="padding-top:18px">
+						<div class={ "alert", "alert--" + c.Flash.Kind } role="status">
+							<span>{ c.Flash.Text }</span>
+						</div>
+					</div>
+				}
+				{ children... }
+			</main>
+			if c.IsAuthed() {
+				@tabbar(c)
+			}
+			<div class="toast-host" id="toasts" aria-live="polite"></div>
+			// The strings the live layer needs, so the script carries no
+			// English of its own.
+			<template data-i18n-live-changed>{ c.T("common.liveChanged") }</template>
+			<template data-i18n-newmessage>{ c.T("messages.newMessageShort") }</template>
+			<script src={ c.Asset("/static/js/app.js") } defer></script>
+		</body>
+	</html>
+}
+
+// themeBoot applies the stored theme before first paint, so there is no flash.
+//
+// It is a separate file, not an inline script, because the Content-Security-
+// Policy permits scripts from 'self' only. No defer: it has to run before the
+// body paints, which is the entire reason it exists.
+//
+// Both layouts share it; two copies is how the two drifted apart before.
+templ themeBoot(c Ctx) {
+	<script src={ c.Asset("/static/js/boot.js") }></script>
+}
+
+// Bare is used by the play screen, which hides the chrome to stay focused.
+templ Bare(c Ctx, title string) {
+	<!DOCTYPE html>
+	<html lang={ c.Locale } dir={ c.Dir } data-theme={ c.Theme }>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="color-scheme" content="light dark"/>
+			<title>{ title } · { c.T("app.name") }</title>
+			<link rel="stylesheet" href={ c.Asset("/static/css/app.css") }/>
+			<link rel="icon" href={ c.Asset("/static/img/favicon.svg") } type="image/svg+xml"/>
+			@themeBoot(c)
+		</head>
+		<body>
+			<main id="main">
+				{ children... }
+			</main>
+			<div class="toast-host" id="toasts" aria-live="polite"></div>
+			// The strings the live layer needs, so the script carries no
+			// English of its own.
+			<template data-i18n-live-changed>{ c.T("common.liveChanged") }</template>
+			<template data-i18n-newmessage>{ c.T("messages.newMessageShort") }</template>
+			<script src={ c.Asset("/static/js/app.js") } defer></script>
+		</body>
+	</html>
+}
+
+templ navbar(c Ctx) {
+	<header class="nav">
+		<div class="nav__inner">
+			<a class="brand" href={ templ.SafeURL(homeHref(c)) }>
+				<span class="brand__mark" aria-hidden="true">{ c.T("app.mark") }</span>
+				<span>{ c.T("app.name") }</span>
+			</a>
+			if c.IsAuthed() {
+				<nav class="nav__links" aria-label={ c.T("nav.menu") }>
+					@navLink(c, "/app", "🏠", c.T("nav.home"), 0)
+					@navLink(c, "/play", "🎮", c.T("nav.play"), 0)
+					@navLink(c, "/challenges", "⚔️", c.T("nav.challenges"), c.PendingChallenges)
+					// A temporary player has no messages, no friends and no
+					// place on the board. The server refuses all three; leaving
+					// the links out is so they are not offered a door that
+					// opens onto a sign-up form.
+					if !c.IsGuest() {
+						@navLink(c, "/messages", "💬", c.T("nav.messages"), c.UnreadMessages)
+						@navLink(c, "/friends", "🤝", c.T("nav.friends"), c.FriendRequests)
+						@navLink(c, "/leaderboard", "🏆", c.T("nav.leaderboard"), 0)
+					}
+				</nav>
+			} else {
+				<div class="spacer"></div>
+			}
+			<div class="nav__actions">
+				@localeMenu(c)
+				@themeToggle(c)
+				if c.IsAuthed() {
+					@userMenu(c)
+				} else {
+					<a class="btn btn--ghost btn--sm" href="/login">{ c.T("nav.login") }</a>
+					<a class="btn btn--primary btn--sm" href="/register">{ c.T("nav.register") }</a>
+				}
+			</div>
+		</div>
+	</header>
+}
+
+templ navLink(c Ctx, href, icon, label string, count int) {
+	// The label is hidden on narrow desktop widths where six links and the
+	// action cluster do not both fit, so the accessible name has to come from
+	// the attribute rather than from the visible text.
+	<a
+		class="nav__link"
+		href={ templ.SafeURL(href) }
+		aria-current={ c.AriaCurrent(href) }
+		aria-label={ label }
+		title={ label }
+	>
+		<span aria-hidden="true">{ icon }</span>
+		<span class="nav__label">{ label }</span>
+		if count > 0 {
+			<span class="count-dot">{ fmt.Sprint(count) }</span>
+		}
+	</a>
+}
+
+// The tab bar carries the four destinations that can be waiting for you plus
+// Home. Every badge here belongs to the link it sits on — the Profile tab used
+// to wear the friend-request count, which pointed the number at a screen that
+// could not answer it. Profile stays one tap away in the avatar menu, which is
+// in the top bar at every width.
+templ tabbar(c Ctx) {
+	<nav class="tabbar" aria-label={ c.T("nav.menu") }>
+		<div class="tabbar__inner">
+			@tabLink(c, "/app", "🏠", c.T("nav.home"), 0)
+			@tabLink(c, "/play", "🎮", c.T("nav.play"), 0)
+			@tabLink(c, "/challenges", "⚔️", c.T("nav.challenges"), c.PendingChallenges)
+			if !c.IsGuest() {
+				@tabLink(c, "/messages", "💬", c.T("nav.messages"), c.UnreadMessages)
+				@tabLink(c, "/friends", "🤝", c.T("nav.friends"), c.FriendRequests)
+			}
+		</div>
+	</nav>
+}
+
+templ tabLink(c Ctx, href, icon, label string, count int) {
+	<a class="tabbar__link" href={ templ.SafeURL(href) } aria-current={ c.AriaCurrent(href) }>
+		<span aria-hidden="true">{ icon }</span>
+		<span>{ label }</span>
+		if count > 0 {
+			<span class="count-dot">{ fmt.Sprint(count) }</span>
+		}
+	</a>
+}
+
+templ localeMenu(c Ctx) {
+	<div class="dropdown" data-dropdown>
+		<button
+			class="btn btn--ghost btn--icon"
+			type="button"
+			data-dropdown-trigger
+			aria-haspopup="true"
+			aria-expanded="false"
+			aria-label={ c.T("settings.language.current", c.T("settings.language.name")) }
+			title={ c.T("settings.language.current", c.T("settings.language.name")) }
+		>
+			@IconGlobe()
+		</button>
+		<div class="dropdown__menu" data-dropdown-menu>
+			for _, loc := range c.Locales() {
+				<form method="post" action="/settings/locale">
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<input type="hidden" name="locale" value={ loc.Code }/>
+					<input type="hidden" name="redirect" value={ c.Path }/>
+					<button
+						class="dropdown__item"
+						type="submit"
+						aria-current={ boolAttr(loc.Code == c.Locale) }
+					>
+						<span aria-hidden="true">{ loc.Flag }</span>
+						<span>{ loc.Name }</span>
+					</button>
+				</form>
+			}
+		</div>
+	</div>
+}
+
+// The appearance button names the theme it will switch to, not the generic
+// word "Appearance" — so you can tell what pressing it does before you press.
+templ themeToggle(c Ctx) {
+	<button
+		class="btn btn--ghost btn--icon"
+		type="button"
+		data-theme-toggle
+		aria-label={ ThemeLabel(c, c.CurrentTheme()) }
+		title={ ThemeLabel(c, c.CurrentTheme()) }
+		data-label-system={ ThemeLabel(c, "system") }
+		data-label-light={ ThemeLabel(c, "light") }
+		data-label-dark={ ThemeLabel(c, "dark") }
+	>
+		// Only the applied theme's icon is shown. Rendering the hidden state
+		// server-side keeps all three from flashing before the script runs.
+		<span class="theme-icon" data-theme-slot="system" hidden?={ c.CurrentTheme() != "system" }>
+			@IconMonitor()
+		</span>
+		<span class="theme-icon" data-theme-slot="light" hidden?={ c.CurrentTheme() != "light" }>
+			@IconSun()
+		</span>
+		<span class="theme-icon" data-theme-slot="dark" hidden?={ c.CurrentTheme() != "dark" }>
+			@IconMoon()
+		</span>
+	</button>
+}
+
+templ userMenu(c Ctx) {
+	<div class="dropdown" data-dropdown>
+		<button
+			class="btn btn--ghost btn--icon"
+			type="button"
+			data-dropdown-trigger
+			aria-haspopup="true"
+			aria-expanded="false"
+			aria-label={ c.T("nav.profile") }
+			style="padding:0;border:none;position:relative"
+			data-account-button
+		>
+			<span
+				class={ "avatar", "avatar--sm", templ.KV("avatar--photo", HasAvatarPhoto(c.User.AvatarSeed)) }
+				style={ AvatarStyle(AvatarSeedFor(c.User.ID, c.User.AvatarSeed, c.User.Username)) }
+			>
+				if !HasAvatarPhoto(c.User.AvatarSeed) {
+					{ Initial(c.User.DisplayName) }
+				}
+			</span>
+			// The notification badge lives inside this menu, which is closed.
+			// Without a mark on the button that opens it, the only way to find
+			// out something happened was to go looking — which is the one
+			// thing a notification exists to save you.
+			if c.Notifications > 0 {
+				<span class="has-news" aria-hidden="true"></span>
+			}
+		</button>
+		<div class="dropdown__menu" data-dropdown-menu>
+			<div style="padding:9px 11px">
+				<div class="bold truncate">{ c.User.DisplayName }</div>
+				<div class="tiny muted truncate">{ "@" + c.User.Username }</div>
+			</div>
+			<hr class="divider"/>
+			if c.IsGuest() {
+				// Everything below this line needs an account. Offering the one
+				// thing that would unlock them beats offering seven doors that
+				// all lead to the same sign-up form.
+				<a class="dropdown__item" href="/register">
+					<span aria-hidden="true">✨</span> { c.T("guest.createAccount") }
+				</a>
+				<p class="dropdown__note tiny muted">{ c.T("guest.temporary") }</p>
+			} else {
+				<a class="dropdown__item" href="/profile">
+					<span aria-hidden="true">👤</span> { c.T("nav.profile") }
+				</a>
+				<a class="dropdown__item" href="/notifications">
+					<span aria-hidden="true">🔔</span> { c.T("nav.notifications") }
+					if c.Notifications > 0 {
+						<span class="count-dot">{ fmt.Sprint(c.Notifications) }</span>
+					}
+				</a>
+				<a class="dropdown__item" href="/history">
+					<span aria-hidden="true">📜</span> { c.T("nav.history") }
+				</a>
+				<a class="dropdown__item" href="/friends">
+					<span aria-hidden="true">🤝</span> { c.T("nav.friends") }
+				</a>
+				<a class="dropdown__item" href="/my/questions">
+					<span aria-hidden="true">✍️</span> { c.T("sets.title") }
+				</a>
+				// Support was reachable only by typing the URL, which meant the
+				// unread count was queried on every request and shown on none.
+				<a class="dropdown__item" href="/support">
+					<span aria-hidden="true">🎧</span> { c.T("nav.support") }
+					if c.SupportUnread > 0 {
+						<span class="count-dot">{ fmt.Sprint(c.SupportUnread) }</span>
+					}
+				</a>
+				<a class="dropdown__item" href="/settings">
+					<span aria-hidden="true">⚙️</span> { c.T("nav.settings") }
+				</a>
+			}
+			// Staff had no way in either. The area still 404s for everyone else,
+			// so showing the link only to the people it works for keeps that.
+			if c.User.CanModerate() {
+				<hr class="divider"/>
+				<a class="dropdown__item" href="/admin">
+					<span aria-hidden="true">🛠️</span> { c.T("nav.admin") }
+				</a>
+			}
+			<hr class="divider"/>
+			<form method="post" action="/logout">
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<button class="dropdown__item" type="submit">
+					<span aria-hidden="true">🚪</span> { c.T("nav.logout") }
+				</button>
+			</form>
+		</div>
+	</div>
+}
+
+func homeHref(c Ctx) string {
+	if c.IsAuthed() {
+		return "/app"
+	}
+	return "/"
+}
+
+func boolAttr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}

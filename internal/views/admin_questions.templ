@@ -1,0 +1,511 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/i18n"
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// The question bank and the authoring form.
+// -------------------------------------------------------------- questions --
+
+type AdminQuestionsData struct {
+	Questions  []*models.AdminQuestion
+	Categories []*models.Category
+	Total      int
+	Pager      Pager
+	Query      string
+	CategoryID int
+	Difficulty int
+	OnlyReview bool
+	// ForceIDs are the questions whose first delete attempt was refused
+	// because they have recorded answers. Those rows come back ticked and the
+	// delete button turns explicit, rather than the warning being a dead end
+	// the admin cannot get past.
+	ForceIDs map[int]bool
+}
+
+templ AdminQuestions(c Ctx, a AdminChrome, d AdminQuestionsData) {
+	@adminShell(c, a, c.T("admin.nav.questions")) {
+		<div class="row row--between row--wrap">
+			<span class="muted small">{ c.T("admin.questions.count", d.Total) }</span>
+			<div class="row" style="gap:8px">
+				<a class="btn btn--soft btn--sm" href="/admin/questions/import">
+					<span aria-hidden="true">📥</span> { c.T("admin.nav.import") }
+				</a>
+				<a class="btn btn--primary btn--sm" href="/admin/questions/new">
+					<span aria-hidden="true">＋</span> { c.T("admin.question.new") }
+				</a>
+			</div>
+		</div>
+		<form method="get" action="/admin/questions" class="card row row--wrap" style="gap:10px">
+			<input
+				class="input"
+				name="q"
+				type="search"
+				value={ d.Query }
+				placeholder={ c.T("admin.questions.searchPlaceholder") }
+				style="flex:2;min-width:180px"
+			/>
+			<select class="select" name="category" style="flex:1;min-width:150px">
+				<option value="0">{ c.T("game.setup.category.all") }</option>
+				for _, cat := range d.Categories {
+					<option value={ fmt.Sprint(cat.ID) } selected?={ d.CategoryID == cat.ID }>
+						{ cat.Name }
+					</option>
+				}
+			</select>
+			<select class="select" name="difficulty" style="flex:1;min-width:130px">
+				<option value="0">{ c.T("game.difficulty.any") }</option>
+				for _, level := range []int{1, 2, 3} {
+					<option value={ fmt.Sprint(level) } selected?={ d.Difficulty == level }>
+						{ c.T(DifficultyKey(level)) }
+					</option>
+				}
+			</select>
+			<button class="btn btn--primary" type="submit">{ c.T("common.search") }</button>
+		</form>
+		if len(d.Questions) == 0 {
+			@Empty("❓", c.T("admin.questions.empty"))
+		} else {
+			// The bulk form carries only its own controls, and the table stays
+			// outside it: every row already holds action forms of its own, and
+			// a form inside a form is not a thing HTML has. The checkboxes join
+			// it by id instead, which is exactly what form= is for.
+			<form id="questions-bulk" method="post" action="/admin/questions/bulk" data-bulk>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				// The search this screen is showing, so "everything matching"
+				// can be rebuilt server-side instead of trusting a list of ids.
+				<input type="hidden" name="q" value={ d.Query }/>
+				<input type="hidden" name="category" value={ fmt.Sprint(d.CategoryID) }/>
+				<input type="hidden" name="difficulty" value={ fmt.Sprint(d.Difficulty) }/>
+				if d.OnlyReview {
+					<input type="hidden" name="review" value="1"/>
+				}
+				// A refused delete comes back with its rows ticked; this is what
+				// makes the second press the confirmation rather than a repeat.
+				if d.pending() {
+					<input type="hidden" name="confirm" value="delete"/>
+				}
+				@adminQuestionsBulkBar(c, d)
+			</form>
+			<div class="card card--flush scroll-x">
+				<table class="table">
+					<thead>
+						<tr>
+							<th style="width:1%">
+								<input
+									class="checkbox"
+									type="checkbox"
+									form="questions-bulk"
+									data-bulk-all
+									aria-label={ c.T("admin.questions.bulk.selectPage") }
+								/>
+							</th>
+							<th class="num">#</th>
+							<th>{ c.T("admin.questions.prompt") }</th>
+							<th>{ c.T("game.setup.category") }</th>
+							<th>{ c.T("game.setup.difficulty") }</th>
+							<th>{ c.T("admin.questions.locales") }</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, q := range d.Questions {
+							<tr class={ templ.KV("is-inactive", !q.IsActive) }>
+								<td>
+									<input
+										class="checkbox"
+										type="checkbox"
+										form="questions-bulk"
+										name="ids"
+										value={ fmt.Sprint(q.ID) }
+										checked?={ d.forced(q.ID) }
+										data-bulk-item
+										data-active={ fmt.Sprint(q.IsActive) }
+										aria-label={ c.T("admin.questions.bulk.selectOne", q.ID) }
+									/>
+								</td>
+								<td class="num tiny muted">{ fmt.Sprint(q.ID) }</td>
+								<td>
+									<div class="truncate" style="max-width:38ch">{ q.Prompt }</div>
+									if q.PendingReview > 0 {
+										<span class="tag tag--warning tiny">
+											{ c.T("admin.questions.awaitingReview", q.PendingReview) }
+										</span>
+									}
+								</td>
+								<td class="tiny">
+									<span aria-hidden="true">{ q.CategoryIcon }</span> { q.CategoryName }
+								</td>
+								<td class="tiny">{ c.T(DifficultyKey(q.Difficulty)) }</td>
+								<td>
+									<span class={ "tag", localeTagClass(q.LocaleCount) }>
+										{ fmt.Sprintf("%d/3", q.LocaleCount) }
+									</span>
+								</td>
+								<td>
+									<div class="row" style="gap:6px;justify-content:flex-end">
+										<a
+											class="btn btn--soft btn--sm"
+											href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }
+										>
+											{ c.T("common.edit") }
+										</a>
+										if q.IsActive {
+											@adminQuestionAction(c, q.ID, "deactivate", "btn--ghost", c.T("admin.questions.deactivate"))
+										} else {
+											@adminQuestionAction(c, q.ID, "activate", "btn--soft", c.T("admin.questions.activate"))
+										}
+										// Deletion cascades into game_answers, so it rewrites
+										// players' history. The server refuses a question with
+										// recorded answers on the first attempt and sends the
+										// admin back here with this row unlocked, so getting past
+										// the warning takes a second, deliberate press.
+										<form
+											method="post"
+											action={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/delete", q.ID)) }
+											data-confirm={ c.T("admin.questions.deleteConfirm", q.ID) }
+										>
+											<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+											if d.forced(q.ID) {
+												<input type="hidden" name="confirm" value="delete"/>
+												<button class="btn btn--danger btn--sm" type="submit">
+													{ c.T("admin.questions.deleteAnyway") }
+												</button>
+											} else {
+												<button class="btn btn--ghost btn--sm" type="submit">
+													{ c.T("common.delete") }
+												</button>
+											}
+										</form>
+									</div>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			@PagerBar(c, d.Pager)
+		}
+	}
+}
+
+// adminQuestionsBulkBar is the strip above the table: what is selected, and
+// what can be done to it.
+//
+// The bar itself appears as soon as there are rows, because it holds the way
+// to select everything the filter matches — and that used to sit inside a bar
+// that only appeared once a row was ticked. Reaching "select all 2121" meant
+// first ticking one arbitrary question, which is a strange way in and easy to
+// miss entirely.
+//
+// The destructive buttons are what stays hidden until there is a selection, so
+// browsing a list is still not fronted by a row of delete buttons.
+templ adminQuestionsBulkBar(c Ctx, d AdminQuestionsData) {
+	<div class="bulk-bar" data-bulk-bar hidden>
+		<span class="small">
+			<b data-bulk-count>0</b> { c.T("admin.questions.bulk.selected") }
+		</span>
+		// Ticking the page selects 40 rows; a filter can match many more. This
+		// is the difference between "delete what I can see" and "delete all of
+		// them", and it says which it is rather than leaving it to be guessed.
+		if d.Total > len(d.Questions) {
+			<label class="small row" style="gap:6px;align-items:center">
+				<input class="checkbox" type="checkbox" name="scope" value="filter" data-bulk-scope/>
+				{ c.T("admin.questions.bulk.wholeFilter", d.Total) }
+			</label>
+		}
+		// Only the one that would change something is shown: offering to
+		// activate a selection that is already active is a button that does
+		// nothing, and having both up makes the admin work out which applies.
+		// Both appear only when the selection genuinely holds some of each —
+		// or when it is the whole filter, whose makeup this page cannot see.
+		// Starts hidden, and the bar stays hidden until something is ticked,
+		// so the pair is never shown before there is anything to judge.
+		<div class="row" style="gap:6px;margin-inline-start:auto" data-bulk-actions hidden>
+			<button class="btn btn--soft btn--sm" type="submit" name="action" value="activate" data-bulk-activate hidden>
+				{ c.T("admin.questions.activate") }
+			</button>
+			<button class="btn btn--ghost btn--sm" type="submit" name="action" value="deactivate" data-bulk-deactivate hidden>
+				{ c.T("admin.questions.deactivate") }
+			</button>
+			<button
+				class="btn btn--danger btn--sm"
+				type="submit"
+				name="action"
+				value="delete"
+				data-bulk-delete
+				data-confirm={ c.T("admin.questions.bulk.deleteConfirm") }
+			>
+				if d.pending() {
+					{ c.T("admin.questions.deleteAnyway") }
+				} else {
+					{ c.T("common.delete") }
+				}
+			</button>
+		</div>
+	</div>
+}
+
+templ adminQuestionAction(c Ctx, id int, action, variant, label string) {
+	<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/%s", id, action)) }>
+		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+		<button class={ "btn", "btn--sm", variant } type="submit">{ label }</button>
+	</form>
+}
+
+// questionRef prints a question id as a link into the editor, with the
+// question's own wording on hover.
+//
+// The reports used to print a bare number. It told you which row was in
+// trouble and nothing about which question that was, so checking one meant
+// searching the bank by hand for an id you had to copy out first.
+templ questionRef(c Ctx, id int, prompt string) {
+	<a
+		class="qref num"
+		href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", id)) }
+		if prompt != "" {
+			title={ prompt }
+		}
+	>
+		#{ fmt.Sprint(id) }
+	</a>
+}
+
+// questionRefPlain prints a reference that has nowhere to go — an id the file
+// supplied for a question not yet written. Same wording on hover, no link, so
+// pressing it cannot land on a page that does not exist.
+templ questionRefPlain(c Ctx, id int, prompt string) {
+	<span
+		class="qref qref--plain num"
+		if prompt != "" {
+			title={ prompt }
+		}
+	>#{ fmt.Sprint(id) }</span>
+}
+
+// ------------------------------------------------------- question editing --
+
+// QuestionLocaleForm is one language of the authoring form.
+type QuestionLocaleForm struct {
+	Prompt      string
+	Choices     []string
+	Explanation string
+	Source      string
+	NeedsReview bool
+}
+type AdminQuestionFormData struct {
+	ID           int
+	CategoryID   int
+	Difficulty   int
+	Points       int
+	CorrectIndex int
+	Source       string
+	IsActive     bool
+
+	Categories []*models.Category
+	Locales    map[string]QuestionLocaleForm
+
+	// Errors is keyed by locale code; Error is the whole-form problem.
+	Errors map[string]string
+	Error  string
+	// Similar holds near-identical prompts found on save. The moderator sees
+	// them and decides, rather than the save being refused outright.
+	Similar []*models.DuplicatePair
+	// Compare is the same side-by-side panel the import preview and the
+	// content-health sweep use, with the unsaved draft as the left side.
+	Compare []*models.QuestionCompare
+}
+
+templ AdminQuestionForm(c Ctx, a AdminChrome, d AdminQuestionFormData) {
+	@adminShell(c, a, d.Title(c)) {
+		@BackLink(c, "/admin/questions", c.T("admin.nav.questions"))
+		@FormError(c, d.Error)
+		if len(d.Similar) > 0 {
+			<div id="similar" class="alert alert--warning" role="alert">
+				<span aria-hidden="true">🔁</span>
+				<div style="flex:1;min-width:0">
+					<div class="bold">{ c.T("admin.question.similarTitle") }</div>
+					for _, pair := range d.Similar {
+						<div class="small row row--wrap" style="gap:6px;align-items:baseline">
+							@questionRef(c, pair.RightID, pair.RightPrompt)
+							{ fmt.Sprintf(" · %d%% · ", pair.Percent()) }
+							<span class="truncate" style="max-width:52ch">{ pair.RightPrompt }</span>
+							if d.Comparable(pair.RightID) {
+								<a class="dup-choice__open" href={ templ.SafeURL("#" + DraftAnchor(pair.RightID)) }>
+									{ c.T("common.compare") }
+								</a>
+							}
+						</div>
+					}
+				</div>
+			</div>
+			// The third door now shows what the other two show: both questions,
+			// every field, every language, with the differing words marked.
+			for _, cmp := range d.Compare {
+				@comparePanel(c, cmp, CompareChrome{
+					Anchor:     DraftAnchor(cmp.RightID),
+					Title:      c.T("admin.question.compareTitle", cmp.RightID),
+					LeftLabel:  c.T("admin.question.compareDraft"),
+					RightLabel: c.T("admin.compare.bankSide"),
+					CloseHref:  "#similar",
+				})
+			}
+		}
+		<form method="post" action="/admin/questions/save" class="stack" novalidate>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			if d.ID > 0 {
+				<input type="hidden" name="id" value={ fmt.Sprint(d.ID) }/>
+			}
+			if len(d.Similar) > 0 {
+				// Second submission goes through: the warning has been read.
+				<input type="hidden" name="allow_similar" value="1"/>
+			}
+			<section class="card card--pad-lg stack">
+				<div class="grid grid--2">
+					<div class="field">
+						<label class="label" for="category_id">{ c.T("game.setup.category") }</label>
+						<select class="select" id="category_id" name="category_id">
+							for _, cat := range d.Categories {
+								<option value={ fmt.Sprint(cat.ID) } selected?={ d.CategoryID == cat.ID }>
+									{ cat.Name }
+								</option>
+							}
+						</select>
+					</div>
+					<div class="field">
+						<label class="label" for="difficulty">{ c.T("game.setup.difficulty") }</label>
+						<select class="select" id="difficulty" name="difficulty">
+							for _, level := range []int{1, 2, 3} {
+								<option value={ fmt.Sprint(level) } selected?={ d.Difficulty == level }>
+									{ c.T(DifficultyKey(level)) }
+								</option>
+							}
+						</select>
+					</div>
+					<div class="field">
+						<label class="label" for="points">{ c.T("admin.question.points") }</label>
+						<input
+							class="input"
+							id="points"
+							name="points"
+							type="number"
+							min="0"
+							max="500"
+							value={ fmt.Sprint(d.Points) }
+						/>
+						<span class="tiny faint">{ c.T("admin.question.pointsHint") }</span>
+					</div>
+					<div class="field">
+						<span class="label">{ c.T("admin.question.active") }</span>
+						<label class="row" style="gap:8px;align-items:center">
+							<input type="checkbox" name="is_active" value="1" checked?={ d.IsActive }/>
+							<span class="small">{ c.T("admin.question.activeHint") }</span>
+						</label>
+					</div>
+				</div>
+				<div class="field">
+					<span class="label">{ c.T("admin.question.correct") }</span>
+					// One correct answer for the whole question: the choices are
+					// written in the same order in every language.
+					<div class="choice-grid">
+						for i := 0; i < 4; i++ {
+							<label class="chip-radio">
+								<input
+									type="radio"
+									name="correct_index"
+									value={ fmt.Sprint(i) }
+									checked?={ d.CorrectIndex == i }
+								/>
+								<span class="chip-radio__face">
+									<span class="answer__key" aria-hidden="true">{ AnswerKey(c.Locale, i) }</span>
+									<span>{ c.T("admin.question.choiceN", i+1) }</span>
+								</span>
+							</label>
+						}
+					</div>
+				</div>
+			</section>
+			for _, loc := range c.Locales() {
+				@questionLocaleFields(c, d, loc)
+			}
+			<div class="row" style="gap:10px;justify-content:flex-end">
+				<a class="btn btn--ghost" href="/admin/questions">{ c.T("common.cancel") }</a>
+				<button class="btn btn--primary" type="submit">{ c.T("common.save") }</button>
+			</div>
+		</form>
+	}
+}
+
+templ questionLocaleFields(c Ctx, d AdminQuestionFormData, loc i18n.Locale) {
+	{{ form := d.Locale(loc.Code) }}
+	<section class="card card--pad-lg stack-sm">
+		<div class="row row--between row--wrap" style="gap:8px">
+			<span class="card__title">
+				<span aria-hidden="true">{ loc.Flag }</span> { loc.Name }
+			</span>
+			<span class="row" style="gap:6px">
+				if form.NeedsReview {
+					<span class="tag tag--warning">{ c.T("admin.questions.awaiting") }</span>
+				}
+				if form.Source != "" {
+					<span class="tag tiny">{ form.Source }</span>
+				}
+			</span>
+		</div>
+		if msg := d.LocaleError(loc.Code); msg != "" {
+			<div class="alert alert--error" role="alert">
+				@IconAlert()
+				<span>{ msg }</span>
+			</div>
+		}
+		// Each language keeps its own direction, so Arabic text is not reflowed
+		// by an English interface while it is being written.
+		<div class="field">
+			<label class="label" for={ "prompt_" + loc.Code }>{ c.T("admin.questions.prompt") }</label>
+			<textarea
+				class="textarea"
+				id={ "prompt_" + loc.Code }
+				name={ "prompt_" + loc.Code }
+				rows="2"
+				dir={ loc.Dir }
+				lang={ loc.Code }
+			>{ form.Prompt }</textarea>
+		</div>
+		<div class="grid grid--2">
+			for i := 0; i < 4; i++ {
+				<div class="field">
+					<label class="label" for={ fmt.Sprintf("choice_%s_%d", loc.Code, i) }>
+						{ AnswerKey(c.Locale, i) }
+						if d.CorrectIndex == i {
+							<span class="tag tag--success tiny">{ c.T("admin.question.correctMark") }</span>
+						}
+					</label>
+					<input
+						class="input"
+						type="text"
+						id={ fmt.Sprintf("choice_%s_%d", loc.Code, i) }
+						name={ fmt.Sprintf("choice_%s_%d", loc.Code, i) }
+						value={ form.Choice(i) }
+						dir={ loc.Dir }
+						lang={ loc.Code }
+						maxlength="200"
+					/>
+				</div>
+			}
+		</div>
+		<div class="field">
+			<label class="label" for={ "explanation_" + loc.Code }>{ c.T("admin.question.explanation") }</label>
+			<textarea
+				class="textarea"
+				id={ "explanation_" + loc.Code }
+				name={ "explanation_" + loc.Code }
+				rows="2"
+				dir={ loc.Dir }
+				lang={ loc.Code }
+			>{ form.Explanation }</textarea>
+		</div>
+	</section>
+}

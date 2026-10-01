@@ -1,0 +1,70 @@
+# What has to be true before anything is deployed.
+#
+# The suite talks to a real PostgreSQL — it builds its own database, migrates
+# it, and drops it — because most of what is worth testing here is a constraint
+# or a transaction, and neither of those can be checked against a mock. So the
+# job brings up the same Postgres version production runs.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: islamic
+          POSTGRES_PASSWORD: islamic
+          POSTGRES_DB: islamic_game
+        ports: ['5432:5432']
+        # The suite connects as soon as the step starts, so the job waits for
+        # the server to actually answer rather than for the container to exist.
+        options: >-
+          --health-cmd "pg_isready -U islamic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Each test package creates and drops its own database through this
+      # connection, so nothing here is shared state between jobs.
+      TEST_DATABASE_URL: postgres://islamic:islamic@localhost:5432/islamic_game?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Templates are current
+        # The generated files are committed, so a .templ edited without
+        # regenerating would otherwise build green and ship the old markup.
+        run: |
+          go tool templ generate 2>/dev/null || go run github.com/a-h/templ/cmd/templ@latest generate
+          git diff --exit-code -- '*_templ.go' \
+            || { echo "::error::templ output is stale — run 'make generate' and commit"; exit 1; }
+
+      - name: Formatting
+        run: |
+          unformatted="$(gofmt -l . | grep -v '_templ.go' || true)"
+          [ -z "$unformatted" ] || { echo "::error::gofmt: $unformatted"; exit 1; }
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Script syntax
+        run: node --check static/js/app.js

@@ -1,0 +1,540 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// ------------------------------------------------------------- challenges --
+
+type ChallengesData struct {
+	Tab      string // incoming | outgoing | finished | new
+	Incoming []*models.Challenge
+	Outgoing []*models.Challenge
+	Finished []*models.Challenge
+	// Seats is who is sitting at this device, so a match played on one phone
+	// can be passed from person to person without signing anybody in or out.
+	Seats SeatData
+}
+
+templ Challenges(c Ctx, d ChallengesData) {
+	@Base(c, c.T("challenge.title")) {
+		// A match changes when anybody in it joins, plays or declines — and the
+		// buttons on this page are about exactly that.
+		<div class="shell stack" data-live="challenge.received challenge.played challenge.completed challenge.declined challenge.cancelled challenge.accepted challenge.started">
+			@BackLink(c, "/app", c.T("nav.home"))
+			@PageHead(c.T("challenge.title"), "") {
+				// Random means somebody in the room you are standing in, and
+				// nobody else. There is no "anyone on the site" here on
+				// purpose: a stranger should not be put in front of you
+				// without either of you having chosen the room.
+				<form method="post" action="/challenges/random">
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--soft btn--sm" type="submit">
+						{ c.T("challenge.random") }
+					</button>
+				</form>
+				// Straight to the screen that sets a round up, rather than a
+				// dialog that is a shortcut past it. The dialog is still what
+				// the Challenge button beside one person opens — that is a
+				// decision about that person, made where they are — but "new
+				// challenge" with nobody in mind is the full screen, and
+				// sending somebody to a dialog and then on to the screen was
+				// two steps to reach one.
+				<a class="btn btn--primary btn--sm" href="/challenges/new">
+					{ c.T("challenge.new") }
+				</a>
+			}
+			// Whose turn it is, when the match is being played on one device.
+			// Accepting and playing both follow the seat, so handing the phone
+			// over here is how the next person takes their round.
+			@SharedDevice(c, d.Seats)
+			<div class="segment scroll-x" role="tablist">
+				@tabItem(c, "/challenges?tab=incoming", c.T("challenge.tab.incoming"), d.Tab == "incoming")
+				@tabItem(c, "/challenges?tab=outgoing", c.T("challenge.tab.outgoing"), d.Tab == "outgoing")
+				@tabItem(c, "/challenges?tab=finished", c.T("challenge.tab.finished"), d.Tab == "finished")
+			</div>
+			switch d.Tab {
+				case "outgoing":
+					if len(d.Outgoing) == 0 {
+						@Empty("📭", c.T("challenge.empty.outgoing"))
+					} else {
+						<div class="grid grid--2">
+							for _, ch := range d.Outgoing {
+								@challengeCard(c, ch)
+							}
+						</div>
+					}
+				case "finished":
+					if len(d.Finished) == 0 {
+						@Empty("🏁", c.T("challenge.empty.finished"))
+					} else {
+						<div class="grid grid--2">
+							for _, ch := range d.Finished {
+								@challengeCard(c, ch)
+							}
+						</div>
+					}
+				default:
+					if len(d.Incoming) == 0 {
+						@Empty("⚔️", c.T("challenge.empty.incoming"))
+					} else {
+						<div class="grid grid--2">
+							for _, ch := range d.Incoming {
+								@challengeCard(c, ch)
+							}
+						</div>
+					}
+			}
+		</div>
+	}
+}
+
+templ tabItem(c Ctx, href, label string, active bool) {
+	<a class={ "segment__item", templ.KV("is-active", active) } href={ templ.SafeURL(href) } role="tab">
+		{ label }
+	</a>
+}
+
+templ challengeCard(c Ctx, ch *models.Challenge) {
+	<article class="card stack-sm">
+		<div class="row row--between">
+			<span class="tiny muted">
+				{ ch.CategoryIcon } { categoryLabel(c, ch) } · { c.T(DifficultyKey(ch.Difficulty)) }
+			</span>
+			@challengeStatusTag(c, ch)
+		</div>
+		@DuelScoreboard(c, ch)
+		if ch.Message != "" {
+			<p class="small muted">“{ ch.Message }”</p>
+		}
+		@challengeActions(c, ch)
+	</article>
+}
+
+templ challengeStatusTag(c Ctx, ch *models.Challenge) {
+	switch ch.Status {
+		case models.ChallengeCompleted:
+			if o := ch.Outcome(c.Seated(ch)); o == "win" {
+				<span class="tag tag--success">{ c.T("challenge.result.win") }</span>
+			} else if o == "loss" {
+				<span class="tag tag--danger">{ c.T("challenge.result.loss") }</span>
+			} else {
+				<span class="tag">{ c.T("challenge.result.draw") }</span>
+			}
+		case models.ChallengeCancelled:
+			<span class="tag tag--danger">{ c.T("challenge.cancelled") }</span>
+		case models.ChallengeDeclined:
+			// The state, not the button. The tag was printing the imperative
+			// "Decline" against a match that had already been declined.
+			<span class="tag">{ c.T("challenge.wasDeclined") }</span>
+		case models.ChallengeExpired:
+			<span class="tag">{ c.T("challenge.expired") }</span>
+		default:
+			if needsMyTurn(c, ch) {
+				<span class="tag tag--warning">{ c.T("challenge.yourTurn") }</span>
+			} else {
+				<span class="tag tag--info">{ waitingFor(c, ch) }</span>
+			}
+	}
+}
+
+templ challengeActions(c Ctx, ch *models.Challenge) {
+	{{ me := ch.Player(c.Seated(ch)) }}
+	if needsMyTurn(c, ch) {
+		// A match waits for people before it waits for answers. Starting is
+		// offered only once enough of them are in, because a round played
+		// against nobody has nothing to compare itself with.
+		if !ch.ReadyToStart() {
+			<p class="tiny muted">{ c.T("challenge.needMore", models.MinChallengePlayers) }</p>
+		}
+		<div class="row" style="gap:8px">
+			// Three different presses, and which one you get depends on where
+			// the match is. An invitation is accepted. A lobby waits for its
+			// host, who is the only person who can set it going. Once it is
+			// going, everybody's round is open and the button plays it.
+			if me != nil && me.State == models.PlayerInvited {
+				<form
+					method="post"
+					action={ templ.SafeURL("/challenges/" + ch.ID.String() + "/accept") }
+					style="flex:1"
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--primary btn--sm btn--block" type="submit">
+						{ c.T("challenge.accept") }
+					</button>
+				</form>
+			} else if ch.Lobby() && me != nil && me.IsHost {
+				<form
+					method="post"
+					action={ templ.SafeURL("/challenges/" + ch.ID.String() + "/start") }
+					style="flex:1"
+					data-confirm={ c.T("challenge.startConfirm", ch.Accepted()) }
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button
+						class="btn btn--primary btn--sm btn--block"
+						type="submit"
+						disabled?={ !ch.ReadyToStart() }
+					>
+						{ c.T("challenge.startForEveryone", ch.Accepted()) }
+					</button>
+				</form>
+			} else if ch.Lobby() {
+				<p class="tiny muted" style="flex:1;margin:0">
+					{ c.T("challenge.waitingForStart") }
+				</p>
+			} else {
+				<form
+					method="post"
+					action={ templ.SafeURL("/challenges/" + ch.ID.String() + "/accept") }
+					style="flex:1"
+					data-confirm={ c.T("challenge.confirmStart") }
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--primary btn--sm btn--block" type="submit">
+						{ c.T("challenge.play") }
+					</button>
+				</form>
+			}
+			// Leaving and ending are different acts and get different
+			// buttons. A guest declining steps out of a match that carries on
+			// without them; a host declining ends it for everybody else in it,
+			// and a word that does not say so is a word that catches people
+			// out. Both ask first, because neither can be undone.
+			if me != nil && (me.State == models.PlayerInvited || me.State == models.PlayerJoined) {
+				if me.IsHost {
+					<form
+						method="post"
+						action={ templ.SafeURL("/challenges/" + ch.ID.String() + "/cancel") }
+						data-confirm={ c.T("challenge.cancelConfirm", ch.Waitingish()) }
+					>
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<button class="btn btn--ghost btn--sm" type="submit">{ c.T("challenge.cancel") }</button>
+					</form>
+				} else {
+					<form
+						method="post"
+						action={ templ.SafeURL("/challenges/" + ch.ID.String() + "/decline") }
+						data-confirm={ c.T("challenge.declineConfirm") }
+					>
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<button class="btn btn--ghost btn--sm" type="submit">{ c.T("challenge.decline") }</button>
+					</form>
+				}
+			}
+		</div>
+	}
+	// A finished match can be played again with the same people, which is what
+	// "rematch" means — the invitations arrive pre-ticked.
+	if ch.Status == models.ChallengeCompleted && me != nil {
+		<a
+			class="btn btn--soft btn--sm btn--block"
+			href={ templ.SafeURL("/challenges/new?rematch=" + ch.ID.String()) }
+		>
+			{ c.T("challenge.rematch") }
+		</a>
+	}
+}
+
+// needsMyTurn reports whether the viewer still has a round to play in this
+// match. Read from their own row, so it is true of the fourth player as much as
+// of the second.
+func needsMyTurn(c Ctx, ch *models.Challenge) bool {
+	if !ch.Live() {
+		return false
+	}
+	me := ch.Player(c.Seated(ch))
+	return me != nil && (me.State == models.PlayerInvited || me.State == models.PlayerJoined)
+}
+
+// waitingFor names who the match is actually waiting on.
+//
+// It used to read challenger_id and opponent_id — the host and the first
+// invitee — and name whichever of the two was not you. In a match of four that
+// is a guess, and when the seat made "you" somebody who was not in the match at
+// all it named the wrong person to both sides at once: each player told the
+// other was being waited for, and neither able to press anything.
+func waitingFor(c Ctx, ch *models.Challenge) string {
+	pending := ch.StillToAct(c.Seated(ch))
+	switch {
+	case len(pending) == 0:
+		return c.T("challenge.waitingNobody")
+	case len(pending) == 1 && pending[0].Card != nil:
+		return c.T("challenge.waiting", pending[0].Card.DisplayName)
+	default:
+		return c.T("challenge.waitingN", len(pending))
+	}
+}
+
+// ---------------------------------------------------------------- friends --
+
+type FriendsData struct {
+	Tab      string // all | requests | search
+	Friends  []*models.UserCard
+	Incoming []*models.UserCard
+	Outgoing []*models.UserCard
+	Results  []*models.UserCard
+	Query    string
+}
+
+templ Friends(c Ctx, d FriendsData) {
+	@Base(c, c.T("friends.title")) {
+		// Somebody accepting or asking changes every button on this page:
+		// "Request sent" beside a person who has already said yes is this page
+		// having been right an hour ago.
+		<div class="shell stack" data-live="friend.request friend.accepted">
+			@BackLink(c, "/app", c.T("nav.home"))
+			@PageHead(c.T("friends.title"), c.T("friends.count", len(d.Friends))) {
+			}
+			<div class="segment scroll-x" role="tablist">
+				@tabItem(c, "/friends?tab=all", c.T("friends.tab.all"), d.Tab == "all")
+				@tabItem(c, "/friends?tab=requests", c.T("friends.tab.requests"), d.Tab == "requests")
+				@tabItem(c, "/friends?tab=search", c.T("friends.tab.search"), d.Tab == "search")
+			</div>
+			switch d.Tab {
+				case "requests":
+					<div class="stack">
+						if len(d.Incoming) == 0 && len(d.Outgoing) == 0 {
+							@Empty("📬", c.T("friends.requests.empty"))
+						}
+						if len(d.Incoming) > 0 {
+							<div class="card card--flush">
+								<div style="padding:8px">
+									for _, u := range d.Incoming {
+										<div class="user-row">
+											@AvatarWithPresence(u, "sm")
+											<div class="user-row__body">
+												<a class="user-row__name truncate" href={ templ.SafeURL("/u/" + u.Username) }>
+													{ u.DisplayName }
+												</a>
+												<div class="user-row__meta">{ c.T("friends.incoming") }</div>
+											</div>
+											<div class="user-row__actions">
+												@friendAction(c, u.Username, "accept", "btn--primary", c.T("friends.accept"))
+												@friendAction(c, u.Username, "decline", "btn--ghost", c.T("friends.decline"))
+											</div>
+										</div>
+									}
+								</div>
+							</div>
+						}
+						if len(d.Outgoing) > 0 {
+							<div class="card card--flush">
+								<div style="padding:8px">
+									for _, u := range d.Outgoing {
+										<div class="user-row">
+											@AvatarWithPresence(u, "sm")
+											<div class="user-row__body">
+												<a class="user-row__name truncate" href={ templ.SafeURL("/u/" + u.Username) }>
+													{ u.DisplayName }
+												</a>
+												<div class="user-row__meta">{ c.T("friends.pending") }</div>
+											</div>
+											<div class="user-row__actions">
+												@friendAction(c, u.Username, "remove", "btn--ghost", c.T("friends.cancel"))
+											</div>
+										</div>
+									}
+								</div>
+							</div>
+						}
+					</div>
+				case "search":
+					<div class="stack">
+						<form method="get" action="/friends" class="row" style="gap:8px">
+							<input type="hidden" name="tab" value="search"/>
+							<input
+								class="input"
+								name="q"
+								type="search"
+								value={ d.Query }
+								placeholder={ c.T("friends.search.placeholder") }
+								autofocus
+							/>
+							<button class="btn btn--primary" type="submit">{ c.T("common.search") }</button>
+						</form>
+						if d.Query != "" && len(d.Results) == 0 {
+							@Empty("🔍", c.T("friends.search.empty"))
+						}
+						if len(d.Results) > 0 {
+							<div class="card card--flush">
+								<div style="padding:8px">
+									for _, u := range d.Results {
+										<div class="user-row">
+											@AvatarWithPresence(u, "sm")
+											<div class="user-row__body">
+												<a class="user-row__name truncate" href={ templ.SafeURL("/u/" + u.Username) }>
+													{ u.DisplayName }
+												</a>
+												<div class="user-row__meta">{ "@" + u.Username }</div>
+											</div>
+											<div class="user-row__actions">
+												@RelationActions(c, u.Username, u.Relation, true)
+											</div>
+										</div>
+									}
+								</div>
+							</div>
+						}
+					</div>
+				default:
+					if len(d.Friends) == 0 {
+						@EmptyWithAction("🤝", c.T("friends.empty"), "/friends?tab=search", c.T("friends.tab.search"))
+					} else {
+						<div class="card card--flush">
+							<div style="padding:8px">
+								for _, u := range d.Friends {
+									<div class="user-row">
+										@AvatarWithPresence(u, "sm")
+										<div class="user-row__body">
+											<a class="user-row__name truncate" href={ templ.SafeURL("/u/" + u.Username) }>
+												{ u.DisplayName }
+											</a>
+											<div class="user-row__meta num">
+												{ onlineLabel(c, u) } · { fmt.Sprintf("%d XP", u.XP) }
+											</div>
+										</div>
+										<div class="user-row__actions">
+											<a class="btn btn--ghost btn--sm" href={ templ.SafeURL("/messages/with/" + u.Username) }>
+												{ c.T("friends.message") }
+											</a>
+											@ChallengeButton(c, u, "btn btn--soft btn--sm", models.SourceFriends)
+										</div>
+									</div>
+								}
+							</div>
+						</div>
+					}
+			}
+		</div>
+	}
+}
+
+// RelationActions renders the buttons that apply to one relationship state.
+// compact drops the message/challenge links, which do not fit a search row.
+//
+// The previous search list hard-coded "Add friend" for every result, so it
+// offered to befriend people who were already friends and re-sent requests
+// that were still pending.
+templ RelationActions(c Ctx, username string, relation models.RelationState, compact bool) {
+	switch relation {
+		case models.RelationSelf:
+			<a class="btn btn--ghost btn--sm" href="/profile">{ c.T("profile.edit") }</a>
+		case models.RelationFriends:
+			if !compact {
+				<a class="btn btn--primary btn--sm" href={ templ.SafeURL("/messages/with/" + username) }>
+					{ c.T("friends.message") }
+				</a>
+				<a
+					class="btn btn--soft btn--sm"
+					href={ templ.SafeURL("/challenges/new?opponent=" + username + "&group=" + models.SourceFriends) }
+				>
+					{ c.T("friends.challenge") }
+				</a>
+			}
+			<span class="tag tag--success">{ c.T("friends.state.friends") }</span>
+			@friendAction(c, username, "remove", "btn--ghost", c.T("friends.remove"))
+			@friendAction(c, username, "block", "btn--ghost", c.T("friends.block"))
+		case models.RelationOutgoing:
+			<span class="tag">{ c.T("friends.state.sent") }</span>
+			@friendAction(c, username, "remove", "btn--ghost", c.T("friends.cancel"))
+		case models.RelationIncoming:
+			<span class="tag tag--warning">{ c.T("friends.state.incoming") }</span>
+			@friendAction(c, username, "accept", "btn--primary", c.T("friends.accept"))
+			@friendAction(c, username, "decline", "btn--ghost", c.T("friends.decline"))
+		case models.RelationBlocked:
+			// Reachable at last: nothing used to write this status, so the tag
+			// and its whole branch were decoration.
+			<span class="tag tag--danger">{ c.T("friends.state.blocked") }</span>
+			@friendAction(c, username, "unblock", "btn--ghost", c.T("friends.unblock"))
+		default:
+			@friendAction(c, username, "request", "btn--soft", c.T("friends.add"))
+			@friendAction(c, username, "block", "btn--ghost", c.T("friends.block"))
+	}
+}
+
+templ friendAction(c Ctx, username, action, variant, label string) {
+	<form
+		method="post"
+		action={ templ.SafeURL("/friends/" + action) }
+		data-confirm={ confirmFor(c, action, username) }
+	>
+		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+		<input type="hidden" name="username" value={ username }/>
+		<button class={ "btn", "btn--sm", variant } type="submit">{ label }</button>
+	</form>
+}
+
+// ------------------------------------------------------------ leaderboard --
+
+type LeaderboardData struct {
+	Scope   string
+	Entries []*models.LeaderboardEntry
+	MyRank  int
+}
+
+templ Leaderboard(c Ctx, d LeaderboardData) {
+	@Base(c, c.T("leaderboard.title")) {
+		<div class="shell stack">
+			@BackLink(c, "/app", c.T("nav.home"))
+			@PageHead(c.T("leaderboard.title"), fmt.Sprintf("#%d", d.MyRank)) {
+				<div class="segment">
+					@tabItem(c, "/leaderboard?scope=global", c.T("leaderboard.scope.global"), d.Scope != "friends")
+					@tabItem(c, "/leaderboard?scope=friends", c.T("leaderboard.scope.friends"), d.Scope == "friends")
+				</div>
+			}
+			if len(d.Entries) == 0 {
+				@Empty("🏆", c.T("leaderboard.empty"))
+			} else {
+				<div class="card card--flush">
+					for _, e := range d.Entries {
+						<a
+							class={ "lb-row", templ.KV("is-me", e.User.ID == c.User.ID) }
+							href={ templ.SafeURL("/u/" + e.User.Username) }
+						>
+							<span class={ RankClass(e.Rank) }>{ rankLabel(e.Rank) }</span>
+							@AvatarWithPresence(e.User, "sm")
+							<div style="flex:1;min-width:0">
+								<div class="bold small truncate">
+									{ e.User.DisplayName }
+									if e.User.ID == c.User.ID {
+										<span class="tag tag--accent">{ c.T("leaderboard.you") }</span>
+									}
+								</div>
+								<div class="tiny muted num">
+									{ fmt.Sprintf("%d %s · %d%%", e.GamesPlayed, c.T("leaderboard.games"), e.Accuracy) }
+								</div>
+							</div>
+							<span class="lb-xp num">{ fmt.Sprint(e.XP) }</span>
+						</a>
+					}
+				</div>
+			}
+		</div>
+	}
+}
+
+func rankLabel(rank int) string {
+	switch rank {
+	case 1:
+		return "🥇"
+	case 2:
+		return "🥈"
+	case 3:
+		return "🥉"
+	default:
+		return fmt.Sprint(rank)
+	}
+}
+
+// confirmFor is the question asked before an action that cannot be undone from
+// the same screen. Only removal gets one: asking before sending a request or
+// accepting one would be noise.
+func confirmFor(c Ctx, action, username string) string {
+	if action == "remove" {
+		return c.T("friends.remove.confirm", username)
+	}
+	return ""
+}

@@ -1,0 +1,152 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// The screen between two players in a match played round one phone.
+//
+// It exists for two reasons and does two things. It names who the phone is for,
+// so nobody answers a question that was not theirs — a press is needed to get
+// past it, which is the whole point of a screen that could otherwise have been
+// a redirect. And it is the one place the answer to the previous question is
+// shown, because it is the first moment at which showing it gives nobody an
+// advantage: everybody here has already committed.
+
+// HandoverData is what that screen needs.
+type HandoverData struct {
+	// Next is the person the device is being passed to.
+	Next *models.User
+	// Position is the question they are about to be asked, zero-based, and
+	// Total is how many there are.
+	Position int
+	Total    int
+	// Standing is everyone at this device and what they have so far.
+	Standing []SeatScore
+	// Reveal is the question everybody here has just answered, or nil when the
+	// round has not come round to a complete question yet.
+	Reveal *RevealData
+}
+
+// SeatScore is one line of the running scoreboard at this device.
+type SeatScore struct {
+	Player *models.User
+	Score  int
+	// Turn marks the person about to play.
+	Turn bool
+}
+
+// RevealData is what a finished question looked like for everybody here.
+type RevealData struct {
+	Question *models.Question
+	Position int
+	Rows     []RevealRow
+}
+
+// RevealRow is one player's answer to it.
+type RevealRow struct {
+	Player *models.User
+	// Answered is false when they ran out of time or walked away, which is a
+	// different thing from choosing wrongly and is shown as one.
+	Answered bool
+	Correct  bool
+	Chose    string
+	Points   int
+}
+
+templ Handover(c Ctx, d HandoverData) {
+	@Bare(c, c.T("hotseat.title")) {
+		<div class="pass">
+			<div class="pass__inner">
+				// What just happened, before who is next: the table wants to
+				// know whether they got it before they want to know whose turn
+				// it is.
+				if d.Reveal != nil {
+					@revealCard(c, d.Reveal)
+				}
+				<div class="pass__card">
+					<p class="eyebrow">{ c.T("hotseat.pass") }</p>
+					<span class="avatar avatar--lg" style={ AvatarStyle(d.Next.ID.String()) }>
+						{ Initial(d.Next.DisplayName) }
+					</span>
+					<h1 class="pass__name truncate">{ d.Next.DisplayName }</h1>
+					<p class="muted">{ c.T("game.progress", d.Position + 1, d.Total) }</p>
+					// A form, so the turn is taken by a press rather than by
+					// arriving here — and so the seat is set server-side before
+					// the question is drawn.
+					<form method="post" action="/play/seat">
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<input type="hidden" name="player" value={ d.Next.ID.String() }/>
+						<button class="btn btn--primary btn--lg btn--block" type="submit" autofocus>
+							{ c.T("hotseat.ready", d.Next.DisplayName) }
+						</button>
+					</form>
+					<p class="tiny muted">{ c.T("hotseat.handHint") }</p>
+				</div>
+				@seatStanding(c, d.Standing)
+				<form method="post" action="/play/quit" data-confirm={ c.T("hotseat.stopConfirm") }>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--ghost btn--sm" type="submit">{ c.T("hotseat.stop") }</button>
+				</form>
+			</div>
+		</div>
+	}
+}
+
+// revealCard is the answer to the question everybody has just played, and what
+// each of them made of it.
+templ revealCard(c Ctx, d *RevealData) {
+	{{ contentLocale := d.Question.Locale }}
+	<div class="card stack-sm reveal">
+		<p class="eyebrow">{ c.T("hotseat.roundUp", d.Position + 1) }</p>
+		<p class="bold" lang={ contentLocale } dir={ ContentDir(contentLocale) }>{ d.Question.Prompt }</p>
+		<p class="verdict verdict--correct" lang={ contentLocale } dir={ ContentDir(contentLocale) }>
+			<span aria-hidden="true">✓</span>
+			{ d.Question.Choices[d.Question.CorrectIndex] }
+		</p>
+		<div class="reveal__rows">
+			for _, row := range d.Rows {
+				<div class={ "reveal__row", templ.KV("is-correct", row.Correct) }>
+					<span class="avatar avatar--xs" style={ AvatarStyle(row.Player.ID.String()) }>
+						{ Initial(row.Player.DisplayName) }
+					</span>
+					<span class="truncate">{ row.Player.DisplayName }</span>
+					if !row.Answered {
+						<span class="tiny muted">{ c.T("hotseat.noAnswer") }</span>
+					} else if row.Correct {
+						<span class="tag tag--success">{ "+" + fmt.Sprint(row.Points) }</span>
+					} else {
+						<span class="tiny muted truncate">{ row.Chose }</span>
+					}
+				</div>
+			}
+		</div>
+		if d.Question.Explanation != "" {
+			<p class="small muted" lang={ contentLocale } dir={ ContentDir(contentLocale) }>
+				{ d.Question.Explanation }
+			</p>
+		}
+	</div>
+}
+
+// seatStanding is the running scoreboard at this device.
+templ seatStanding(c Ctx, rows []SeatScore) {
+	if len(rows) > 1 {
+		<div class="card stack-sm">
+			<p class="eyebrow">{ c.T("hotseat.standing") }</p>
+			for _, row := range rows {
+				<div class={ "side", templ.KV("is-winner", row.Turn) }>
+					<span class="row" style="gap:8px;min-width:0">
+						<span class="avatar avatar--xs" style={ AvatarStyle(row.Player.ID.String()) }>
+							{ Initial(row.Player.DisplayName) }
+						</span>
+						<span class="truncate">{ row.Player.DisplayName }</span>
+					</span>
+					<b class="num">{ fmt.Sprint(row.Score) }</b>
+				</div>
+			}
+		</div>
+	}
+}

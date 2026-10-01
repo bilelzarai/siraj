@@ -1,0 +1,240 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// A player's own questions. Written by them, played only by the friends they
+// invite, never in the bank — so the screen says that plainly rather than
+// leaving somebody to wonder where their words are going.
+
+type QuestionSetsData struct {
+	Sets      []*models.QuestionSet
+	Active    *models.QuestionSet
+	Questions []*models.Question
+	// Drafts is what was being written when a save was refused, so it can be
+	// handed straight back rather than lost.
+	Drafts []DraftRow
+	// NewName is the name typed for a collection that was refused.
+	NewName string
+	Error   string
+	// EditingID is the question opened for editing, with its current text in
+	// Editing. EditingPlayed says somebody has already answered it, which is
+	// the one case where it is copied rather than changed.
+	EditingID     int
+	Editing       DraftRow
+	EditingPlayed bool
+}
+
+// editQuestionForm is one question opened for changing.
+//
+// A question somebody has already answered is not editable: the review screen
+// reads its text by joining, so changing it would change what people are shown
+// they were asked, and a score nobody can make sense of is worse than a typo.
+// That one offers a copy instead, which leaves the played question alone.
+templ editQuestionForm(c Ctx, d QuestionSetsData, questionID int) {
+	if d.EditingPlayed {
+		<div class="stack-sm">
+			<p class="small">{ c.T("sets.playedNoEdit") }</p>
+			<div class="row" style="gap:8px">
+				<form
+					method="post"
+					action={ templ.SafeURL(fmt.Sprintf("/my/questions/%s/%d/copy", d.Active.ID.String(), questionID)) }
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--soft btn--sm" type="submit">{ c.T("sets.copyToEdit") }</button>
+				</form>
+				<a class="btn btn--ghost btn--sm" href={ templ.SafeURL("/my/questions/" + d.Active.ID.String()) }>
+					{ c.T("common.cancel") }
+				</a>
+			</div>
+		</div>
+	} else {
+		<form
+			method="post"
+			action={ templ.SafeURL(fmt.Sprintf("/my/questions/%s/%d/edit", d.Active.ID.String(), questionID)) }
+			class="stack-sm"
+		>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<div class="authored__rows">
+				@authoredRow(c, 0, d.Editing)
+			</div>
+			<div class="row" style="gap:8px;justify-content:flex-end">
+				<a class="btn btn--ghost btn--sm" href={ templ.SafeURL("/my/questions/" + d.Active.ID.String()) }>
+					{ c.T("common.cancel") }
+				</a>
+				<button class="btn btn--primary btn--sm" type="submit">{ c.T("common.save") }</button>
+			</div>
+		</form>
+	}
+}
+
+templ QuestionSets(c Ctx, d QuestionSetsData) {
+	@Base(c, c.T("sets.title")) {
+		<div class="shell stack">
+			@BackLink(c, "/app", c.T("nav.home"))
+			@PageHead(c.T("sets.title"), "") {
+				<p class="small muted">{ c.T("sets.intro") }</p>
+			}
+			<div class="sets">
+				<aside class="sets__list stack-sm">
+					for _, set := range d.Sets {
+						<a
+							class={ "sets__item", templ.KV("is-active", d.Active != nil && d.Active.ID == set.ID) }
+							href={ templ.SafeURL("/my/questions/" + set.ID.String()) }
+						>
+							<span class="truncate bold">{ set.Name }</span>
+							// How far off being playable, rather than a bare
+							// count somebody has to compare against a rule they
+							// were never told.
+							if set.Playable() {
+								<span class="tag tiny num">{ fmt.Sprint(set.Count) }</span>
+							} else {
+								<span class="tag tag--warning tiny">
+									{ c.T("sets.needsMore", set.Needed()) }
+								</span>
+							}
+						</a>
+					}
+					<a class="btn btn--soft btn--sm btn--block" href="/my/questions">
+						{ c.T("sets.create") }
+					</a>
+				</aside>
+				<section class="sets__body stack">
+					if d.Active == nil {
+						<form method="post" action="/my/questions" class="card stack-sm">
+							<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+							<span class="card__title">{ c.T("sets.create") }</span>
+							@FormError(c, d.Error)
+							<p class="small muted">{ c.T("sets.createHint", models.MinSetQuestions) }</p>
+							<div class="field">
+								<label class="label" for="set-name">{ c.T("sets.nameLabel") }</label>
+								<input
+									class="input"
+									id="set-name"
+									name="name"
+									type="text"
+									maxlength="60"
+									required
+									value={ d.NewName }
+									placeholder={ c.T("sets.newPlaceholder") }
+								/>
+							</div>
+							<div class="authored__rows" data-authored>
+								if len(d.Drafts) == 0 {
+									@authoredRow(c, 0, DraftRow{})
+								} else {
+									for i, row := range d.Drafts {
+										@authoredRow(c, i, row)
+									}
+								}
+							</div>
+							<div class="row" style="gap:8px;justify-content:space-between">
+								<button class="btn btn--ghost btn--sm" type="button" data-authored-add>
+									{ c.T("challenge.addQuestion") }
+								</button>
+								<button class="btn btn--primary btn--sm" type="submit">
+									{ c.T("sets.create") }
+								</button>
+							</div>
+						</form>
+					} else {
+						<div class="card stack-sm">
+							<div class="row row--between row--wrap" style="gap:8px">
+								<span class="card__title">{ d.Active.Name }</span>
+								<span class="row" style="gap:8px">
+									<span class="tiny muted">
+										{ c.T("sets.countOf", d.Active.Count, 100) }
+									</span>
+									<form
+										method="post"
+										action={ templ.SafeURL("/my/questions/" + d.Active.ID.String() + "/delete") }
+										data-confirm={ c.T("sets.deleteConfirm", d.Active.Name) }
+									>
+										<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+										<button class="btn btn--ghost btn--sm" type="submit">
+											{ c.T("common.delete") }
+										</button>
+									</form>
+								</span>
+							</div>
+							if len(d.Questions) == 0 {
+								@Empty("📝", c.T("sets.empty"))
+							} else {
+								<ul class="stack-sm">
+									for _, q := range d.Questions {
+										if d.EditingID == q.ID {
+											<li class="panel">
+												@editQuestionForm(c, d, q.ID)
+											</li>
+										} else {
+											<li class="panel row row--between row--wrap" style="gap:10px">
+												<div style="flex:1;min-width:220px">
+													<div class="small bold">{ q.Prompt }</div>
+													<div class="tiny muted">
+														if len(q.Choices) > q.CorrectIndex {
+															{ c.T("sets.answerIs", q.Choices[q.CorrectIndex]) }
+														}
+													</div>
+												</div>
+												<span class="row" style="gap:6px">
+													<a
+														class="btn btn--soft btn--sm"
+														href={ templ.SafeURL(fmt.Sprintf("/my/questions/%s?edit=%d", d.Active.ID.String(), q.ID)) }
+													>
+														{ c.T("common.edit") }
+													</a>
+													<form
+														method="post"
+														action={ templ.SafeURL(fmt.Sprintf("/my/questions/%s/%d/remove", d.Active.ID.String(), q.ID)) }
+													>
+														<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+														<button class="btn btn--ghost btn--sm" type="submit">
+															{ c.T("common.remove") }
+														</button>
+													</form>
+												</span>
+											</li>
+										}
+									}
+								</ul>
+							}
+						</div>
+						<form
+							method="post"
+							action={ templ.SafeURL("/my/questions/" + d.Active.ID.String() + "/add") }
+							class="card stack-sm"
+						>
+							<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+							<span class="card__title">{ c.T("sets.addTitle") }</span>
+							@FormError(c, d.Error)
+							<div class="authored__rows" data-authored>
+								// What was typed comes back on a rejected save,
+								// with the row that was wrong marked. Losing six
+								// questions because the fourth had three answers
+								// is not a thing a form should do.
+								if len(d.Drafts) == 0 {
+									@authoredRow(c, 0, DraftRow{})
+								} else {
+									for i, row := range d.Drafts {
+										@authoredRow(c, i, row)
+									}
+								}
+							</div>
+							<div class="row" style="gap:8px;justify-content:space-between">
+								<button class="btn btn--ghost btn--sm" type="button" data-authored-add>
+									{ c.T("challenge.addQuestion") }
+								</button>
+								<button class="btn btn--primary btn--sm" type="submit">
+									{ c.T("common.save") }
+								</button>
+							</div>
+						</form>
+					}
+				</section>
+			</div>
+		</div>
+	}
+}

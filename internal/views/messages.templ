@@ -1,0 +1,863 @@
+package views
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+type MessagesData struct {
+	Conversations []*models.Conversation
+	// Friends is everyone you could write to but have not. They belong on the
+	// screen for writing to people, rather than one screen away.
+	Friends []*models.UserCard
+	Active  *models.Conversation
+	// Messages is the page of the thread on screen, oldest first.
+	Messages []*models.Message
+	LastID   int64
+	// FirstID is the oldest message on screen, which is where "load earlier"
+	// starts from.
+	FirstID int64
+	// HasOlder reports that the thread goes further back than this page.
+	HasOlder bool
+	// FirstUnread is the message the reader had not seen when they opened the
+	// thread. The divider goes above it, so coming back to forty messages does
+	// not mean scrolling and guessing where you stopped.
+	FirstUnread int64
+	// Query searches the panel — people and what was said to them.
+	Query string
+	// Find searches inside the open thread.
+	Find string
+	// FileLimit is how many files one message may carry. The composer is told
+	// rather than left to discover it by having a send refused.
+	FileLimit int
+	// Tab is which of the three kinds the panel is showing.
+	Tab string
+	// Counts is the unread total behind each segment of the switcher, so a
+	// tab you are not looking at can still say something arrived.
+	Counts map[string]int
+	// Rooms is every room there is, shown on the rooms tab whether or not the
+	// viewer has joined them.
+	Rooms []*models.Conversation
+	// AllFriends is everyone you could write to, whether or not a thread with
+	// them exists. The panel only lists the ones you have not written to; the
+	// sheet has to offer all of them.
+	AllFriends []*models.UserCard
+	// Members is everyone in the open thread, when it has more than two people
+	// in it. Carried with the page so "who is here" is a panel that opens
+	// beside what you are reading rather than a screen you go to.
+	Members []*models.UserCard
+	// RoomPeers is who is in the viewer's room, offered in the picker as people
+	// they can write to without being friends.
+	RoomPeers []*models.UserCard
+}
+
+// NewThreadData backs the screen for starting a group or opening a room.
+type NewThreadData struct {
+	Kind    string
+	Friends []*models.UserCard
+}
+
+templ Messages(c Ctx, d MessagesData) {
+	@Base(c, c.T("messages.title")) {
+		// A message taken back is not news the poller can carry: it asks for
+		// what is newer than the last id, and a withdrawn message is older.
+		<div class={ "chat", chatPaneClass(d) } data-live="message.withdrawn">
+			<aside class="chat__list" data-panel-tab={ d.Tab }>
+				<div class="chat__list-head">
+					<div class="chat__list-top">
+						<h1 class="chat__list-title">{ c.T("messages.title") }</h1>
+						// Opens a panel over this page, not another page: the
+						// list it offers is the one the switcher is already on.
+						<a
+							class="btn btn--ghost btn--icon btn--sm"
+							href="#start"
+							aria-label={ c.T("threads.start") }
+							title={ c.T("threads.start") }
+						>+</a>
+					</div>
+					@threadSwitch(c, d)
+					<form class="chat__panel-search" method="get" action="/messages" role="search">
+						<span class="chat__panel-search-icon" aria-hidden="true">🔍</span>
+						<input
+							class="input input--sm"
+							type="search"
+							name="q"
+							value={ d.Query }
+							placeholder={ c.T("messages.searchAll") }
+							aria-label={ c.T("messages.searchAll") }
+						/>
+						if d.Query != "" {
+							<a class="chat__panel-search-clear" href="/messages" aria-label={ c.T("common.clear") }>✕</a>
+						}
+					</form>
+				</div>
+				<div class="chat__scroll">
+					for _, conv := range d.Conversations {
+						if conv.Kind == d.Tab || (d.Tab == models.ConversationDirect && conv.IsDirect()) {
+							@conversationRow(c, d, conv)
+						}
+					}
+					// Every room there is, not only the ones already joined —
+					// a room nobody can find is not open.
+					if d.Tab == models.ConversationRoom {
+						if len(d.Rooms) > 0 {
+							<div class="chat__group">{ c.T("threads.allRooms") }</div>
+						}
+						for _, room := range d.Rooms {
+							if !room.Joined {
+								@roomRow(c, room)
+							}
+						}
+					}
+					if d.Tab == models.ConversationDirect && len(d.Friends) > 0 {
+						<div class="chat__group">{ c.T("messages.friendsHeading") }</div>
+						for _, f := range d.Friends {
+							<a class="chat__item chat__item--new" href={ templ.SafeURL("/messages/with/" + f.Username) }>
+								<span class="chat__item-link">
+									<span class="chat__ring" style={ AvatarStyle(AvatarSeedFor(f.ID, f.AvatarSeed, f.Username)) }>
+										@AvatarWithPresence(f, "md")
+									</span>
+									<span class="chat__item-body">
+										<span class="chat__item-name truncate">{ f.DisplayName }</span>
+										<span class="chat__item-preview truncate">{ c.T("messages.startConversation") }</span>
+									</span>
+								</span>
+							</a>
+						}
+					}
+					if len(d.Conversations) == 0 && len(d.Friends) == 0 {
+						if d.Query != "" {
+							<p class="muted small" style="padding:16px">{ c.T("messages.noMatches") }</p>
+						} else {
+							@EmptyWithAction("💬", c.T("messages.empty"), "/friends?tab=search", c.T("friends.tab.search"))
+						}
+					}
+				</div>
+				@startSheet(c, d)
+			</aside>
+			if d.Active == nil {
+				<section class="chat__thread">
+					<div class="chat__empty">
+						<div>
+							<div style="font-size:2.4rem;opacity:.5" aria-hidden="true">💬</div>
+							<p class="muted">{ c.T("messages.selectConversation") }</p>
+						</div>
+					</div>
+				</section>
+			} else if !d.Active.Joined {
+				// A room seen from outside it. Every room in the directory
+				// links here, so this is what the link has to lead to: the
+				// room itself and the way in — not its messages, because
+				// joining is a deliberate act that takes you out of whatever
+				// room you are in now.
+				@RoomDoor(c, d.Active, d.Members)
+			} else {
+				<section
+					class="chat__thread"
+					data-thread
+					data-conversation={ d.Active.ID.String() }
+					data-last={ fmt.Sprint(d.LastID) }
+					data-first={ fmt.Sprint(d.FirstID) }
+					data-me={ c.User.ID.String() }
+					data-file-limit={ fmt.Sprint(d.FileLimit) }
+				>
+					// Only where the list is not on screen. Everywhere else the
+					// panel already says who this is, and saying it twice cost
+					// the conversation a row of height.
+					<a class={ "chat__back", templ.KV("chat__back--always", !d.Active.IsDirect()) } href={ templ.SafeURL("/messages?tab=" + d.Active.Kind) }>
+						<span aria-hidden="true" data-back-arrow>←</span>
+						<span class="truncate">{ d.Active.Name() }</span>
+						if !d.Active.IsDirect() {
+							<span class="chat__back-meta">{ c.T("threads.members", d.Active.MemberCount) }</span>
+						}
+					</a>
+					if !d.Active.IsDirect() {
+						// A fragment, not a page: the panel is already rendered
+						// below and opens on :target, so nothing is loaded and
+						// nothing is lost.
+						<a class="chat__members" href="#who" data-who-open>
+							{ c.T("threads.who") }
+						</a>
+					}
+					// Opened from the menu, closed by the ✕. It is a link
+					// rather than a button so it still works with no script.
+					// Open when it is being used, whether that was the menu
+					// (a #find target) or a search already submitted.
+					<div class={ "chat__find", templ.KV("is-open", d.Find != "") } id="find">
+						<form method="get" role="search">
+							<input
+								class="input input--sm"
+								type="search"
+								name="find"
+								value={ d.Find }
+								placeholder={ c.T("messages.search") }
+								aria-label={ c.T("messages.search") }
+								autofocus
+							/>
+							if d.Find != "" {
+								<span class="tiny muted num">{ c.T("messages.matches", len(d.Messages)) }</span>
+							}
+							<a
+								class="btn btn--ghost btn--icon btn--sm"
+								href={ templ.SafeURL("/messages/" + d.Active.ID.String()) }
+								aria-label={ c.T("common.clear") }
+							>✕</a>
+						</form>
+					</div>
+					if !d.Active.IsDirect() {
+						@WhoPanel(c, d.Active, d.Members)
+					}
+					// The strings the live thread needs, so JavaScript never
+					// carries English of its own.
+					<template data-i18n-withdrawn>{ c.T("messages.withdrawn") }</template>
+					<template data-i18n-error>{ c.T("error.generic") }</template>
+					<template data-i18n-today>{ c.T("messages.today") }</template>
+					<template data-i18n-yesterday>{ c.T("messages.yesterday") }</template>
+					<template data-i18n-copied>{ c.T("messages.copied") }</template>
+					<template data-i18n-notread>{ c.T("messages.notReadYet") }</template>
+					<template data-i18n-you>{ c.T("messages.you") }</template>
+					<template data-i18n-them>{ d.Active.Name() }</template>
+					<template data-i18n-recording>{ c.T("messages.recording") }</template>
+					<template data-i18n-nomic>{ c.T("messages.noMicrophone") }</template>
+					<template data-i18n-voice>{ c.T("messages.voiceNote") }</template>
+					<template data-i18n-toomany>{ c.T("upload.tooMany", d.FileLimit) }</template>
+					<template data-i18n-play>{ c.T("messages.play") }</template>
+					<template data-i18n-pause>{ c.T("messages.pause") }</template>
+					<div class="chat__log" data-log>
+						if d.HasOlder {
+							<div class="chat__older">
+								<button class="btn btn--soft btn--sm" type="button" data-older>
+									{ c.T("messages.older") }
+								</button>
+							</div>
+						}
+						if len(d.Messages) == 0 {
+							<div class="chat__empty">
+								if d.Find != "" {
+									<p class="muted small">{ c.T("messages.noMatches") }</p>
+								} else {
+									<p class="muted small">{ c.T("messages.emptyThread") }</p>
+								}
+							</div>
+						}
+						for _, row := range threadRows(c, d) {
+							if row.Day != "" {
+								<div class="chat__date" data-day={ row.DayKey }>{ row.Day }</div>
+							}
+							if row.Unread {
+								<div class="chat__since">
+									<span>{ c.T("messages.newSince") }</span>
+								</div>
+							}
+							@Bubble(c, d.Active, row.Msg)
+						}
+					</div>
+					@messageMenu(c, d.Active)
+					@emojiPicker(c)
+					<form
+						class="chat__compose"
+						method="post"
+						action={ templ.SafeURL("/messages/" + d.Active.ID.String()) }
+						enctype="multipart/form-data"
+						data-compose
+					>
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<input type="hidden" name="reply_to" value="" data-reply-id/>
+						<div class="chat__replying" data-replying hidden>
+							<div class="chat__replying-body">
+								<span class="chat__replying-who" data-replying-who></span>
+								<span class="chat__replying-text truncate" data-replying-text></span>
+							</div>
+							<button
+								class="btn btn--ghost btn--icon btn--sm"
+								type="button"
+								data-replying-cancel
+								aria-label={ c.T("messages.cancelReply") }
+								title={ c.T("messages.cancelReply") }
+							>✕</button>
+						</div>
+						// The chosen file lives in this input until the message is
+						// sent, so a failed send leaves nothing on disk.
+						<input
+							class="chat__file-input"
+							type="file"
+							name="file"
+							data-file
+							accept="image/*,audio/*,application/pdf,text/plain"
+							multiple
+							hidden
+						/>
+						// One chip for each file waiting to be sent. The shelf is
+						// empty until something is picked, and the chip is cloned from
+						// the template below so its words are the server's and not the
+						// script's.
+						<div class="chat__shelf" data-shelf hidden></div>
+						<template data-chip>
+							<div class="chat__attached">
+								<span class="chat__attached-kind" aria-hidden="true" data-attached-kind>📎</span>
+								<span class="chat__attached-name truncate" data-attached-name></span>
+								<span class="chat__attached-size tiny muted" data-attached-size></span>
+								<button
+									class="btn btn--ghost btn--icon btn--sm"
+									type="button"
+									data-attached-clear
+									aria-label={ c.T("common.clear") }
+									title={ c.T("common.clear") }
+								>✕</button>
+							</div>
+						</template>
+						// One row: the field you write in, and send.
+						//
+						// Everything you can add to a message lives inside the field
+						// rather than beside it. Four separate buttons in a row read as
+						// four controls before they read as ways to add something to
+						// what you are writing, and they took the width the writing
+						// needed.
+						<div class="chat__row">
+							<div class="chat__field">
+								<button
+									class="chat__tool chat__emoji-open"
+									type="button"
+									data-emoji-open
+									aria-haspopup="true"
+									aria-expanded="false"
+									aria-label={ c.T("messages.emoji") }
+									title={ c.T("messages.emoji") }
+								>
+									@IconSmile()
+								</button>
+								<textarea
+									class="chat__input"
+									name="body"
+									rows="1"
+									maxlength="2000"
+									placeholder={ c.T("messages.placeholder") }
+									data-input
+								></textarea>
+								<span class="chat__clock num" data-record-clock hidden aria-live="polite"></span>
+								<button
+									class="chat__tool"
+									type="button"
+									data-file-open
+									aria-label={ c.T("messages.attach") }
+									title={ c.T("messages.attach") }
+								>
+									@IconPaperclip()
+								</button>
+								<button
+									class="chat__tool chat__tool--mic"
+									type="button"
+									data-record
+									aria-label={ c.T("messages.record") }
+									title={ c.T("messages.record") }
+								>
+									@IconMic()
+								</button>
+							</div>
+							<button
+								class="chat__send"
+								type="submit"
+								data-send
+								aria-label={ c.T("messages.send") }
+								title={ c.T("messages.send") }
+							>
+								@IconSend()
+							</button>
+						</div>
+					</form>
+				</section>
+			}
+		</div>
+	}
+}
+
+// conversationRow is one person in the panel: the thread, and everything you
+// can do about it. The menu is here rather than over the conversation because
+// this row is already saying who they are.
+templ conversationRow(c Ctx, d MessagesData, conv *models.Conversation) {
+	<div
+		class={
+			"chat__item",
+			templ.KV("is-active", d.Active != nil && d.Active.ID == conv.ID),
+			templ.KV("is-unread", conv.UnreadCount > 0),
+		}
+		data-conv={ conv.ID.String() }
+	>
+		<a class="chat__item-link" href={ templ.SafeURL("/messages/" + conv.ID.String()) }>
+			@threadMark(c, conv)
+			<span class="chat__item-body">
+				<span class="chat__item-name truncate">
+					{ conv.Name() }
+					if conv.Muted {
+						<span class="chat__muted" aria-label={ c.T("messages.muted") } title={ c.T("messages.muted") }>🔕</span>
+					}
+				</span>
+				<span class="chat__item-preview truncate">{ previewText(c, conv) }</span>
+			</span>
+			// When it was, and how much of it is unread — one under the other
+			// at the end of the row, so a long name and a long preview both get
+			// the whole width instead of stopping short of the clock.
+			<span class="chat__item-aside">
+				<span class="chat__item-time">{ c.Tr.RelativeTime(conv.LastMessageAt) }</span>
+				if conv.UnreadCount > 0 {
+					<span class="count-dot" aria-label={ c.T("messages.unread", conv.UnreadCount) }>{ fmt.Sprint(conv.UnreadCount) }</span>
+				}
+			</span>
+		</a>
+		// data-dropdown is what the script binds on — the class alone only
+		// styles it. data-dropdown-float lifts the menu out of the scrolling
+		// panel, which would otherwise clip it for every row near the bottom.
+		<div class="dropdown chat__item-menu" data-dropdown data-dropdown-float>
+			<button
+				class="btn btn--ghost btn--icon btn--sm"
+				type="button"
+				data-dropdown-trigger
+				aria-haspopup="true"
+				aria-expanded="false"
+				aria-label={ c.T("messages.menu") }
+				title={ c.T("messages.menu") }
+			>⋮</button>
+			<div class="dropdown__menu dropdown__menu--end" data-dropdown-menu>
+				// Challenging somebody and looking at their profile are things
+				// you do to a person. A group has several and a room has a
+				// list; both answer "who is here" instead.
+				if conv.IsDirect() && conv.Other != nil {
+					<a
+						class="dropdown__item"
+						href={ templ.SafeURL("/challenges/new?opponent=" + conv.Other.Username + "&group=" + models.SourceFriends) }
+					>
+						<span aria-hidden="true">⚔️</span> { c.T("friends.challenge") }
+					</a>
+					<a class="dropdown__item" href={ templ.SafeURL("/u/" + conv.Other.Username) }>
+						<span aria-hidden="true">👤</span> { c.T("nav.profile") }
+					</a>
+				} else {
+					<a class="dropdown__item" href={ templ.SafeURL("/messages/" + conv.ID.String() + "#who") }>
+						<span aria-hidden="true">👥</span> { c.T("threads.who") }
+					</a>
+				}
+				<a class="dropdown__item" href={ templ.SafeURL("/messages/" + conv.ID.String() + "#find") }>
+					<span aria-hidden="true">🔍</span> { c.T("messages.search") }
+				</a>
+				<hr class="divider"/>
+				<form method="post" action={ templ.SafeURL("/messages/" + conv.ID.String() + "/mute") }>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<input type="hidden" name="muted" value={ mutedToggle(conv) }/>
+					<button class="dropdown__item" type="submit">
+						if conv.Muted {
+							<span aria-hidden="true">🔔</span> { c.T("messages.unmute") }
+						} else {
+							<span aria-hidden="true">🔕</span> { c.T("messages.mute") }
+						}
+					</button>
+				</form>
+				// Blocking is between two people. In a group it would silence
+				// one member for everybody, which is not what it means; the
+				// way out of a room is to leave it.
+				if conv.IsDirect() && conv.Other != nil {
+					<form
+						method="post"
+						action="/friends/block"
+						data-confirm={ c.T("friends.block") + " — " + conv.Other.DisplayName }
+					>
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<input type="hidden" name="username" value={ conv.Other.Username }/>
+						<button class="dropdown__item dropdown__item--danger" type="submit">
+							<span aria-hidden="true">🚫</span> { c.T("friends.block") }
+						</button>
+					</form>
+				} else {
+					<form
+						method="post"
+						action={ templ.SafeURL("/messages/" + conv.ID.String() + "/leave") }
+						data-confirm={ c.T("threads.leaveConfirm") }
+					>
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<button class="dropdown__item dropdown__item--danger" type="submit">
+							<span aria-hidden="true">🚪</span> { c.T("threads.leave") }
+						</button>
+					</form>
+				}
+				<form
+					method="post"
+					action={ templ.SafeURL("/messages/" + conv.ID.String() + "/delete") }
+					data-confirm={ c.T("messages.deleteConfirm", conv.Name()) }
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="dropdown__item dropdown__item--danger" type="submit">
+						<span aria-hidden="true">🗑️</span> { c.T("messages.delete") }
+					</button>
+				</form>
+			</div>
+		</div>
+	</div>
+}
+
+// Bubble is one message. Rendered on the server and mirrored by the live
+// stream, so an arriving message looks the same as one that was already there.
+templ Bubble(c Ctx, conv *models.Conversation, m *models.Message) {
+	{{ mine := c.User != nil && m.SenderID == c.User.ID }}
+	{{ author := senderCard(conv, m, viewerID(c)) }}
+	<div
+		class={ "bubble-row", bubbleRowClass(c, m) }
+		data-message={ fmt.Sprint(m.ID) }
+		id={ fmt.Sprintf("m%d", m.ID) }
+		data-mine={ boolAttr(mine) }
+		data-withdrawn={ boolAttr(m.Withdrawn()) }
+		data-sent={ m.CreatedAt.Format(time.RFC3339) }
+		data-read={ readStamp(m) }
+	>
+		if author != nil {
+			// The face beside what somebody said, in a thread where more than
+			// one person could have said it.
+			<span class="bubble__who" title={ author.DisplayName }>
+				@AvatarWithPresence(author, "xs")
+			</span>
+		}
+		<div class="bubble__col">
+			if author != nil {
+				<span class="bubble__name" style={ AvatarStyle(AvatarSeedFor(author.ID, author.AvatarSeed, author.Username)) }>{ author.DisplayName }</span>
+			}
+			<div class={ "bubble", bubbleClass(c, m), templ.KV("bubble--gone", m.Withdrawn()) }>
+				if m.ReplyTo != nil && !m.Withdrawn() {
+					// The line being answered, and a way back to it. Without the
+					// quote a reply arriving an hour later answers nothing you can
+					// see.
+					<a class="bubble__quote" href={ templ.SafeURL(fmt.Sprintf("#m%d", m.ReplyTo.ID)) }>
+						<span class="bubble__quote-who">{ quoteAuthor(c, conv.Other, m.ReplyTo) }</span>
+						if m.ReplyTo.Withdrawn {
+							<span class="bubble__quote-body muted">{ c.T("messages.withdrawn") }</span>
+						} else {
+							<span class="bubble__quote-body truncate">{ m.ReplyTo.Body }</span>
+						}
+					</a>
+				}
+				if m.Withdrawn() {
+					<span class="bubble__gone">{ c.T("messages.withdrawn") }</span>
+				} else {
+					if m.Attachment != nil {
+						@attachmentView(c, m.Attachment)
+					}
+					if m.Body != "" {
+						<span>{ m.Body }</span>
+					}
+				}
+			</div>
+			// Under the bubble rather than inside it. A time floated into the
+			// last line meant every message reserved room for it, so a
+			// two-word message was as wide as the clock beside it.
+			<span class={ "bubble__meta", templ.KV("is-read", mine && m.Read() && !m.Withdrawn()) }>
+				<span class="bubble__time num">{ m.CreatedAt.Format("15:04") }</span>
+				// Read receipts on your own messages only: whether they have
+				// read it is news to you, not to them.
+				if mine && !m.Withdrawn() {
+					<span class="bubble__seen" aria-hidden="true">
+						if m.Read() {
+							{ "✓✓" }
+						} else {
+							{ "✓" }
+						}
+					</span>
+				}
+			</span>
+		</div>
+		<button
+			class="bubble__menu"
+			type="button"
+			data-message-menu={ fmt.Sprint(m.ID) }
+			aria-haspopup="true"
+			aria-expanded="false"
+			aria-label={ c.T("messages.messageMenu") }
+			title={ c.T("messages.messageMenu") }
+		>⋮</button>
+	</div>
+}
+
+// voiceNote is a recording: one button, the shape of the sound, and how long
+// it runs.
+//
+// The browser's own player was what stood here, and it is the wrong control
+// for a voice note. It is as wide as a video scrubber, it renders differently
+// in every browser, and it reads its length from the file — which for a WebM
+// stream out of MediaRecorder is nothing at all, so a seven-second recording
+// announced itself as 0:00 / 0:00. The real player is still here, carrying the
+// bytes; what is drawn over it is this.
+templ voiceNote(c Ctx, a *models.Attachment) {
+	<span class="voice" data-voice>
+		<button
+			class="voice__play"
+			type="button"
+			data-voice-play
+			aria-label={ c.T("messages.play") }
+			title={ c.T("messages.play") }
+		>
+			@IconPlay()
+		</button>
+		// The bars are a progress track in the shape of a sound, not a reading
+		// of this recording's own amplitude — decoding audio to draw a true
+		// waveform is not something the server does. Their heights come from
+		// the attachment's id, so one recording always looks like itself.
+		<span class="voice__wave" aria-hidden="true" data-voice-wave>
+			for _, h := range waveform(a.ID.String()) {
+				<i style={ fmt.Sprintf("--h:%d%%", h) }></i>
+			}
+		</span>
+		<span class="voice__time num" data-voice-time>
+			if a.Length() != "" {
+				{ a.Length() }
+			} else {
+				{ "–:––" }
+			}
+		</span>
+		<audio data-voice-audio preload="none" src={ "/files/" + a.ID.String() }></audio>
+	</span>
+}
+
+// waveform turns an id into the bar heights drawn for it. The same id always
+// gives the same shape, so a recording does not change appearance between one
+// page and the next.
+func waveform(id string) []int {
+	const bars = 26
+	out := make([]int, bars)
+	// FNV-1a over the whole id before any bar is drawn. Taking one byte per
+	// bar instead read only the first twenty-six characters, and two ids that
+	// differ in their last digit — which is what consecutive ids do — came out
+	// as the same picture.
+	h := uint32(2166136261)
+	for i := 0; i < len(id); i++ {
+		h ^= uint32(id[i])
+		h *= 16777619
+	}
+	for i := 0; i < bars; i++ {
+		h ^= uint32(i)
+		h *= 16777619
+		out[i] = 30 + int(h>>17)%70
+	}
+	return out
+}
+
+// attachmentView draws what a message carries: shown if it can be shown,
+// played if it can be played, and offered as a file otherwise.
+templ attachmentView(c Ctx, a *models.Attachment) {
+	switch a.Kind {
+		case models.AttachmentImage:
+			<a class="bubble__image" href={ templ.SafeURL("/files/" + a.ID.String()) } target="_blank" rel="noopener">
+				<img src={ "/files/" + a.ID.String() } alt={ a.Name } loading="lazy"/>
+			</a>
+		case models.AttachmentAudio:
+			@voiceNote(c, a)
+		default:
+			<a class="bubble__file" href={ templ.SafeURL("/files/" + a.ID.String()) }>
+				<span class="bubble__file-icon" aria-hidden="true">📎</span>
+				<span class="bubble__file-body">
+					<span class="bubble__file-name truncate">{ a.Name }</span>
+					<span class="bubble__file-size tiny">{ a.Size() }</span>
+				</span>
+			</a>
+	}
+}
+
+// messageMenu is one menu for the whole thread, opened against whichever
+// bubble asked for it.
+//
+// Per-bubble markup would be the same twelve elements repeated eighty times,
+// and the live renderer would have to build them again in JavaScript. One menu
+// that moves is the same thing with one copy of it.
+templ messageMenu(c Ctx, conv *models.Conversation) {
+	<div
+		class="msg-menu"
+		data-message-menu-panel
+		data-conversation={ conv.ID.String() }
+		role="menu"
+		hidden
+	>
+		<div class="msg-menu__details" data-menu-details>
+			<div><span class="muted">{ c.T("messages.sentAt") }</span> <span data-menu-sent></span></div>
+			<div data-menu-read-row>
+				<span class="muted">{ c.T("messages.readAt") }</span> <span data-menu-read></span>
+			</div>
+		</div>
+		<hr class="divider"/>
+		<button class="dropdown__item" type="button" data-menu-reply role="menuitem">
+			<span aria-hidden="true">↩️</span> { c.T("messages.reply") }
+		</button>
+		<button class="dropdown__item" type="button" data-menu-copy role="menuitem">
+			<span aria-hidden="true">📋</span> { c.T("messages.copy") }
+		</button>
+		<button class="dropdown__item" type="button" data-menu-hide role="menuitem">
+			<span aria-hidden="true">🙈</span> { c.T("messages.hideForMe") }
+		</button>
+		<button
+			class="dropdown__item dropdown__item--danger"
+			type="button"
+			data-menu-withdraw
+			data-confirm={ c.T("messages.withdrawConfirm") }
+			role="menuitem"
+		>
+			<span aria-hidden="true">🗑️</span> { c.T("messages.withdrawForAll") }
+		</button>
+	</div>
+}
+
+// readStamp is when the other person read it, or empty while they have not.
+func readStamp(m *models.Message) string {
+	if m.ReadAt == nil {
+		return ""
+	}
+	return m.ReadAt.Format(time.RFC3339)
+}
+
+// emojiPicker is the panel the composer opens.
+//
+// Its catalogue is fetched from /static/emoji.json the first time it opens
+// rather than shipped in the page: three hundred and sixty characters is a
+// real weight to put on every screen in the app for the sake of one.
+//
+// The tabs are emoji themselves. A row of translated group names would be
+// three more strings per locale saying what the picture already says.
+templ emojiPicker(c Ctx) {
+	<div class="emoji" data-emoji-panel hidden>
+		<div class="emoji__tabs" data-emoji-tabs role="tablist"></div>
+		<input
+			class="input input--sm emoji__search"
+			type="search"
+			data-emoji-search
+			placeholder={ c.T("messages.emojiSearch") }
+			aria-label={ c.T("messages.emojiSearch") }
+		/>
+		<div class="emoji__grid" data-emoji-grid role="listbox"></div>
+		<p class="emoji__empty tiny muted" data-emoji-empty hidden>{ c.T("messages.noMatches") }</p>
+	</div>
+}
+
+// quoteAuthor names who wrote the line being answered.
+// Their name, not "them". The panel beside this is already saying it, and a
+// quote that refuses to name the one person in the conversation reads as
+// though it does not know who they are.
+func quoteAuthor(c Ctx, other *models.UserCard, q *models.MessageQuote) string {
+	if c.User != nil && q.SenderID == c.User.ID {
+		return c.T("messages.you")
+	}
+	if other != nil {
+		return other.DisplayName
+	}
+	return c.T("messages.them")
+}
+
+// threadRow is one message plus whatever has to be said above it: the day it
+// belongs to, and the line where the reader left off.
+type threadRow struct {
+	Msg    *models.Message
+	Day    string
+	DayKey string
+	Unread bool
+}
+
+func threadRows(c Ctx, d MessagesData) []threadRow {
+	out := make([]threadRow, 0, len(d.Messages))
+	previous := ""
+	for _, m := range d.Messages {
+		row := threadRow{Msg: m, DayKey: m.CreatedAt.Format("2006-01-02")}
+		if row.DayKey != previous {
+			row.Day = dayLabel(c, m.CreatedAt)
+			previous = row.DayKey
+		}
+		row.Unread = d.FirstUnread > 0 && m.ID == d.FirstUnread
+		out = append(out, row)
+	}
+	return out
+}
+
+// dayLabel names the day a message belongs to. "Today" and "yesterday" are
+// what people actually call them; anything older gets its date.
+func dayLabel(c Ctx, t time.Time) string {
+	today := time.Now().Truncate(24 * time.Hour)
+	day := t.Truncate(24 * time.Hour)
+	switch {
+	case day.Equal(today):
+		return c.T("messages.today")
+	case day.Equal(today.AddDate(0, 0, -1)):
+		return c.T("messages.yesterday")
+	default:
+		return c.Tr.Date(t)
+	}
+}
+
+func mutedToggle(conv *models.Conversation) string {
+	if conv.Muted {
+		return "0"
+	}
+	return "1"
+}
+
+func bubbleRowClass(c Ctx, m *models.Message) string {
+	if c.User != nil && m.SenderID == c.User.ID {
+		return "bubble-row--out"
+	}
+	return "bubble-row--in"
+}
+
+func bubbleClass(c Ctx, m *models.Message) string {
+	if c.User != nil && m.SenderID == c.User.ID {
+		return "bubble--out"
+	}
+	return "bubble--in"
+}
+
+func chatPaneClass(d MessagesData) string {
+	if d.Active == nil {
+		return "chat--list-only"
+	}
+	return "chat--thread-only"
+}
+
+// ConversationPreview is the panel's one line about a thread, for the handler
+// that refreshes the panel without reloading it. The line the page was first
+// drawn with and the line it is repainted with have to be the same line, so
+// there is one function that decides it.
+func ConversationPreview(c Ctx, conv *models.Conversation) string { return previewText(c, conv) }
+
+// senderCard is who wrote a message, for the threads where that is a question.
+// A pair answers it by which side the bubble is on, so it returns nothing
+// there rather than putting a name over every line.
+// SenderCard is senderCard for the handler that renders messages as JSON. One
+// function decides who wrote a message, so the page and the poller agree.
+func SenderCard(conv *models.Conversation, m *models.Message, viewerID uuid.UUID) *models.UserCard {
+	return senderCard(conv, m, viewerID)
+}
+
+func senderCard(conv *models.Conversation, m *models.Message, viewerID uuid.UUID) *models.UserCard {
+	if conv == nil || conv.IsDirect() || m.SenderID == viewerID {
+		return nil
+	}
+	// Not over your own messages — the caller passes its own id for that, and
+	// a name and a face on every line you wrote is a column of yourself down
+	// one side of the thread.
+	for _, u := range conv.Members {
+		if u.ID == m.SenderID {
+			return u
+		}
+	}
+	return nil
+}
+
+func previewText(c Ctx, conv *models.Conversation) string {
+	if conv.LastMessage == "" {
+		return c.T("messages.emptyThread")
+	}
+	if conv.LastSenderID != nil && c.User != nil && *conv.LastSenderID == c.User.ID {
+		return "↩ " + conv.LastMessage
+	}
+	return conv.LastMessage
+}
+
+// viewerID is who is reading, or the zero id when nobody is signed in.
+func viewerID(c Ctx) uuid.UUID {
+	if c.User == nil {
+		return uuid.Nil
+	}
+	return c.User.ID
+}

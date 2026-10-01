@@ -1,0 +1,169 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+type HistoryData struct {
+	Games []*models.GameSession
+	Mode  string
+	Pager Pager
+	Total int
+}
+
+templ History(c Ctx, d HistoryData) {
+	@Base(c, c.T("history.title")) {
+		<div class="shell stack">
+			@BackLink(c, "/app", c.T("nav.home"))
+			@PageHead(c.T("history.title"), fmt.Sprintf("%d", d.Total)) {
+				<div class="segment scroll-x">
+					@tabItem(c, "/history", c.T("history.filter.all"), d.Mode == "")
+					@tabItem(c, "/history?mode=solo", c.T("history.mode.solo"), d.Mode == "solo")
+					@tabItem(c, "/history?mode=challenge", c.T("history.mode.challenge"), d.Mode == "challenge")
+					@tabItem(c, "/history?mode=daily", c.T("history.mode.daily"), d.Mode == "daily")
+				</div>
+			}
+			if len(d.Games) == 0 {
+				@EmptyWithAction("📜", c.T("history.empty"), "/play", c.T("nav.play"))
+			} else {
+				<div class="card card--flush">
+					for _, g := range d.Games {
+						<a class="history-row" href={ templ.SafeURL("/history/" + g.ID.String()) }>
+							<div class="history-row__icon" aria-hidden="true">{ gameIcon(g) }</div>
+							<div style="flex:1;min-width:0">
+								<div class="bold small truncate">{ gameTitle(c, g) }</div>
+								<div class="tiny muted">
+									{ c.T(ModeKey(g.Mode)) } · { c.T(DifficultyKey(g.Difficulty)) } · { c.Tr.DateTime(g.StartedAt) }
+								</div>
+							</div>
+							if g.Status == models.StatusAbandoned {
+								<span class="tag">{ c.T("history.abandoned") }</span>
+							} else {
+								<div style="text-align:end">
+									<div class="bold num">{ fmt.Sprint(g.Score) }</div>
+									<div class="tiny muted num">
+										{ fmt.Sprintf("%d/%d · %d%%", g.CorrectCount, g.TotalQuestions, g.Accuracy()) }
+									</div>
+								</div>
+							}
+						</a>
+					}
+				</div>
+				@PagerBar(c, d.Pager)
+			}
+		</div>
+	}
+}
+
+// -------------------------------------------------------------- the review --
+
+type ReviewData struct {
+	Session   *models.GameSession
+	Answers   []*models.GameAnswer
+	Challenge *models.Challenge
+
+	// CommentCounts is keyed by question id, so the review screen can show
+	// whether a question already has notes without a query per row.
+	CommentCounts map[int64]int
+}
+
+func (d ReviewData) Comments(questionID int) int {
+	if d.CommentCounts == nil {
+		return 0
+	}
+	return d.CommentCounts[int64(questionID)]
+}
+
+templ Review(c Ctx, d ReviewData) {
+	@Base(c, c.T("history.review.title")) {
+		<div class="shell shell--narrow stack">
+			@BackLink(c, "/history", c.T("history.title"))
+			<section class="card stack-sm">
+				<div class="row row--between row--wrap">
+					<div>
+						<h1 style="font-size:1.25rem">{ gameTitle(c, d.Session) }</h1>
+						<p class="tiny muted">
+							{ c.T(ModeKey(d.Session.Mode)) } · { c.Tr.DateTime(d.Session.StartedAt) }
+						</p>
+					</div>
+					<div style="text-align:end">
+						<div style="font-size:1.6rem;font-weight:800" class="num">{ fmt.Sprint(d.Session.Score) }</div>
+						<div class="tiny muted num">
+							{ fmt.Sprintf("%d/%d · %d%%", d.Session.CorrectCount, d.Session.TotalQuestions, d.Session.Accuracy()) }
+						</div>
+					</div>
+				</div>
+			</section>
+			if d.Challenge != nil {
+				@DuelScoreboard(c, d.Challenge)
+			}
+			<div class="stack">
+				for _, a := range d.Answers {
+					@reviewItem(c, a, d.Session.Locale, d.Comments(a.QuestionID))
+				}
+			</div>
+		</div>
+	}
+}
+
+templ reviewItem(c Ctx, a *models.GameAnswer, contentLocale string, commentCount int) {
+	<article class={ "review-item", reviewClass(a) }>
+		<div class="row row--between" style="margin-block-end:10px">
+			<span class="tiny muted">{ c.T("history.review.question", a.Position + 1) }</span>
+			if a.IsCorrect {
+				<span class="tag tag--success num">{ fmt.Sprintf("+%d", a.PointsAwarded) }</span>
+			} else {
+				<span class="tag tag--danger">✕</span>
+			}
+		</div>
+		<p class="bold" style="margin-block-end:12px" lang={ contentLocale } dir={ ContentDir(contentLocale) }>
+			{ a.Prompt }
+		</p>
+		<div class="stack-sm" lang={ contentLocale } dir={ ContentDir(contentLocale) }>
+			for i, choice := range a.Choices {
+				<div class={ "review-opt", reviewOptClass(a, i) }>
+					<span class="answer__key" aria-hidden="true">{ AnswerKey(c.Locale, i) }</span>
+					<span style="flex:1">{ choice }</span>
+					if i == a.CorrectIndex {
+						<span aria-hidden="true">✓</span>
+						<span class="sr-only">{ c.T("history.review.correctAnswer") }</span>
+					} else if i == a.SelectedIndex {
+						<span aria-hidden="true">✕</span>
+						<span class="sr-only">{ c.T("history.review.yourAnswer") }</span>
+					}
+				</div>
+			}
+		</div>
+		if a.SelectedIndex < 0 {
+			<p class="tiny muted" style="margin-block-start:10px">{ c.T("history.review.noAnswer") }</p>
+		}
+		if a.Explanation != "" {
+			<div class="panel" style="margin-block-start:12px">
+				<p class="small" lang={ contentLocale } dir={ ContentDir(contentLocale) }>{ a.Explanation }</p>
+			</div>
+		}
+		<div class="row" style="margin-block-start:12px;justify-content:flex-end">
+			@CommentLink(c, a.QuestionID, commentCount)
+		</div>
+	</article>
+}
+
+func reviewClass(a *models.GameAnswer) string {
+	if a.IsCorrect {
+		return "review-item--correct"
+	}
+	return "review-item--wrong"
+}
+
+func reviewOptClass(a *models.GameAnswer, i int) string {
+	switch {
+	case i == a.CorrectIndex:
+		return "review-opt--correct"
+	case i == a.SelectedIndex:
+		return "review-opt--wrong"
+	default:
+		return ""
+	}
+}

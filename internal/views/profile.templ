@@ -1,0 +1,319 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+type ProfileData struct {
+	Profile  *models.User
+	Stats    *models.UserStats
+	Badges   []*models.Badge
+	Recent   []*models.GameSession
+	Relation models.RelationState
+	Rank     int
+	IsSelf   bool
+}
+
+templ Profile(c Ctx, d ProfileData) {
+	@Base(c, d.Profile.DisplayName) {
+		// The friend button here is a relationship, and relationships change
+		// while somebody is looking at them.
+		<div class="shell stack-lg" data-live="friend.request friend.accepted">
+			if !d.IsSelf {
+				@BackLink(c, "/app", c.T("nav.home"))
+			}
+			<section class="profile-hero">
+				<span
+					class={ "avatar", "avatar--xl", templ.KV("avatar--photo", HasAvatarPhoto(d.Profile.AvatarSeed)) }
+					style={ AvatarStyle(AvatarSeedFor(d.Profile.ID, d.Profile.AvatarSeed, d.Profile.Username)) }
+				>
+					if !HasAvatarPhoto(d.Profile.AvatarSeed) {
+						{ Initial(d.Profile.DisplayName) }
+					}
+				</span>
+				<div class="profile-hero__body stack-sm">
+					<div>
+						<h1 style="font-size:1.6rem">{ d.Profile.DisplayName }</h1>
+						<p class="muted small">
+							{ "@" + d.Profile.Username }
+							if d.Profile.Country != "" {
+								{ " · " + d.Profile.Country }
+							}
+							{ fmt.Sprintf(" · #%d", d.Rank) }
+						</p>
+					</div>
+					if d.Profile.Bio != "" {
+						<p class="small">{ d.Profile.Bio }</p>
+					} else if d.IsSelf {
+						<p class="small faint">{ c.T("profile.noBio") }</p>
+					}
+					@LevelBar(c, d.Profile)
+					<p class="tiny faint">{ c.T("profile.memberSince", c.Tr.Date(d.Profile.CreatedAt)) }</p>
+				</div>
+				<div class="stack-sm">
+					@profileActions(c, d)
+				</div>
+			</section>
+			<section class="grid grid--stats">
+				@StatTile("🎯", fmt.Sprint(d.Stats.GamesPlayed), c.T("profile.stat.games"))
+				@StatTile("📊", fmt.Sprintf("%d%%", d.Stats.AvgAccuracy), c.T("profile.stat.accuracy"))
+				@StatTile("⚡", fmt.Sprint(d.Stats.BestStreak), c.T("profile.stat.bestStreak"))
+				@StatTile("💎", fmt.Sprint(d.Stats.PerfectRounds), c.T("profile.stat.perfect"))
+				@StatTile("⚔️", fmt.Sprint(d.Stats.ChallengesWon), c.T("profile.stat.wins"))
+				@StatTile("🤝", fmt.Sprint(d.Stats.FriendCount), c.T("profile.stat.friends"))
+				@StatTile("⭐", fmt.Sprint(d.Profile.XP), c.T("profile.xp"))
+				@StatTile("🪙", fmt.Sprint(d.Profile.Coins), c.T("profile.stat.coins"))
+				@StatTile("🏅", fmt.Sprint(earnedCount(d.Badges)), c.T("profile.badges"))
+			</section>
+			<div class="grid grid--2">
+				<section class="card stack">
+					<div class="card__head" style="margin:0">
+						<span class="card__title">{ c.T("profile.byCategory") }</span>
+					</div>
+					if len(d.Stats.ByCategory) == 0 {
+						@Empty("📚", c.T("profile.byCategory.empty"))
+					} else {
+						<div class="stack-sm">
+							for _, cs := range d.Stats.ByCategory {
+								<div>
+									<div class="row row--between" style="margin-block-end:5px">
+										<span class="small">
+											<span aria-hidden="true">{ cs.CategoryIcon }</span>
+											{ cs.CategoryName }
+										</span>
+										<span class="tiny muted num">
+											{ fmt.Sprintf("%d/%d · %d%%", cs.Correct, cs.Total, cs.Accuracy) }
+										</span>
+									</div>
+									<div class="bar bar--thin">
+										<div
+											class="bar__fill"
+											style={ fmt.Sprintf("width:%d%%;background:%s", cs.Accuracy, cs.Color) }
+										></div>
+									</div>
+								</div>
+							}
+						</div>
+					}
+				</section>
+				<section class="card stack">
+					<div class="card__head" style="margin:0">
+						<span class="card__title">{ c.T("profile.activity") }</span>
+					</div>
+					@activityChart(c, d.Stats.Last7Days)
+				</section>
+			</div>
+			<section class="card stack">
+				<div class="card__head" style="margin:0">
+					<span class="card__title">{ c.T("profile.badges") }</span>
+				</div>
+				if earnedCount(d.Badges) == 0 {
+					<p class="small muted">{ c.T("profile.badges.empty") }</p>
+				}
+				<div class="grid grid--badges">
+					for _, b := range d.Badges {
+						<div
+							class={ "badge-tile", templ.KV("badge-tile--locked", !b.Earned()) }
+							title={ b.Description }
+						>
+							<span class="badge-tile__icon" aria-hidden="true">{ b.Icon }</span>
+							<span class="badge-tile__name">{ b.Name }</span>
+							if b.Earned() {
+								<span class="tiny faint">{ c.Tr.Date(*b.EarnedAt) }</span>
+							} else {
+								<span class="tiny faint">{ c.T("profile.badges.locked") }</span>
+							}
+						</div>
+					}
+				</div>
+			</section>
+			if len(d.Recent) > 0 {
+				<section class="card card--flush">
+					<div class="card__head" style="padding:18px 20px 0;margin:0">
+						<span class="card__title">{ c.T("home.activity.title") }</span>
+						if d.IsSelf {
+							<a class="tiny bold" style="color:var(--accent)" href="/history">
+								{ c.T("common.viewAll") }
+							</a>
+						}
+					</div>
+					<div style="padding:10px 0">
+						for _, g := range d.Recent {
+							@historyRow(c, g)
+						}
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
+
+templ profileActions(c Ctx, d ProfileData) {
+	if d.IsSelf {
+		<a class="btn btn--ghost btn--sm" href="/profile/edit">{ c.T("profile.edit") }</a>
+		<a class="btn btn--ghost btn--sm" href="/settings">{ c.T("nav.settings") }</a>
+	} else {
+		@RelationActions(c, d.Profile.Username, d.Relation, false)
+	}
+}
+
+templ activityChart(c Ctx, days []models.DayStat) {
+	<div class="spark">
+		for _, d := range days {
+			<div class="spark__col">
+				<div
+					class={ "spark__bar", templ.KV("spark__bar--on", d.Games > 0) }
+					style={ fmt.Sprintf("height:%d%%", BarHeight(d.Score, maxScore(days))) }
+					title={ fmt.Sprintf("%d", d.Score) }
+				></div>
+				<span class="spark__label">{ DayLabel(c.Locale, d.Day) }</span>
+			</div>
+		}
+	</div>
+}
+
+func maxScore(days []models.DayStat) int {
+	max := 0
+	for _, d := range days {
+		if d.Score > max {
+			max = d.Score
+		}
+	}
+	return max
+}
+
+func earnedCount(badges []*models.Badge) int {
+	n := 0
+	for _, b := range badges {
+		if b.Earned() {
+			n++
+		}
+	}
+	return n
+}
+
+// ------------------------------------------------------------ edit profile --
+
+type EditProfileData struct {
+	User   *models.User
+	Error  string
+	Errors map[string]string
+}
+
+func (d EditProfileData) Err(field string) string {
+	if d.Errors == nil {
+		return ""
+	}
+	return d.Errors[field]
+}
+
+func (d EditProfileData) Problems(c Ctx) []FieldProblem {
+	var out []FieldProblem
+	for _, pair := range [][2]string{
+		{"display_name", "auth.field.displayName"},
+		{"bio", "profile.field.bio"},
+		{"country", "profile.field.country"},
+	} {
+		if msg := d.Err(pair[0]); msg != "" {
+			out = append(out, FieldProblem{ID: pair[0], Label: c.T(pair[1]), Message: msg})
+		}
+	}
+	return out
+}
+
+templ EditProfile(c Ctx, d EditProfileData) {
+	@Base(c, c.T("profile.edit.title")) {
+		<div class="shell shell--narrow stack">
+			<div>
+				@BackLink(c, "/profile", c.T("nav.profile"))
+				<h1>{ c.T("profile.edit.title") }</h1>
+			</div>
+			@FormProblems(c, d.Error, d.Problems(c))
+			// Its own form: a picture is sent as a file and saved on its own,
+			// so choosing one does not mean re-submitting a name and a bio
+			// that were already right.
+			<form
+				method="post"
+				action="/profile/photo"
+				class="card card--pad-lg photo-form"
+				enctype="multipart/form-data"
+			>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<div class="photo-form__row">
+					<span
+						class={ "avatar", "avatar--lg", templ.KV("avatar--photo", HasAvatarPhoto(d.User.AvatarSeed)) }
+						style={ AvatarStyle(AvatarSeedFor(d.User.ID, d.User.AvatarSeed, d.User.Username)) }
+						data-photo-preview
+					>
+						if !HasAvatarPhoto(d.User.AvatarSeed) {
+							{ Initial(d.User.DisplayName) }
+						}
+					</span>
+					<div class="stack stack--tight">
+						<strong class="small">{ c.T("profile.photo") }</strong>
+						<div class="row" style="gap:8px;flex-wrap:wrap">
+							<label class="btn btn--soft btn--sm">
+								{ c.T("profile.photoChoose") }
+								<input
+									type="file"
+									name="photo"
+									accept="image/png,image/jpeg,image/webp,image/gif"
+									data-photo-input
+									hidden
+								/>
+							</label>
+							<button class="btn btn--primary btn--sm" type="submit">
+								{ c.T("profile.photoSave") }
+							</button>
+						</div>
+					</div>
+				</div>
+			</form>
+			if HasAvatarPhoto(d.User.AvatarSeed) {
+				<form method="post" action="/profile/photo/remove">
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--ghost btn--sm" type="submit">
+						{ c.T("profile.photoRemove") }
+					</button>
+				</form>
+			}
+			<form method="post" action="/profile/edit" class="card card--pad-lg stack" novalidate>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				@TextField(c, TextFieldOpts{
+					ID:        "display_name",
+					Name:      "display_name",
+					Label:     c.T("auth.field.displayName"),
+					Value:     d.User.DisplayName,
+					MaxLength: 60,
+					Required:  true,
+					Error:     d.Err("display_name"),
+				})
+				@TextAreaField(c, TextAreaOpts{
+					ID:          "bio",
+					Name:        "bio",
+					Label:       c.T("profile.field.bio"),
+					Value:       d.User.Bio,
+					Placeholder: c.T("profile.field.bioPlaceholder"),
+					MaxLength:   280,
+					Optional:    true,
+					Error:       d.Err("bio"),
+				})
+				@TextField(c, TextFieldOpts{
+					ID:        "country",
+					Name:      "country",
+					Label:     c.T("profile.field.country"),
+					Value:     d.User.Country,
+					MaxLength: 60,
+					Optional:  true,
+					Error:     d.Err("country"),
+				})
+				<div class="row" style="gap:10px">
+					<button class="btn btn--primary" type="submit">{ c.T("profile.save") }</button>
+					<a class="btn btn--ghost" href="/profile">{ c.T("common.cancel") }</a>
+				</div>
+			</form>
+		</div>
+	}
+}

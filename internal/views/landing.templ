@@ -1,0 +1,84 @@
+package views
+
+import "fmt"
+
+templ Landing(c Ctx, questionCount, categoryCount, playerCount int) {
+	@Base(c, c.T("app.name")) {
+		<section class="hero">
+			<div class="shell shell--flush">
+				<div class="hero__inner">
+					<span class="eyebrow">
+						<span aria-hidden="true">🌙</span> { c.T("app.name") }
+					</span>
+					<h1 class="hero__title">
+						{ c.T("app.tagline") }
+					</h1>
+					<p class="hero__lead">{ c.T("app.description") }</p>
+					<div class="hero__cta">
+						// No account, no form, no email: one press and the
+						// questions start. What it makes is temporary and the
+						// line underneath says so, rather than letting somebody
+						// find out when it goes.
+						<form method="post" action="/guest">
+							<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+							<button class="btn btn--primary btn--lg" type="submit">
+								{ c.T("landing.cta.guest") }
+							</button>
+						</form>
+						<a class="btn btn--soft btn--lg" href="/register">
+							{ c.T("landing.cta.primary") }
+						</a>
+						<a class="btn btn--ghost btn--lg" href="/login">
+							{ c.T("landing.cta.secondary") }
+						</a>
+					</div>
+					<p class="hero__note tiny muted">{ c.T("landing.cta.guestNote") }</p>
+					<div class="hero__stats">
+						<div class="hero__stat">
+							<b class="num">{ fmt.Sprint(questionCount) }</b>
+							<span>{ c.T("landing.stats.questions") }</span>
+						</div>
+						<div class="hero__stat">
+							<b class="num">{ fmt.Sprint(categoryCount) }</b>
+							<span>{ c.T("landing.stats.categories") }</span>
+						</div>
+						<div class="hero__stat">
+							<b class="num">{ fmt.Sprint(len(c.Locales())) }</b>
+							<span>{ c.T("landing.stats.languages") }</span>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<section class="shell">
+			<div class="grid grid--2">
+				@featureCard("📖", c.T("landing.feature.learn.title"), c.T("landing.feature.learn.body"))
+				@featureCard("⚔️", c.T("landing.feature.duel.title"), c.T("landing.feature.duel.body"))
+				@featureCard("💬", c.T("landing.feature.talk.title"), c.T("landing.feature.talk.body"))
+				@featureCard("📈", c.T("landing.feature.track.title"), c.T("landing.feature.track.body"))
+			</div>
+		</section>
+		<section class="shell">
+			<div class="card card--pad-lg">
+				<h2 style="margin-block-end:18px">{ c.T("landing.how.title") }</h2>
+				<ol class="steps">
+					<li class="step"><span>{ c.T("landing.how.step1") }</span></li>
+					<li class="step"><span>{ c.T("landing.how.step2") }</span></li>
+					<li class="step"><span>{ c.T("landing.how.step3") }</span></li>
+				</ol>
+			</div>
+		</section>
+		<footer class="shell center muted small stack-sm">
+			<p>{ c.T("app.name") } — { c.T("app.tagline") }</p>
+			<p class="tiny faint">{ c.T("app.byCompany") }</p>
+		</footer>
+	}
+}
+
+templ featureCard(icon, title, body string) {
+	<article class="feature">
+		<div class="feature__icon" aria-hidden="true">{ icon }</div>
+		<h3>{ title }</h3>
+		<p>{ body }</p>
+	</article>
+}

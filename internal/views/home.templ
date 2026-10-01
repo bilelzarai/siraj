@@ -1,0 +1,299 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+type HomeData struct {
+	// DailyPlayed is whether today's shared round is already behind them.
+	DailyPlayed bool
+
+	Categories    []*models.Category
+	Resume        *models.GameSession
+	Recent        []*models.GameSession
+	FriendsOnline []*models.UserCard
+	Incoming      []*models.Challenge
+	Rank          int
+}
+
+templ Home(c Ctx, d HomeData) {
+	@Base(c, c.T("nav.home")) {
+		<div class="shell stack-lg" data-live="challenge.received challenge.completed challenge.cancelled friend.accepted">
+			<section class="card card--pad-lg">
+				<div class="row row--between row--wrap" style="gap:20px">
+					<div class="row" style="gap:16px;min-width:0">
+						<span
+							class={ "avatar", "avatar--lg", templ.KV("avatar--photo", HasAvatarPhoto(c.User.AvatarSeed)) }
+							style={ AvatarStyle(AvatarSeedFor(c.User.ID, c.User.AvatarSeed, c.User.Username)) }
+						>
+							if !HasAvatarPhoto(c.User.AvatarSeed) {
+								{ Initial(c.User.DisplayName) }
+							}
+						</span>
+						<div style="min-width:0">
+							<h1 style="font-size:1.4rem">{ c.T("home.greeting", c.User.DisplayName) }</h1>
+							if c.IsGuest() {
+								// A guest has no place on a board they are not
+								// on. Showing a rank would be inventing one.
+								<p class="muted small">{ c.T("guest.temporary") }</p>
+							} else {
+								<p class="muted small">
+									{ fmt.Sprintf("#%d", d.Rank) } · { c.T("leaderboard.title") }
+								</p>
+							}
+						</div>
+					</div>
+					<div style="min-width:220px;flex:1;max-width:320px">
+						@LevelBar(c, c.User)
+					</div>
+				</div>
+			</section>
+			// A guest is playing a complete game and keeping none of it. Said
+			// once, at the top of the screen that shows progress, with the one
+			// action that changes it.
+			if c.IsGuest() {
+				<section class="alert alert--info" style="align-items:center">
+					<span aria-hidden="true" style="font-size:1.3rem">✨</span>
+					<div style="flex:1;min-width:0">
+						<div class="bold">{ c.T("guest.temporary") }</div>
+						<p class="small muted">{ c.T("guest.keepProgress") }</p>
+					</div>
+					<a class="btn btn--primary btn--sm" href="/register">{ c.T("guest.createAccount") }</a>
+				</section>
+			}
+			if d.Resume != nil {
+				<section class="alert alert--info" style="align-items:center">
+					<span aria-hidden="true" style="font-size:1.3rem">⏸️</span>
+					<div style="flex:1">
+						<div class="bold">{ c.T("home.resume.title") }</div>
+						<div class="small">
+							{ c.T("home.resume.body", d.Resume.Cursor + 1, d.Resume.TotalQuestions) }
+						</div>
+					</div>
+					<a class="btn btn--primary btn--sm" href="/play/round">
+						{ c.T("home.resume.action") }
+					</a>
+				</section>
+			}
+			if len(d.Incoming) > 0 {
+				<section class="stack">
+					// "Your turn", not "Received": this list is filtered to the
+					// matches still waiting on the viewer, and a match they
+					// opened themselves is in it. Calling that "received" made
+					// the screen say somebody had sent them their own match.
+					<h2 style="font-size:1.15rem">{ c.T("challenge.yourTurn") }</h2>
+					<div class="grid grid--2">
+						for _, ch := range d.Incoming {
+							@incomingChallengeCard(c, ch)
+						}
+					</div>
+				</section>
+			}
+			<section class="grid grid--4">
+				@StatTile("🎯", fmt.Sprint(c.User.GamesPlayed), c.T("profile.stat.games"))
+				@StatTile("⚡", fmt.Sprint(c.User.BestStreak), c.T("profile.stat.bestStreak"))
+				@StatTile("🏆", fmt.Sprint(c.User.GamesWon), c.T("profile.stat.wins"))
+				@StatTile("⭐", fmt.Sprint(c.User.XP), c.T("profile.xp"))
+				// Coins were credited on every round, written to the account, and
+				// rendered nowhere at all.
+				@StatTile("🪙", fmt.Sprint(c.User.Coins), c.T("profile.stat.coins"))
+			</section>
+			// Today's round: the same questions for everyone, once a day.
+			<section class="card row row--between row--wrap" style="gap:12px;align-items:center">
+				<span class="row" style="gap:12px;align-items:center;min-width:0">
+					<span class="notif__icon" aria-hidden="true">🗓️</span>
+					<span class="stack-sm" style="min-width:0;gap:2px">
+						<span class="bold">{ c.T("home.daily.title") }</span>
+						<span class="tiny muted">{ c.T("home.daily.body") }</span>
+					</span>
+				</span>
+				if d.DailyPlayed {
+					<a class="btn btn--soft btn--sm" href="/history?mode=daily">
+						{ c.T("home.daily.done") }
+					</a>
+				} else {
+					<form method="post" action="/play/daily">
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<button class="btn btn--primary btn--sm" type="submit">
+							{ c.T("home.daily.play") }
+						</button>
+					</form>
+				}
+			</section>
+			<section class="stack">
+				<div class="row row--between">
+					<h2 style="font-size:1.15rem">{ c.T("home.categories.title") }</h2>
+					<a class="btn btn--soft btn--sm" href="/play">{ c.T("home.quickplay") }</a>
+				</div>
+				<div class="grid grid--3">
+					for _, cat := range d.Categories {
+						@CategoryCard(c, cat)
+					}
+				</div>
+			</section>
+			<div class="grid grid--2">
+				<section class="card card--flush">
+					<div class="card__head" style="padding:18px 20px 0;margin:0">
+						<span class="card__title">{ c.T("home.activity.title") }</span>
+						<a class="tiny bold" style="color:var(--accent)" href="/history">
+							{ c.T("common.viewAll") }
+						</a>
+					</div>
+					if len(d.Recent) == 0 {
+						@Empty("🎲", c.T("home.activity.empty"))
+					} else {
+						<div style="padding:10px 0">
+							for _, g := range d.Recent {
+								@historyRow(c, g)
+							}
+						</div>
+					}
+				</section>
+				// Friends need an account, so a guest is shown the account
+				// rather than an empty list and a link that bounces them.
+				if !c.IsGuest() {
+					<section class="card card--flush">
+						<div class="card__head" style="padding:18px 20px 0;margin:0">
+							<span class="card__title">{ c.T("home.friends.title") }</span>
+							<a class="tiny bold" style="color:var(--accent)" href="/friends">
+								{ c.T("common.viewAll") }
+							</a>
+						</div>
+						if len(d.FriendsOnline) == 0 {
+							@EmptyWithAction("🤝", c.T("home.friends.empty"), "/friends?tab=search", c.T("friends.tab.search"))
+						} else {
+							<div style="padding:8px">
+								for _, f := range d.FriendsOnline {
+									@UserRow(c, f, onlineLabel(c, f)) {
+										<span class="tag tag--accent num">{ fmt.Sprintf("%d XP", f.XP) }</span>
+									}
+								}
+							</div>
+						}
+					</section>
+				}
+			</div>
+		</div>
+	}
+}
+
+templ incomingChallengeCard(c Ctx, ch *models.Challenge) {
+	{{ others := ch.Others(c.Seated(ch)) }}
+	{{ me := ch.Player(c.Seated(ch)) }}
+	<article class="card stack-sm">
+		<div class="row">
+			// Who else is in it. Never the viewer: a match they opened
+			// themselves used to show their own face and name as the person
+			// who had challenged them.
+			if len(others) > 0 && others[0].Card != nil {
+				@Avatar(others[0].Card, "sm")
+			}
+			<div style="min-width:0;flex:1">
+				<div class="bold truncate">{ matchWith(c, others) }</div>
+				<div class="tiny muted">
+					{ ch.CategoryIcon } { categoryLabel(c, ch) } · { c.T(DifficultyKey(ch.Difficulty)) }
+				</div>
+			</div>
+			<span class="tag tag--warning">{ c.T("challenge.yourTurn") }</span>
+		</div>
+		if ch.Message != "" {
+			<p class="small muted">{ ch.Message }</p>
+		}
+		<div class="row" style="gap:8px">
+			<form
+				method="post"
+				action={ templ.SafeURL("/challenges/" + ch.ID.String() + "/accept") }
+				style="flex:1"
+				if me != nil && me.State == models.PlayerJoined {
+					data-confirm={ c.T("challenge.confirmStart") }
+				}
+			>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				if me != nil && me.State == models.PlayerJoined {
+					<input type="hidden" name="confirm" value="1"/>
+				}
+				<button class="btn btn--primary btn--sm btn--block" type="submit">
+					// An invitation is accepted; a match you already opened is
+					// played. One button, two honest labels.
+					if me != nil && me.State == models.PlayerInvited {
+						{ c.T("challenge.accept") }
+					} else {
+						{ c.T("challenge.play") }
+					}
+				</button>
+			</form>
+			<form method="post" action={ templ.SafeURL("/challenges/" + ch.ID.String() + "/decline") }>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<button class="btn btn--ghost btn--sm" type="submit">
+					{ c.T("challenge.decline") }
+				</button>
+			</form>
+		</div>
+	</article>
+}
+
+// matchWith names the other side of a match: one person by name, several by
+// the first of them and a count.
+func matchWith(c Ctx, others []*models.ChallengePlayer) string {
+	switch {
+	case len(others) == 0:
+		return c.T("challenge.waitingForPlayers")
+	case len(others) == 1:
+		if others[0].Card != nil {
+			return others[0].Card.DisplayName
+		}
+		return c.T("challenge.waitingForPlayers")
+	default:
+		name := ""
+		if others[0].Card != nil {
+			name = others[0].Card.DisplayName
+		}
+		return c.T("challenge.andOthers", name, len(others)-1)
+	}
+}
+
+templ historyRow(c Ctx, g *models.GameSession) {
+	<a class="history-row" href={ templ.SafeURL("/history/" + g.ID.String()) }>
+		<div class="history-row__icon" aria-hidden="true">{ gameIcon(g) }</div>
+		<div style="flex:1;min-width:0">
+			<div class="bold small truncate">{ gameTitle(c, g) }</div>
+			<div class="tiny muted">
+				{ c.T(ModeKey(g.Mode)) } · { c.Tr.RelativeTime(g.StartedAt) }
+			</div>
+		</div>
+		<div style="text-align:end">
+			<div class="bold num">{ fmt.Sprint(g.Score) }</div>
+			<div class="tiny muted num">{ fmt.Sprintf("%d%%", g.Accuracy()) }</div>
+		</div>
+	</a>
+}
+
+func gameIcon(g *models.GameSession) string {
+	if g.CategoryIcon != "" {
+		return g.CategoryIcon
+	}
+	return "🎲"
+}
+
+func gameTitle(c Ctx, g *models.GameSession) string {
+	if g.CategoryName != "" {
+		return g.CategoryName
+	}
+	return c.T("game.setup.category.all")
+}
+
+func categoryLabel(c Ctx, ch *models.Challenge) string {
+	if ch.CategoryName != "" {
+		return ch.CategoryName
+	}
+	return c.T("game.setup.category.all")
+}
+
+func onlineLabel(c Ctx, u *models.UserCard) string {
+	if u.IsOnline() {
+		return c.T("friends.online")
+	}
+	return c.Tr.RelativeTime(u.LastSeenAt)
+}

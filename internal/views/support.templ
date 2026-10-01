@@ -1,0 +1,643 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// ------------------------------------------------------------ player side --
+
+type SupportData struct {
+	Tickets []*models.Ticket
+}
+
+templ Support(c Ctx, d SupportData) {
+	@Base(c, c.T("support.title")) {
+		<div class="shell shell--narrow stack" data-live="support.reply">
+			@BackLink(c, "/app", c.T("nav.home"))
+			@PageHead(c.T("support.title"), c.T("support.subtitle")) {
+				<a class="btn btn--primary btn--sm" href="/support/new">
+					<span aria-hidden="true">✚</span> { c.T("support.new") }
+				</a>
+			}
+			if len(d.Tickets) == 0 {
+				@EmptyWithAction("💬", c.T("support.empty"), "/support/new", c.T("support.new"))
+			} else {
+				<div class="card card--flush">
+					for _, t := range d.Tickets {
+						<a class="ticket-row" href={ templ.SafeURL("/support/" + t.ID.String()) }>
+							<span class="ticket-row__icon" aria-hidden="true">{ ticketIcon(t.Kind) }</span>
+							<div style="flex:1;min-width:0">
+								<div class="row" style="gap:8px">
+									<span class="bold small truncate">{ t.Subject }</span>
+									if t.UserUnread > 0 {
+										<span class="count-dot" aria-label={ c.T("messages.unread", t.UserUnread) }>{ fmt.Sprint(t.UserUnread) }</span>
+									}
+								</div>
+								<div class="tiny muted">
+									{ c.T(models.TicketKindKey(t.Kind)) } · { c.Tr.RelativeTime(t.LastMessageAt) }
+								</div>
+							</div>
+							if t.NeedsYou() {
+								<span class="tag tag--warning">{ c.T("support.stage.yourturn") }</span>
+							} else {
+								<span class={ "tag", statusTagClass(t.Status) }>
+									{ c.T(t.StageKey()) }
+								</span>
+							}
+						</a>
+					}
+				</div>
+			}
+		</div>
+	}
+}
+
+type SupportNewData struct {
+	Kind       string
+	Subject    string
+	Body       string
+	CategoryID int
+	QuestionID int
+	PagePath   string
+	Categories []*models.Category
+	// Reported is the player a report of abuse is about, as typed. Echoed back
+	// so a rejected form does not make somebody find the name again.
+	Reported string
+	// People the sender can name: friends and the people in their room. A
+	// report is about somebody you have actually met here.
+	Known  []*models.UserCard
+	Error  string
+	Errors map[string]string
+}
+
+func (d SupportNewData) Err(field string) string {
+	if d.Errors == nil {
+		return ""
+	}
+	return d.Errors[field]
+}
+
+func (d SupportNewData) Problems(c Ctx) []FieldProblem {
+	var out []FieldProblem
+	for _, pair := range [][2]string{
+		{"kind", "support.field.kind"},
+		{"subject", "support.field.subject"},
+		{"body", "support.field.body"},
+	} {
+		if msg := d.Err(pair[0]); msg != "" {
+			out = append(out, FieldProblem{ID: pair[0], Label: c.T(pair[1]), Message: msg})
+		}
+	}
+	return out
+}
+
+templ SupportNew(c Ctx, d SupportNewData) {
+	@Base(c, c.T("support.new")) {
+		<div class="shell shell--narrow stack">
+			@BackLink(c, "/support", c.T("support.title"))
+			<h1 style="font-size:1.4rem">{ c.T("support.new") }</h1>
+			@FormProblems(c, d.Error, d.Problems(c))
+			<form method="post" action="/support/new" class="card card--pad-lg stack" novalidate>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<input type="hidden" name="page_path" value={ d.PagePath }/>
+				if d.QuestionID > 0 {
+					<input type="hidden" name="question" value={ fmt.Sprint(d.QuestionID) }/>
+				}
+				<div class="field" id="kind" data-ticket-kind>
+					<span class="label">{ c.T("support.field.kind") }</span>
+					// Choosing the kind up front is what makes the staff queue
+					// triageable, so it is asked first and is required.
+					<div class="choice-grid">
+						for _, kind := range models.TicketKinds {
+							<label class="chip-radio">
+								<input type="radio" name="kind" value={ kind } checked?={ d.Kind == kind } required/>
+								<span class="chip-radio__face">
+									<span aria-hidden="true">{ ticketIcon(kind) }</span>
+									<span class="truncate">{ c.T(models.TicketKindKey(kind)) }</span>
+								</span>
+							</label>
+						}
+					</div>
+					if e := d.Err("kind"); e != "" {
+						@FieldError("kind", e)
+					}
+					<span class="tiny faint">{ c.T("support.field.kindHelp") }</span>
+				</div>
+				// One question per kind, and only the one that applies.
+				//
+				// The form used to ask everybody for a question category —
+				// including somebody reporting a player, for whom it means
+				// nothing — and asked nobody which player a report was about,
+				// which is the one thing a report has to say. Each kind now
+				// gets the field it needs and no others; with no JavaScript
+				// every pane is visible and the server still only reads the one
+				// that belongs to the chosen kind.
+				<div class="field" data-ticket-pane={ models.TicketAbuse } hidden?={ !models.TicketNeedsPlayer(d.Kind) }>
+					<label class="label" for="reported">{ c.T("support.field.reported") }</label>
+					<input
+						class="input"
+						id="reported"
+						name="reported"
+						type="text"
+						list="support-people"
+						value={ d.Reported }
+						placeholder={ c.T("support.field.reportedPlaceholder") }
+						autocomplete="off"
+					/>
+					<datalist id="support-people">
+						for _, u := range d.Known {
+							<option value={ u.Username }>{ u.DisplayName }</option>
+						}
+					</datalist>
+					if e := d.Err("reported"); e != "" {
+						@FieldError("reported", e)
+					}
+					<span class="tiny faint">{ c.T("support.field.reportedHelp") }</span>
+				</div>
+				<div class="field" data-ticket-pane={ models.TicketQuestion + " " + models.TicketSuggestion } hidden?={ !models.TicketNeedsCategory(d.Kind) }>
+					<label class="label" for="category">
+						{ c.T("game.setup.category") }
+						<span class="tiny faint">({ c.T("common.optional") })</span>
+					</label>
+					<select class="select" id="category" name="category">
+						<option value="0">{ c.T("support.field.noCategory") }</option>
+						for _, cat := range d.Categories {
+							<option value={ fmt.Sprint(cat.ID) } selected?={ d.CategoryID == cat.ID }>
+								{ cat.Name }
+							</option>
+						}
+					</select>
+					<span class="tiny faint">{ c.T("support.field.categoryHelp") }</span>
+				</div>
+				@TextField(c, TextFieldOpts{
+					ID:          "subject",
+					Name:        "subject",
+					Label:       c.T("support.field.subject"),
+					Value:       d.Subject,
+					Placeholder: c.T("support.field.subjectPlaceholder"),
+					MaxLength:   140,
+					Required:    true,
+					Error:       d.Err("subject"),
+				})
+				@TextAreaField(c, TextAreaOpts{
+					ID:          "body",
+					Name:        "body",
+					Label:       c.T("support.field.body"),
+					Value:       d.Body,
+					Placeholder: c.T("support.field.bodyPlaceholder"),
+					Rows:        7,
+					MaxLength:   4000,
+					Required:    true,
+					Error:       d.Err("body"),
+				})
+				<div class="row" style="gap:10px">
+					<button class="btn btn--primary" type="submit">{ c.T("support.send") }</button>
+					<a class="btn btn--ghost" href="/support">{ c.T("common.cancel") }</a>
+				</div>
+			</form>
+		</div>
+	}
+}
+
+type SupportThreadData struct {
+	Ticket   *models.Ticket
+	Messages []*models.TicketMessage
+}
+
+templ SupportThread(c Ctx, d SupportThreadData) {
+	@Base(c, d.Ticket.Subject) {
+		// A staff reply lands here, not only in the badge.
+		<div class="shell shell--narrow stack" data-live="support.reply">
+			@BackLink(c, "/support", c.T("support.title"))
+			<section class="card stack-sm">
+				<div class="row row--between row--wrap" style="gap:10px">
+					<div style="min-width:0">
+						<h1 style="font-size:1.2rem">{ d.Ticket.Subject }</h1>
+						<p class="tiny muted">
+							{ c.T(models.TicketKindKey(d.Ticket.Kind)) } · { c.Tr.DateTime(d.Ticket.CreatedAt) }
+						</p>
+					</div>
+					<span class={ "tag", statusTagClass(d.Ticket.Status) }>
+						{ c.T(models.TicketStatusKey(d.Ticket.Status)) }
+					</span>
+				</div>
+			</section>
+			// Where this is and what happens next, in words. The status tag is
+			// for triage — "waiting_user" tells staff something and tells the
+			// person who asked nothing at all.
+			<div class={ "ticket-stage", "ticket-stage--" + d.Ticket.Stage() }>
+				<span class="ticket-stage__what bold">{ c.T(d.Ticket.StageKey()) }</span>
+				<span class="ticket-stage__next small">{ c.T(d.Ticket.StageNextKey()) }</span>
+			</div>
+			@ticketThread(c, d.Messages, false)
+			if d.Ticket.Status != models.TicketClosed {
+				<form method="post" action={ templ.SafeURL("/support/" + d.Ticket.ID.String() + "/reply") } class="card stack-sm">
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<textarea
+						class="textarea"
+						name="body"
+						rows="4"
+						maxlength="4000"
+						required
+						placeholder={ c.T("support.replyPlaceholder") }
+					></textarea>
+					<div class="row" style="justify-content:flex-end">
+						<button class="btn btn--primary" type="submit">{ c.T("messages.send") }</button>
+					</div>
+				</form>
+				// Someone who solved their own problem can say so. Without this
+				// the only way out was a reply that a moderator then had to read
+				// and close by hand, with the queue badge lit until they did.
+				<form
+					method="post"
+					action={ templ.SafeURL("/support/" + d.Ticket.ID.String() + "/close") }
+					class="row"
+					style="justify-content:flex-end"
+					data-confirm={ c.T("support.closeConfirm") }
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button class="btn btn--ghost btn--sm" type="submit">{ c.T("support.close") }</button>
+				</form>
+			} else {
+				// Closed is not a wall. The problem coming back is the most
+				// likely reason somebody returns to a closed ticket, and making
+				// them open a second one loses everything already said.
+				<form
+					method="post"
+					action={ templ.SafeURL("/support/" + d.Ticket.ID.String() + "/reply") }
+					class="card stack-sm"
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<p class="small muted">{ c.T("support.closedNotice") }</p>
+					<textarea
+						class="textarea"
+						name="body"
+						rows="3"
+						maxlength="4000"
+						required
+						placeholder={ c.T("support.reopenPlaceholder") }
+					></textarea>
+					<div class="row" style="justify-content:flex-end">
+						<button class="btn btn--soft" type="submit">{ c.T("support.reopen") }</button>
+					</div>
+				</form>
+			}
+		</div>
+	}
+}
+
+// ticketThread renders the conversation. staffView additionally shows the
+// internal notes, which a player must never see.
+templ ticketThread(c Ctx, messages []*models.TicketMessage, staffView bool) {
+	<div class="stack-sm">
+		for _, m := range messages {
+			<article class={ "ticket-msg", ticketMsgClass(m) }>
+				<div class="row row--between" style="gap:8px;margin-block-end:6px">
+					<span class="tiny bold">
+						if m.Internal {
+							<span class="tag tag--warning tiny">{ c.T("support.internalNote") }</span>
+						}
+						if m.FromStaff() {
+							{ c.T("support.staff") }
+							if staffView && m.SenderName != "" {
+								<span class="muted">{ " · " + m.SenderName }</span>
+							}
+						} else {
+							{ m.SenderName }
+						}
+					</span>
+					<span class="tiny faint">{ c.Tr.DateTime(m.CreatedAt) }</span>
+				</div>
+				<p class="small" style="white-space:pre-wrap">{ m.Body }</p>
+			</article>
+		}
+	</div>
+}
+
+// ------------------------------------------------------------- staff side --
+
+// TicketFilterState is the current filter selection, echoed back into the form.
+type TicketFilterState struct {
+	Query    string
+	Kind     string
+	Status   string
+	Priority string
+	Assignee string
+	Waiting  bool
+}
+
+type AdminSupportData struct {
+	Tickets   []*models.Ticket
+	Total     int
+	Pager     Pager
+	Counts    models.TicketCounts
+	Breakdown map[string]int
+	Staff     []*models.UserCard
+	Filter    TicketFilterState
+}
+
+templ AdminSupport(c Ctx, a AdminChrome, d AdminSupportData) {
+	@adminShell(c, a, c.T("admin.nav.support")) {
+		<div data-live="support.new support.reply" hidden></div>
+		<section class="grid grid--4">
+			@StatTile("📥", fmt.Sprint(d.Counts.OpenTotal), c.T("support.stat.open"))
+			@StatTile("⏳", fmt.Sprint(d.Counts.AwaitingReply), c.T("support.stat.awaiting"))
+			@StatTile("🔥", fmt.Sprint(d.Counts.HighPriority), c.T("support.stat.urgent"))
+			@StatTile("🙋", fmt.Sprint(d.Counts.AssignedToMe), c.T("support.stat.mine"))
+		</section>
+		// Quick filters: the three views staff actually work from, before
+		// they reach for the detailed filter form below.
+		<div class="segment scroll-x">
+			@tabItem(c, "/admin/support", c.T("support.filter.all"), d.Filter.Status == "" && !d.Filter.Waiting && d.Filter.Assignee == "")
+			@tabItem(c, "/admin/support?waiting=1", c.T("support.filter.awaiting"), d.Filter.Waiting)
+			@tabItem(c, "/admin/support?assignee=me", c.T("support.filter.mine"), d.Filter.Assignee == "me")
+			@tabItem(c, "/admin/support?status=closed", c.T("support.filter.closed"), d.Filter.Status == "closed")
+		</div>
+		// Kind chips carry live counts, so the volume is visible before any
+		// filtering happens.
+		<div class="row row--wrap" style="gap:6px">
+			for _, kind := range models.TicketKinds {
+				<a
+					class={ "kind-chip", templ.KV("is-active", d.Filter.Kind == kind) }
+					href={ templ.SafeURL("/admin/support?kind=" + kind) }
+				>
+					<span aria-hidden="true">{ ticketIcon(kind) }</span>
+					<span>{ c.T(models.TicketKindKey(kind)) }</span>
+					<b class="num">{ fmt.Sprint(d.Breakdown[kind]) }</b>
+				</a>
+			}
+		</div>
+		<form method="get" action="/admin/support" class="card row row--wrap" style="gap:10px">
+			<input
+				class="input"
+				name="q"
+				type="search"
+				value={ d.Filter.Query }
+				placeholder={ c.T("support.filter.searchPlaceholder") }
+				style="flex:2;min-width:180px"
+			/>
+			<select class="select" name="status" style="flex:1;min-width:140px">
+				<option value="">{ c.T("support.filter.anyStatus") }</option>
+				for _, status := range models.TicketStatuses {
+					<option value={ status } selected?={ d.Filter.Status == status }>
+						{ c.T(models.TicketStatusKey(status)) }
+					</option>
+				}
+			</select>
+			<select class="select" name="priority" style="flex:1;min-width:140px">
+				<option value="">{ c.T("support.filter.anyPriority") }</option>
+				for _, priority := range models.TicketPriorities {
+					<option value={ priority } selected?={ d.Filter.Priority == priority }>
+						{ c.T(models.TicketPriorityKey(priority)) }
+					</option>
+				}
+			</select>
+			<select class="select" name="assignee" style="flex:1;min-width:150px">
+				<option value="">{ c.T("support.filter.anyAssignee") }</option>
+				<option value="unassigned" selected?={ d.Filter.Assignee == "unassigned" }>
+					{ c.T("support.filter.unassigned") }
+				</option>
+				<option value="me" selected?={ d.Filter.Assignee == "me" }>
+					{ c.T("support.filter.mine") }
+				</option>
+				for _, member := range d.Staff {
+					<option value={ member.ID.String() } selected?={ d.Filter.Assignee == member.ID.String() }>
+						{ member.DisplayName }
+					</option>
+				}
+			</select>
+			<button class="btn btn--primary" type="submit">{ c.T("common.search") }</button>
+		</form>
+		if len(d.Tickets) == 0 {
+			@Empty("📭", c.T("support.filter.empty"))
+		} else {
+			<div class="card card--flush">
+				for _, t := range d.Tickets {
+					@adminTicketRow(c, t)
+				}
+			</div>
+			@PagerBar(c, d.Pager)
+		}
+	}
+}
+
+templ adminTicketRow(c Ctx, t *models.Ticket) {
+	<a
+		class={ "ticket-row", templ.KV("is-waiting", t.AwaitingStaff()) }
+		href={ templ.SafeURL("/admin/support/" + t.ID.String()) }
+	>
+		<span class="ticket-row__icon" aria-hidden="true">{ ticketIcon(t.Kind) }</span>
+		<div style="flex:1;min-width:0">
+			<div class="row" style="gap:8px">
+				<span class="bold small truncate">{ t.Subject }</span>
+				if t.Urgent() {
+					<span class={ "tag", priorityTagClass(t.Priority) }>
+						{ c.T(models.TicketPriorityKey(t.Priority)) }
+					</span>
+				}
+				if t.StaffUnread > 0 {
+					<span class="count-dot" aria-label={ c.T("messages.unread", t.StaffUnread) }>{ fmt.Sprint(t.StaffUnread) }</span>
+				}
+			</div>
+			<div class="tiny muted truncate">
+				{ "@" + t.Username } · { c.T(models.TicketKindKey(t.Kind)) } · { c.Tr.RelativeTime(t.LastMessageAt) }
+				if t.AssigneeUsername != "" {
+					{ " · → " + t.AssigneeUsername }
+				}
+			</div>
+		</div>
+		<span class={ "tag", statusTagClass(t.Status) }>
+			{ c.T(models.TicketStatusKey(t.Status)) }
+		</span>
+	</a>
+}
+
+type AdminSupportThreadData struct {
+	Ticket   *models.Ticket
+	Messages []*models.TicketMessage
+	Staff    []*models.UserCard
+	Canned   []*models.CannedReply
+}
+
+templ AdminSupportThread(c Ctx, a AdminChrome, d AdminSupportThreadData) {
+	@adminShell(c, a, d.Ticket.Subject) {
+		@BackLink(c, "/admin/support", c.T("admin.nav.support"))
+		<section class="card stack-sm">
+			<div class="row row--between row--wrap" style="gap:10px">
+				<div class="row" style="gap:10px;min-width:0">
+					<span
+						class={ "avatar", "avatar--sm", templ.KV("avatar--photo", HasAvatarPhoto(d.Ticket.AvatarSeed)) }
+						style={ AvatarStyle(AvatarSeedFor(d.Ticket.UserID, d.Ticket.AvatarSeed, d.Ticket.Username)) }
+					>
+						if !HasAvatarPhoto(d.Ticket.AvatarSeed) {
+							{ d.Ticket.Initials() }
+						}
+					</span>
+					<div style="min-width:0">
+						<a class="bold small" href={ templ.SafeURL("/u/" + d.Ticket.Username) }>
+							{ d.Ticket.DisplayName }
+						</a>
+						<div class="tiny muted">
+							{ c.Tr.DateTime(d.Ticket.CreatedAt) }
+							if d.Ticket.PagePath != "" {
+								{ " · " + d.Ticket.PagePath }
+							}
+						</div>
+						// Who a report is about, named and linked. It used to
+						// be somewhere in the prose, which meant staff had to
+						// find the person from a description and two reports
+						// about one player looked like two unrelated messages.
+						if d.Ticket.ReportedUsername != "" {
+							<div class="tiny">
+								<span class="tag tag--danger">{ c.T("support.reportedAbout") }</span>
+								<a class="bold" href={ templ.SafeURL("/u/" + d.Ticket.ReportedUsername) }>
+									{ d.Ticket.ReportedDisplayName }
+								</a>
+							</div>
+						}
+					</div>
+				</div>
+				<a class="btn btn--ghost btn--sm" href={ templ.SafeURL("/messages/with/" + d.Ticket.Username) }>
+					{ c.T("friends.message") }
+				</a>
+			</div>
+			// Triage controls submit on change, so staff never lose a click.
+			<form
+				method="post"
+				action={ templ.SafeURL("/admin/support/" + d.Ticket.ID.String() + "/update") }
+				class="row row--wrap"
+				style="gap:8px"
+			>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<select class="select select--sm" name="status" onchange="this.form.submit()">
+					for _, status := range models.TicketStatuses {
+						<option value={ status } selected?={ d.Ticket.Status == status }>
+							{ c.T(models.TicketStatusKey(status)) }
+						</option>
+					}
+				</select>
+				<select class="select select--sm" name="priority" onchange="this.form.submit()">
+					for _, priority := range models.TicketPriorities {
+						<option value={ priority } selected?={ d.Ticket.Priority == priority }>
+							{ c.T(models.TicketPriorityKey(priority)) }
+						</option>
+					}
+				</select>
+				<select class="select select--sm" name="kind" onchange="this.form.submit()">
+					for _, kind := range models.TicketKinds {
+						<option value={ kind } selected?={ d.Ticket.Kind == kind }>
+							{ c.T(models.TicketKindKey(kind)) }
+						</option>
+					}
+				</select>
+				<select class="select select--sm" name="assignee" onchange="this.form.submit()">
+					<option value="unassigned" selected?={ d.Ticket.AssignedTo == nil }>
+						{ c.T("support.filter.unassigned") }
+					</option>
+					for _, member := range d.Staff {
+						<option value={ member.ID.String() } selected?={ assignedTo(d.Ticket, member.ID.String()) }>
+							{ member.DisplayName }
+						</option>
+					}
+				</select>
+			</form>
+		</section>
+		@ticketThread(c, d.Messages, true)
+		<form
+			method="post"
+			action={ templ.SafeURL("/admin/support/" + d.Ticket.ID.String() + "/reply") }
+			class="card stack-sm"
+		>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			if len(d.Canned) > 0 {
+				<div class="row row--wrap" style="gap:6px">
+					for _, reply := range d.Canned {
+						<button
+							class="btn btn--ghost btn--sm"
+							type="button"
+							data-canned={ reply.Body }
+						>{ reply.Title }</button>
+					}
+				</div>
+			}
+			<textarea
+				class="textarea"
+				name="body"
+				rows="5"
+				maxlength="4000"
+				required
+				data-reply-box
+				placeholder={ c.T("support.replyPlaceholder") }
+			></textarea>
+			<div class="row row--between row--wrap" style="gap:10px">
+				<label class="row tiny" style="gap:6px">
+					<input type="checkbox" name="internal" value="1"/>
+					<span>{ c.T("support.internalHelp") }</span>
+				</label>
+				<button class="btn btn--primary" type="submit">{ c.T("messages.send") }</button>
+			</div>
+		</form>
+	}
+}
+
+// ------------------------------------------------------------- Go helpers --
+
+func ticketIcon(kind string) string {
+	switch kind {
+	case models.TicketSuggestion:
+		return "💡"
+	case models.TicketQuestion:
+		return "❓"
+	case models.TicketBug:
+		return "🐞"
+	case models.TicketAccount:
+		return "🔑"
+	case models.TicketAbuse:
+		return "🚩"
+	default:
+		return "💬"
+	}
+}
+
+func statusTagClass(status string) string {
+	switch status {
+	case models.TicketOpen:
+		return "tag--warning"
+	case models.TicketInProgress:
+		return "tag--info"
+	case models.TicketWaitingUser:
+		return "tag--accent"
+	case models.TicketResolved:
+		return "tag--success"
+	default:
+		return ""
+	}
+}
+
+func priorityTagClass(priority string) string {
+	switch priority {
+	case models.PriorityUrgent:
+		return "tag--danger"
+	case models.PriorityHigh:
+		return "tag--warning"
+	default:
+		return ""
+	}
+}
+
+func ticketMsgClass(m *models.TicketMessage) string {
+	switch {
+	case m.Internal:
+		return "ticket-msg--note"
+	case m.FromStaff():
+		return "ticket-msg--staff"
+	default:
+		return "ticket-msg--user"
+	}
+}
+
+func assignedTo(t *models.Ticket, id string) bool {
+	return t.AssignedTo != nil && t.AssignedTo.String() == id
+}

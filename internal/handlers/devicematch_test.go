@@ -926,24 +926,25 @@ func TestTheSoloScreenHasNoDevicePanel(t *testing.T) {
 	}
 }
 
-// The device tab is one list, and its buttons belong to forms that exist.
+// Who is at the device is asked once, above the card; which of them is in the
+// match is asked once, inside it.
 //
-// Two faults, both from moving the panel inside the group it describes. It
-// listed everybody as a chip with a ✕ and then listed them again underneath
-// as tick-boxes — one guest, three appearances of their name, two different
-// questions asked without either being named.
+// The two questions used to be one list in the device tab: the host, the
+// guests, a ✕ each and the box that adds one, all inside the form that sets
+// the round up. That merged them to stop a guest's name appearing twice — and
+// it broke the HTML doing it, because a form inside a form is not something
+// HTML has. The parser drops the inner tag and every control in it is adopted
+// by the outer one, so "Add" and "✕" submitted the challenge instead of adding
+// and dropping a player. It was held together after that by declaring the
+// forms elsewhere and pointing at them with form="id".
 //
-// And it brought its forms with it, inside the form that sets the round up. A
-// form inside a form is not something HTML has: the parser drops the inner
-// tag and every control in it is adopted by the outer one, so "Add" and "✕"
-// submitted the challenge instead of adding and dropping a player.
-//
-// Lifting the panel back above the card fixes the HTML and reopens the older
-// complaint — "Playing on this device" heading a challenge to a friend three
-// cities away. So the controls stay in the device tab and the forms they
-// belong to are declared outside it, named by id. That is what the form
-// attribute is for.
-func TestTheDeviceTabIsOneListWithWorkingButtons(t *testing.T) {
+// The roster is its own card above the setup card now, which is where a form
+// is allowed to be. "Add" and "✕" are ordinary submit buttons in ordinary
+// forms, with no indirection holding them to an id; the device tab below keeps
+// nothing but the tick-boxes. So each person is named twice on this screen,
+// deliberately and for two different questions — and this test is what keeps
+// the second of them from growing the first one's controls back.
+func TestTheDeviceRosterIsAboveTheFormAndTheTabIsOnlyTickBoxes(t *testing.T) {
 	a := newApp(t)
 	seedQuestions(a, 977000, 12)
 	guest := startGuest(t, a)
@@ -967,37 +968,44 @@ func TestTheDeviceTabIsOneListWithWorkingButtons(t *testing.T) {
 	if end < 0 {
 		t.Fatal("the setup form is never closed")
 	}
-	if inner := regexp.MustCompile(`<form[^>]*>`).FindAllString(body[form:form+end], -1); len(inner) > 0 {
+	inside := body[form : form+end]
+	if inner := regexp.MustCompile(`<form[^>]*>`).FindAllString(inside, -1); len(inner) > 0 {
 		t.Errorf("%d form(s) nested inside the form that sets the round up: %v", len(inner), inner)
 	}
 
-	// Every control that names a form points at one that is on the page.
-	owners := regexp.MustCompile(`\bform="([^"]+)"`).FindAllStringSubmatch(body, -1)
-	if len(owners) == 0 {
-		t.Fatal("no control is associated with a form by id, so add and drop have no owner")
+	// The roster is a card of its own, and it comes first: the device is
+	// filled before it is chosen from.
+	roster := strings.Index(body, "data-seats")
+	if roster < 0 {
+		t.Fatal("the roster panel is not on the match screen")
 	}
-	for _, m := range owners {
-		if !strings.Contains(body, `id="`+m[1]+`"`) {
-			t.Errorf("a control belongs to form %q, which is not on the page", m[1])
-		}
-	}
-
-	// The device controls are in the device group, not above the whole form.
-	pool := strings.Index(body, `data-source-pool="device"`)
-	add := strings.Index(body, `form="add-player"`)
-	if pool < 0 || add < 0 {
-		t.Fatal("the device group or its add control is missing")
-	}
-	if add < pool {
-		t.Error("the add control sits outside the device group")
+	if roster > form {
+		t.Error("the roster sits below the form that chooses from it")
 	}
 
-	// One tick-box each, and one way to drop each — not a chip list as well.
+	// Its buttons are plain submits in plain forms, not controls tethered to a
+	// form elsewhere on the page by id.
+	add := strings.Index(body, `action="/players"`)
+	if add < 0 {
+		t.Fatal("there is no way to add somebody to this device")
+	}
+	if add > form {
+		t.Error("the add form is inside or below the setup form, where a form may not be")
+	}
+	if owners := regexp.MustCompile(`\bform="[^"]+"`).FindAllString(body, -1); len(owners) > 0 {
+		t.Errorf("controls still reach their form by id: %v — the roster is outside the form now", owners)
+	}
+
+	// One tick-box each below, one way to drop each above, and the dropping
+	// stays above: a ✕ inside the setup form is the nested form all over again.
 	if boxes := strings.Count(body, `<input type="checkbox" name="local"`); boxes != 2 {
 		t.Errorf("%d device tick-boxes for 2 people", boxes)
 	}
 	if drops := strings.Count(body, "seat__drop"); drops != 2 {
 		t.Errorf("%d ways to drop a player, want one each", drops)
+	}
+	if strings.Contains(inside, "seat__drop") {
+		t.Error("a drop button is inside the setup form; it belongs to the roster above")
 	}
 
 	// The host plays and is not offered as a choice.

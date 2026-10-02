@@ -130,7 +130,7 @@ templ NewThread(c Ctx, d NewThreadData) {
 					if len(d.Friends) == 0 {
 						<p class="muted small">{ c.T("threads.noFriends") }</p>
 					} else {
-						<div class="pick">
+						<div class="pick-list">
 							for _, f := range d.Friends {
 								<label class="pick__one">
 									<input type="checkbox" name="member" value={ f.Username }/>
@@ -441,7 +441,7 @@ templ sheetMake(c Ctx, kind string, friends []*models.UserCard) {
 				if len(friends) == 0 {
 					<p class="muted small">{ c.T("threads.noFriends") }</p>
 				} else {
-					<div class="pick">
+					<div class="pick-list">
 						for _, f := range friends {
 							<label class="pick__one">
 								<input type="checkbox" name="member" value={ f.Username }/>

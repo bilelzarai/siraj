@@ -157,42 +157,28 @@ func (d SetupData) Picked() int {
 	return len(d.Invited) + 1
 }
 
-// devicePool is the people at this phone: who is here, who is in the match,
-// and how to add or drop somebody — as one list.
+// devicePool is who at this phone is in the match: one tick-box each, and
+// nothing else.
 //
-// It was two. A panel listed everybody as a chip with a ✕, and underneath it
-// the same people appeared again as tick-boxes, so a device with one guest on
-// it showed that guest's name three times in a column four inches tall and
-// asked two different questions about them without naming either.
+// Who is *at* the phone — the host, the ✕ that drops somebody, the box that
+// adds one — is the panel above, @SharedDevice, which is its own card outside
+// the form that sets the round up. The two questions are asked once each and
+// in the order they are answered: fill the device, then choose from it.
 //
-// The forms were the other half, and the worse half. This sits inside the
-// form that sets the round up, and a form inside a form is not something HTML
-// has: the parser drops the inner tag and every control in it is adopted by
-// the outer one. So "Add" and "✕" submitted the challenge instead of adding
-// and dropping a player. They are declared outside now and referred to by id,
-// which is what the form attribute is for — the controls stay where they
-// belong on screen and belong to the right form underneath.
+// Keeping the roster out of here is also what keeps the HTML legal. A form
+// inside a form is not something HTML has — the parser drops the inner tag and
+// every control in it is adopted by the outer one, which is how "Add" and "✕"
+// came to submit the challenge instead of adding and dropping a player. Above
+// the card they are ordinary forms again, with no id-and-form= indirection
+// holding them together.
 templ devicePool(c Ctx, d SetupData, chosen string) {
 	<div data-source-pool={ models.SourceDevice } hidden?={ chosen != models.SourceDevice }>
-		<p class="tiny muted">{ c.T("players.hint") }</p>
-		<div class="pick-grid">
-			// The host is in every match they set up, so they are shown as
-			// playing rather than offered as something to choose.
-			if d.Seats.Host != nil {
-				<span class="pick">
-					<span class="pick__face">
-						<span class="avatar avatar--xs" style={ AvatarStyle(d.Seats.Host.ID.String()) }>
-							{ Initial(d.Seats.Host.DisplayName) }
-						</span>
-						<span class="truncate">{ d.Seats.Host.DisplayName }</span>
-						<span class="tag">{ c.T("players.you") }</span>
-					</span>
-				</span>
-			}
-			for _, player := range d.Seats.Players {
-				// The ✕ is a sibling of the label, not inside it: a button
-				// within a label is a press that also ticks the box.
-				<span class="row" style="gap:4px;min-width:0">
+		if len(d.Seats.Players) > 0 {
+			<div class="pick-grid">
+				// The host is in every match they set up, so they are not
+				// offered as something to choose. They are named in the panel
+				// above, where the rest of the roster is.
+				for _, player := range d.Seats.Players {
 					<label class="pick">
 						<input type="checkbox" name="local" value={ player.ID.String() }/>
 						<span class="pick__face">
@@ -202,58 +188,14 @@ templ devicePool(c Ctx, d SetupData, chosen string) {
 							<span class="truncate">{ player.DisplayName }</span>
 						</span>
 					</label>
-					<button
-						class="seat__drop"
-						type="submit"
-						form={ "drop-" + player.ID.String() }
-						aria-label={ c.T("players.remove") }
-						title={ c.T("players.removeConfirm", player.DisplayName) }
-					>✕</button>
-				</span>
-			}
-		</div>
-		if d.Seats.Full() {
-			<p class="tiny muted">{ c.T("players.tooMany", d.Seats.Max) }</p>
+				}
+			</div>
 		} else {
-			<span class="row" style="gap:8px">
-				<input
-					class="input input--sm"
-					type="text"
-					name="name"
-					form="add-player"
-					maxlength="40"
-					required
-					placeholder={ c.T("players.namePlaceholder") }
-					aria-label={ c.T("players.namePlaceholder") }
-				/>
-				<button class="btn btn--soft btn--sm" type="submit" form="add-player">
-					{ c.T("players.add") }
-				</button>
-			</span>
+			// Not a dead end: the panel above this card is where somebody is
+			// added, and it is on screen while this line is.
+			<p class="muted small">{ c.T("challenge.pickHere") }</p>
 		}
 	</div>
-}
-
-// deviceForms are the forms the controls above belong to, declared where a
-// form is allowed to be: outside the one that sets the round up.
-templ deviceForms(c Ctx, d SetupData) {
-	if d.Match && d.Seats.Host != nil {
-		<form id="add-player" method="post" action="/players" hidden>
-			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-			<input type="hidden" name="request_key" value={ NewRequestKey() }/>
-		</form>
-		for _, player := range d.Seats.Players {
-			<form
-				id={ "drop-" + player.ID.String() }
-				method="post"
-				action={ templ.SafeURL("/players/" + player.ID.String() + "/remove") }
-				data-confirm={ c.T("players.removeConfirm", player.DisplayName) }
-				hidden
-			>
-				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-			</form>
-		}
-	}
 }
 
 // labelSpecimen is the number the plural label is rendered with for the
@@ -366,6 +308,21 @@ templ Setup(c Ctx, d SetupData) {
 						<div class="bold">{ c.T("challenge.sendTo", d.Opponent.DisplayName) }</div>
 					</div>
 				</div>
+			}
+			// Who is at this phone, before anything is asked about the round.
+			//
+			// Its own card, above the one that sets the round up, because
+			// filling the device and choosing from it are two acts and this is
+			// the first of them. It carries the forms that add and drop a
+			// player, which is why it has to be here rather than inside the
+			// setup form: HTML has no nested form, and the one time this panel
+			// was moved in there the parser adopted its controls and "Add"
+			// started submitting the challenge.
+			//
+			// The match screen only. A round on your own has nobody to pass the
+			// phone to, and d.Seats is left empty for it.
+			if d.Match {
+				@SharedDevice(c, d.Seats)
 			}
 			<div class="card card--pad-lg stack">
 				<h1 style="font-size:1.5rem">
@@ -617,7 +574,7 @@ templ Setup(c Ctx, d SetupData) {
 					}
 					<div class="field" data-source-pane="bank" hidden?={ d.Source != "" && d.Source != "bank" }>
 						<span class="label">{ c.T("game.setup.category") }</span>
-						<div class="choice-grid">
+						<div class="choice-grid choice-grid--tight">
 							@catRadio(c, 0, "🎲", c.T("game.setup.category.all"), d.SelectedCat == 0, d.Availability.Count(0, 0))
 							for _, cat := range d.Categories {
 								@catRadio(c, cat.ID, cat.Icon, cat.Name, d.SelectedCat == cat.ID, d.Availability.Count(cat.ID, 0))
@@ -629,7 +586,7 @@ templ Setup(c Ctx, d SetupData) {
 						// Difficulties the chosen category cannot fill are disabled, not
 						// hidden: a thin bank should be visible here rather than
 						// discovered by pressing Start and being refused.
-						<div class="choice-grid">
+						<div class="choice-grid choice-grid--tight">
 							for _, level := range difficultyChoices {
 								@diffRadio(c, level.Level, level.Icon, d.SelectedDiff == level.Level, d.Availability.Count(d.SelectedCat, level.Level))
 							}
@@ -700,7 +657,6 @@ templ Setup(c Ctx, d SetupData) {
 					<template data-i18n-setup-too-few>{ c.T("game.setup.tooFew") }</template>
 					<template data-i18n-setup-capped>{ c.T("game.setup.capped") }</template>
 				</form>
-				@deviceForms(c, d)
 			</div>
 		</div>
 	}

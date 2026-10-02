@@ -137,6 +137,106 @@ Scrub anything personal before it leaves production.
 
 ---
 
+## Hosting it for free
+
+Four things in this application decide which free tiers are usable, and they
+rule out most of them before price enters the question:
+
+1. **One instance, and only one.** The SSE hub and the rate limiters count in
+   memory (see *Scaling past one instance*), so a platform that answers load by
+   adding replicas is answering it wrongly here.
+2. **`UPLOAD_DIR` must survive a restart.** Photos and voice notes are files on
+   disk with only their metadata in the database. A host with an ephemeral
+   filesystem does not lose the rows — it leaves every one of them pointing at
+   a file that is gone.
+3. **A database that does not expire.** Several "free" Postgres offers are
+   30-day trials wearing a free-tier label.
+4. **A way to run `sirajctl` once.** The question bank and the first admin
+   cannot be created through the web UI, and free plans are usually the ones
+   with no shell and no one-off jobs.
+
+### The no-credit-card route: Render + Neon
+
+Render runs the web service, Neon holds the database. Neither asks for a card.
+
+Render's free web service builds this repository's `Dockerfile` directly, gives
+512 MB of RAM and 0.1 CPU, and terminates TLS for you — so `TRUSTED_PROXY_HOPS`
+is `1`. Its 750 instance-hours a month cover a 31-day month's 744, so one
+service can stay up continuously. It **spins down after 15 minutes without
+traffic** and takes about a minute to come back.
+
+Do **not** use Render's own free Postgres: it expires 30 days after creation,
+with a 14-day grace period, and then it is deleted. Neon's free plan is a
+permanent tier — 0.5 GB of storage and 100 compute-hours per project each
+month, scaling to zero after 5 minutes idle.
+
+One gotcha in the wiring: the server reads `APP_ADDR`, not `PORT`, so the
+platform's injected `PORT` is ignored. Set the address yourself.
+
+```
+APP_ENV=production
+APP_ADDR=:10000
+DATABASE_URL=postgres://…neon.tech/siraj?sslmode=require
+SESSION_SECRET=<openssl rand -hex 32>
+BASE_URL=https://<your-service>.onrender.com
+SECURE_COOKIES=true
+TRUSTED_PROXY_HOPS=1
+SEED_ON_START=false
+```
+
+Free Render services have no shell and no one-off jobs, which would leave no way
+to run the two commands a fresh database needs. Run them from your own machine
+instead — `sirajctl` reads `DATABASE_URL` from the environment, and Neon is
+reachable from anywhere:
+
+```bash
+DATABASE_URL='postgres://…neon.tech/siraj?sslmode=require' ./bin/sirajctl seed
+DATABASE_URL='postgres://…neon.tech/siraj?sslmode=require' ./bin/sirajctl promote <username>
+```
+
+This is the reason `SEED_ON_START` does not need to become `true` to get a
+deployment off the ground, and it should not: a restart is still not a decision
+about content.
+
+What you are accepting on this route:
+
+- **Uploads do not survive.** Free Render instances cannot attach a persistent
+  disk, and the filesystem is wiped on every redeploy, restart and spin-down.
+  Attachments sent before a restart are gone after it. Tolerable for a demo;
+  not a place to invite players to keep anything.
+- **Spin-down interrupts live play.** The event stream sends a comment frame
+  every 25 seconds, which is well inside the 60–120 seconds that proxies allow
+  an idle connection, so a stream stays open while the service is up. A
+  spun-down service drops every connection and needs about a minute to return;
+  a round in progress gets the reconnect notice.
+
+### The route that satisfies every constraint: an always-free VM
+
+A small always-free virtual machine is the only free option that meets all four
+requirements at once, because it is just a machine: real block storage for
+uploads, no spin-down, Postgres alongside the app, and a shell for `sirajctl`.
+It is then exactly the *Test server* recipe above — `docker compose --profile
+full up -d --build` — with a TLS terminator in front, which Caddy will do with
+an automatic certificate.
+
+Oracle Cloud's Always Free ARM (Ampere A1) instances are the usual candidate,
+and two caveats matter before you plan around one: the 2026 allocation is being
+reduced from 4 OCPU / 24 GB to roughly 2 OCPU / 12 GB with usage past that
+billable rather than refused, and provisioning depends on regional capacity, so
+the instance you want is not always available in the region you want it. A card
+is required for identity verification.
+
+### Ruled out
+
+- **Fly.io** no longer has a free tier — what remains is a trial of roughly two
+  VM-hours or seven days.
+- **Koyeb's** free web service is a reasonable shape (512 MB, 0.1 vCPU, 2 GB of
+  SSD, Frankfurt or Washington only) and now asks for a card, but its free
+  Postgres allows 5 compute-hours a month, which will not keep a database up.
+  Pair it with Neon if you prefer Koyeb to Render.
+
+---
+
 ## Production
 
 Same image. Differences are operational, not in the code:

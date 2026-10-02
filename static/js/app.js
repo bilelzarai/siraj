@@ -2763,6 +2763,9 @@
     // And the smallest match there is. One person is a solo round, which is
     // the other screen.
     const MIN_PLAYERS = 2;
+    // The group whose people are at this phone rather than on a list, spelled
+    // the way the server spells it in models.SourceDevice.
+    const DEVICE_SOURCE = "device";
 
     // Who is actually ticked, read from the boxes themselves.
     //
@@ -2899,6 +2902,12 @@
         const input = $("input", item);
         item.classList.toggle("is-on", !!input && input.checked);
       });
+      // The roster panel above the card is about this phone, so it belongs to
+      // the device group and goes with it. Left on screen for the other two it
+      // headed a challenge to a friend three cities away with "Playing on this
+      // device", over a box for adding somebody who could not be in that match.
+      const roster = $("[data-device-roster]");
+      if (roster) roster.hidden = value !== DEVICE_SOURCE;
       syncTeams();
     }
 

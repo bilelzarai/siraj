@@ -51,9 +51,11 @@ var (
 	// players is one against one however the sides are labelled, and a side of
 	// one person is not a side.
 	ErrTeamsNeedMore = errors.New("a team match needs a side with more than one player on it")
-	// ErrInRoom is opening a room while already in one. A person is in one
-	// room at a time, and opening one puts them in it.
-	ErrInRoom = errors.New("already in a room")
+	// ErrOtherKindOfRoom is a guest at the door of an account's room, or an
+	// account at the door of a guest's. The two directories are separate: a
+	// temporary room is swept with the people in it, so it holds only people
+	// who are swept, and a permanent one only people who are not.
+	ErrOtherKindOfRoom = errors.New("that room is not for this kind of player")
 	// ErrMixedSources is a match built from two of the three groups at once —
 	// a friend and a guest at the device, or a room member and a friend. A
 	// match is with one group.
@@ -254,6 +256,19 @@ func (s *Social) OpenThread(ctx context.Context, kind, title, topic string, owne
 		return nil, ErrInvalidThread
 	}
 
+	// A guest opens rooms and nothing else. The routes say so too, but a
+	// group is built out of friends and a temporary player has none, so the
+	// refusal belongs where the rule lives rather than only at the door.
+	if kind == models.ConversationGroup {
+		owner, err := s.repo.UserByID(ctx, ownerID)
+		if err != nil {
+			return nil, err
+		}
+		if owner.IsGuest() {
+			return nil, ErrGuest
+		}
+	}
+
 	// You can only put friends in a group. An invitation into a conversation
 	// is a thing that arrives uninvited, and that is only welcome from
 	// somebody you already know.
@@ -278,12 +293,6 @@ func (s *Social) OpenThread(ctx context.Context, kind, title, topic string, owne
 
 	conv, err := s.repo.CreateThread(ctx, kind, title, topic, ownerID, members)
 	if err != nil {
-		if errors.Is(err, repository.ErrBusy) {
-			// Opening a room puts you in it, and a person is in one room at a
-			// time. Leaving the current one first is the answer, and it is a
-			// thing they can do rather than a failure.
-			return nil, ErrInRoom
-		}
 		return nil, err
 	}
 	// Being put in a group is news; walking into a room is not, because
@@ -315,6 +324,9 @@ func (s *Social) OpenThread(ctx context.Context, kind, title, topic string, owne
 func (s *Social) JoinRoom(ctx context.Context, convID, userID uuid.UUID) (*uuid.UUID, error) {
 	left, err := s.repo.JoinThread(ctx, convID, userID)
 	if err != nil {
+		if errors.Is(err, repository.ErrForbidden) {
+			return nil, ErrOtherKindOfRoom
+		}
 		return nil, err
 	}
 	rooms := []uuid.UUID{convID}
@@ -458,10 +470,10 @@ func (s *Social) CreateMatch(ctx context.Context, host uuid.UUID, invited []uuid
 	// What makes a team match a team match, rather than a word on top of one.
 	//
 	// Two sides at least — everybody on team one is a free-for-all with extra
-	// labels — and at least one of those sides holding more than one person.
-	// Without the second test, a host and one guest on separate sides passed as
-	// "teams": one against one, with the scoreboard adding up a single number
-	// per side and implying there was something to add.
+	// labels — and every side with at least two people on it. The weaker rule
+	// this replaces asked only that *one* side be shared, which let two
+	// against one through: a duel where one player's score was reported as a
+	// team total, against a pair who had something to add up.
 	if format == models.FormatTeam {
 		if len(seats)+1 < models.MinTeamPlayers {
 			return nil, ErrTeamsNeedMore
@@ -470,7 +482,7 @@ func (s *Social) CreateMatch(ctx context.Context, host uuid.UUID, invited []uuid
 		if len(sides) < 2 {
 			return nil, ErrOneSidedTeams
 		}
-		if !anySideSharedBy(sides, 2) {
+		if !everySideSharedBy(sides, models.MinPerSide) {
 			return nil, ErrTeamsNeedMore
 		}
 	}
@@ -549,16 +561,17 @@ func countSides(hostTeam int, seats []repository.MatchSeat) map[int]int {
 	return sides
 }
 
-// anySideSharedBy reports whether at least one side has this many people on it.
-// A match of four split one-one-one-one is four sides of one, which is a
-// free-for-all however the sides are numbered.
-func anySideSharedBy(sides map[int]int, n int) bool {
+// everySideSharedBy reports whether every side in play has this many people on
+// it. A match of four split one-one-one-one is four sides of one, which is a
+// free-for-all however the sides are numbered; a match of three split two-one
+// is a duel in which one of the duellists happens to be a pair.
+func everySideSharedBy(sides map[int]int, n int) bool {
 	for _, count := range sides {
-		if count >= n {
-			return true
+		if count < n {
+			return false
 		}
 	}
-	return false
+	return len(sides) > 0
 }
 
 // AuthoredQuestion is one question a player wrote for their own match.

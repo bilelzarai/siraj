@@ -273,6 +273,31 @@ func (h *Handlers) Challenges(w http.ResponseWriter, r *http.Request) {
 	c := h.viewCtx(w, r)
 	ctx := r.Context()
 
+	// A match on this device that is already under way is not something to
+	// read a list about. The phone is meant to be going round the table, so
+	// this screen hands it on rather than showing a card about it.
+	//
+	// It lives here rather than in the redirect so that the destination is
+	// the same wherever somebody arrives from — the Start button, the back
+	// button, a bookmark, the tab bar — and so that walking away from the
+	// round and pressing Challenges brings the phone back to whoever is
+	// holding it rather than to a list with nothing to choose on it.
+	// Only when no particular list was asked for. Somebody who typed
+	// ?tab=finished wants that list and should get it, match or no match;
+	// forwarding them too would make the finished list unreachable for as
+	// long as a match is open on this phone.
+	if r.URL.Query().Get("tab") == "" {
+		device, err := h.deviceRound(r)
+		if err != nil {
+			h.serverError(w, r, err)
+			return
+		}
+		if device.Hot() && !device.Done() {
+			redirect(w, r, "/play/round")
+			return
+		}
+	}
+
 	tab := r.URL.Query().Get("tab")
 	switch tab {
 	case "outgoing", "finished":
@@ -333,6 +358,8 @@ func (h *Handlers) NewChallengeForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	d.Match = true
+
 	friends, err := h.repo.Friends(r.Context(), c.User.ID)
 	if err != nil {
 		h.serverError(w, r, err)
@@ -384,7 +411,7 @@ func (h *Handlers) NewChallengeForm(w http.ResponseWriter, r *http.Request) {
 			if username == "" {
 				continue
 			}
-			opponent, err := h.repo.UserCardByUsername(r.Context(), username)
+			opponent, err := h.reachableCard(r, c.User.ID, username)
 			if err != nil {
 				h.notFoundOrError(w, r, err)
 				return
@@ -496,7 +523,7 @@ func (h *Handlers) CreateChallenge(w http.ResponseWriter, r *http.Request) {
 		if username == "" {
 			continue
 		}
-		card, err := h.repo.UserCardByUsername(r.Context(), username)
+		card, err := h.reachableCard(r, c.User.ID, username)
 		if err != nil {
 			h.notFoundOrError(w, r, err)
 			return
@@ -619,7 +646,8 @@ func (h *Handlers) CreateChallenge(w http.ResponseWriter, r *http.Request) {
 		// What went wrong, in the reader's language, before deciding where to
 		// put it. The dialog and the full setup screen are two places to say
 		// the same sentence, and working it out twice is how they drift.
-		message := challengeProblem(c, err, cards, availabilityFor(h, r, c.Locale, category, difficulty))
+		message := challengeProblem(c, err, cards,
+			availabilityFor(h, r, c.Locale, category, difficulty), playerSource)
 		if message == "" {
 			h.serverError(w, r, err)
 			return
@@ -627,7 +655,6 @@ func (h *Handlers) CreateChallenge(w http.ResponseWriter, r *http.Request) {
 		h.challengeRefused(w, r, c, message, category, difficulty, count, source, cards)
 		return
 	}
-	h.completeRequest(r, "/challenges?tab=outgoing")
 	slog.InfoContext(r.Context(), "match created",
 		"id", ch.ID, "host", c.User.Username,
 		"from", playerSource, "players", len(invited)+len(local)+1)
@@ -638,10 +665,48 @@ func (h *Handlers) CreateChallenge(w http.ResponseWriter, r *http.Request) {
 	seated := len(invited) + len(local)
 	message := c.T("challenge.sentTo", seated)
 	where := "/challenges?tab=outgoing"
+
+	// A match on one device has nobody to wait for, so it does not wait.
+	//
+	// It used to be built and then parked on the challenge list behind a
+	// second button — "Start for all 3" — which is the right screen for a
+	// match with people on other phones, where the host waits for them to
+	// accept and then sets everyone going at once. Here the players are
+	// standing in the room. There is no invitation, nothing to accept and
+	// nobody to be waited for, so the list was a stop on the way to the
+	// handover and the button on it asked a question with one answer.
+	//
+	// Pressing Start now starts it: rounds are opened for everybody at the
+	// device and the phone goes straight to the first handover screen.
 	if playerSource == models.SourceDevice {
-		message = c.T("challenge.readyHere", seated)
-		where = "/challenges"
+		players, startErr := h.social.StartMatch(r.Context(), ch, c.User.ID)
+		if startErr != nil {
+			// The match exists and is sound; only setting it going failed.
+			// Send them to the list, where the button still is, rather than
+			// throwing away a match they have just built.
+			slogError(r, startErr)
+			h.completeRequest(r, "/challenges")
+			h.flash(w, "info", c.T("challenge.readyHere", seated))
+			redirect(w, r, "/challenges")
+			return
+		}
+		h.openRounds(w, r, ch, players)
+
+		h.completeRequest(r, "/challenges")
+		if isAPIRequest(r) {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"url":     "/challenges",
+				"players": seated,
+				"message": c.T("challenge.readyHere", seated),
+			})
+			return
+		}
+		h.flash(w, "success", c.T("challenge.readyHere", seated))
+		redirect(w, r, "/challenges")
+		return
 	}
+
+	h.completeRequest(r, "/challenges?tab=outgoing")
 
 	// Only now is there anywhere to go. The dialog is told where; it was
 	// deliberately not sent to the challenge screen before the challenge
@@ -942,6 +1007,22 @@ func (h *Handlers) RandomChallenge(w http.ResponseWriter, r *http.Request) {
 	redirect(w, r, "/challenges/new?opponent="+urlEscape(strings.Join(names, ",")))
 }
 
+// reachableCard resolves a name to somebody this player may actually invite.
+//
+// An account first, because that is who most people are. Failing that, the
+// room they are standing in — the only place a temporary player can be named,
+// and the reason this is not simply UserCardByUsername: that query cannot see
+// a guest by design, so pressing Challenge beside another guest in a room
+// answered Not Found. Whether they are really still in the room is checked
+// again when the match is opened; this only decides whose name it is.
+func (h *Handlers) reachableCard(r *http.Request, viewer uuid.UUID, username string) (*models.UserCard, error) {
+	card, err := h.repo.UserCardByUsername(r.Context(), username)
+	if errors.Is(err, repository.ErrNotFound) {
+		return h.repo.UserCardInMyRoom(r.Context(), viewer, username)
+	}
+	return card, err
+}
+
 // loadChallengeForViewer fetches a match and works out who at this device is
 // answering for it.
 //
@@ -1018,7 +1099,7 @@ func slogError(r *http.Request, err error) {
 // the dialog and the setup screen are two ways of asking the same question, and
 // a reason that exists in only one of them is a reason somebody meets as a
 // blank refusal.
-func challengeProblem(c views.Ctx, err error, cards []*models.UserCard, available int) string {
+func challengeProblem(c views.Ctx, err error, cards []*models.UserCard, available int, source string) string {
 	switch {
 	case errors.Is(err, service.ErrNotFriends), errors.Is(err, service.ErrUnreachable):
 		return c.T("challenge.notFriends")
@@ -1033,6 +1114,15 @@ func challengeProblem(c views.Ctx, err error, cards []*models.UserCard, availabl
 	case errors.Is(err, service.ErrTeamsNeedMore):
 		return c.T("challenge.teamsNeedMore", models.MinTeamPlayers)
 	case errors.Is(err, service.ErrSelfTarget):
+		// Named for the group the form was on. "Pick at least one friend" is
+		// no help to somebody on the device tab, and actively misleading to a
+		// guest, who cannot have one.
+		switch source {
+		case models.SourceDevice:
+			return c.T("challenge.pickHere")
+		case models.SourceRoom:
+			return c.T("challenge.pickInRoom")
+		}
 		return c.T("challenge.pickSomebody")
 	case errors.Is(err, service.ErrTooManyPlayers):
 		return c.T("challenge.tooMany", models.MaxChallengePlayers)
@@ -1085,6 +1175,10 @@ func (h *Handlers) challengeRefused(w http.ResponseWriter, r *http.Request, c vi
 		h.serverError(w, r, err)
 		return
 	}
+	// Still the match screen: a refusal re-opens the form that was submitted,
+	// and a form that came back pointing at the solo endpoint would turn the
+	// second attempt into a round on their own.
+	d.Match = true
 	if len(cards) > 0 {
 		d.Opponent = cards[0]
 	}

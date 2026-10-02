@@ -16,8 +16,12 @@ import (
 // question is actually asked beats a help page nobody opens.
 templ threadSwitch(c Ctx, d MessagesData) {
 	<div class="switch" role="tablist">
-		@switchTab(c, d, models.ConversationDirect, c.T("threads.tab.direct"))
-		@switchTab(c, d, models.ConversationGroup, c.T("threads.tab.group"))
+		// A guest has rooms and only rooms, so they get no switcher: two of
+		// the three segments would lead to an empty list and a sign-up form.
+		if !c.IsGuest() {
+			@switchTab(c, d, models.ConversationDirect, c.T("threads.tab.direct"))
+			@switchTab(c, d, models.ConversationGroup, c.T("threads.tab.group"))
+		}
 		@switchTab(c, d, models.ConversationRoom, c.T("threads.tab.room"))
 	</div>
 	<p class="switch__note">{ c.T("threads.note." + d.Tab) }</p>
@@ -92,22 +96,23 @@ templ roomRow(c Ctx, conv *models.Conversation) {
 	</div>
 }
 
-// NewThread is the screen for starting a group or opening a room.
+// NewGroupPage is the screen for starting a group: a name, and which friends.
 //
-// One template for both, because they differ in two things: a group picks
-// people and a room states a subject. Two screens that were nine-tenths the
-// same would drift apart.
+// Rooms have no screen of their own. Opening one is a name and a line about
+// it, which fits beside the list it will appear in — and sending somebody to
+// another page to type two fields, only to send them back, was a page load in
+// each direction for a form that is smaller than the page around it. A group
+// keeps its own screen because choosing people from a list is the larger half
+// of making one.
 templ NewThread(c Ctx, d NewThreadData) {
-	{{ room := d.Kind == models.ConversationRoom }}
-	@Base(c, c.T(titleKey(d.Kind))) {
-		<div class="container container--narrow">
-			<a class="back-link" href="/messages">{ c.T("common.back") }</a>
-			<h1 class="page-title">{ c.T(titleKey(d.Kind)) }</h1>
-			<p class="muted">{ c.T("threads.note." + d.Kind) }</p>
+	@Base(c, c.T("threads.newGroup")) {
+		<div class="shell shell--narrow stack">
+			@BackLink(c, "/messages", c.T("messages.title"))
+			@PageHead(c.T("threads.newGroup"), c.T("threads.note.group"))
 			<form class="card stack" method="post" action="/messages/new">
 				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
 				<input type="hidden" name="request_key" value={ NewRequestKey() }/>
-				<input type="hidden" name="kind" value={ d.Kind }/>
+				<input type="hidden" name="kind" value={ models.ConversationGroup }/>
 				<label class="field">
 					<span class="label">{ c.T("threads.name") }</span>
 					<input
@@ -117,32 +122,25 @@ templ NewThread(c Ctx, d NewThreadData) {
 						maxlength="60"
 						required
 						autofocus
-						placeholder={ c.T(placeholderKey(d.Kind)) }
+						placeholder={ c.T("threads.groupHint") }
 					/>
 				</label>
-				if room {
-					<label class="field">
-						<span class="label">{ c.T("threads.topic") }</span>
-						<input class="input" type="text" name="topic" maxlength="120" placeholder={ c.T("threads.topicHint") }/>
-					</label>
-				} else {
-					<fieldset class="field">
-						<legend class="label">{ c.T("threads.who") }</legend>
-						if len(d.Friends) == 0 {
-							<p class="muted small">{ c.T("threads.noFriends") }</p>
-						} else {
-							<div class="pick">
-								for _, f := range d.Friends {
-									<label class="pick__one">
-										<input type="checkbox" name="member" value={ f.Username }/>
-										@AvatarWithPresence(f, "sm")
-										<span class="truncate">{ f.DisplayName }</span>
-									</label>
-								}
-							</div>
-						}
-					</fieldset>
-				}
+				<fieldset class="field">
+					<legend class="label">{ c.T("threads.who") }</legend>
+					if len(d.Friends) == 0 {
+						<p class="muted small">{ c.T("threads.noFriends") }</p>
+					} else {
+						<div class="pick">
+							for _, f := range d.Friends {
+								<label class="pick__one">
+									<input type="checkbox" name="member" value={ f.Username }/>
+									@AvatarWithPresence(f, "sm")
+									<span class="truncate">{ f.DisplayName }</span>
+								</label>
+							}
+						</div>
+					}
+				</fieldset>
 				<button class="btn btn--primary" type="submit">{ c.T("threads.create") }</button>
 			</form>
 		</div>
@@ -163,16 +161,26 @@ templ MemberList(c Ctx, conv *models.Conversation, members []*models.UserCard) {
 	<div class="who__list" data-who-list>
 		for _, m := range members {
 			<div class="who__row">
-				<a class="user-row__link" href={ templ.SafeURL("/u/" + m.Username) }>
-					@AvatarWithPresence(m, "sm")
-					<span class="user-row__body">
-						<span class="user-row__name truncate">{ m.DisplayName }</span>
-						<span class="user-row__meta truncate">{ "@" + m.Username }</span>
-					</span>
-					if conv.OwnerID != nil && *conv.OwnerID == m.ID {
-						<span class="tag">{ c.T("threads.owner") }</span>
-					}
-				</a>
+				if !m.HasProfile() {
+					<div class="user-row__link">
+						@AvatarWithPresence(m, "sm")
+						<span class="user-row__body">
+							<span class="user-row__name truncate">{ m.DisplayName }</span>
+							<span class="user-row__meta truncate">{ c.T("players.guest") }</span>
+						</span>
+					</div>
+				} else {
+					<a class="user-row__link" href={ templ.SafeURL("/u/" + m.Username) }>
+						@AvatarWithPresence(m, "sm")
+						<span class="user-row__body">
+							<span class="user-row__name truncate">{ m.DisplayName }</span>
+							<span class="user-row__meta truncate">{ "@" + m.Username }</span>
+						</span>
+						if conv.OwnerID != nil && *conv.OwnerID == m.ID {
+							<span class="tag">{ c.T("threads.owner") }</span>
+						}
+					</a>
+				}
 				// Challenging somebody you are in a room with is the point of
 				// being in one. It is offered here, next to their name, rather
 				// than on a screen they would have to be looked up on.
@@ -342,23 +350,42 @@ templ peoplePicker(c Ctx, d MessagesData) {
 	</div>
 }
 
+// pickerRow is one person in the picker. Somebody with no account has no
+// private thread to open, so their row is not a link to one — in a guest's
+// room every row would otherwise lead to the sign-up page.
 templ pickerRow(c Ctx, f *models.UserCard) {
-	<a
-		class="chat__item picker__row"
-		href={ templ.SafeURL("/messages/with/" + f.Username) }
-		data-picker-item={ f.DisplayName + " " + f.Username }
-		data-picker-user={ f.Username }
-	>
-		<span class="chat__item-link">
-			<span class="chat__ring" style={ AvatarStyle(AvatarSeedFor(f.ID, f.AvatarSeed, f.Username)) }>
-				@AvatarWithPresence(f, "md")
-			</span>
-			<span class="chat__item-body">
-				<span class="chat__item-name truncate">{ f.DisplayName }</span>
-				<span class="chat__item-preview truncate">{ "@" + f.Username }</span>
-			</span>
+	if f.HasProfile() {
+		<a
+			class="chat__item picker__row"
+			href={ templ.SafeURL("/messages/with/" + f.Username) }
+			data-picker-item={ f.DisplayName + " " + f.Username }
+			data-picker-user={ f.Username }
+		>
+			@pickerFace(c, f, "@"+f.Username)
+		</a>
+	} else {
+		<div
+			class="chat__item picker__row"
+			data-picker-item={ f.DisplayName + " " + f.Username }
+			data-picker-user={ f.Username }
+		>
+			@pickerFace(c, f, c.T("players.guest"))
+		</div>
+	}
+}
+
+// pickerFace is the avatar and the two lines of a picker row, with or without
+// a link around it.
+templ pickerFace(c Ctx, f *models.UserCard, meta string) {
+	<span class="chat__item-link">
+		<span class="chat__ring" style={ AvatarStyle(AvatarSeedFor(f.ID, f.AvatarSeed, f.Username)) }>
+			@AvatarWithPresence(f, "md")
 		</span>
-	</a>
+		<span class="chat__item-body">
+			<span class="chat__item-name truncate">{ f.DisplayName }</span>
+			<span class="chat__item-preview truncate">{ meta }</span>
+		</span>
+	</span>
 }
 
 // sheetThreads lists what the viewer is already in, of one kind.

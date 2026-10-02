@@ -30,8 +30,17 @@ reads; these are the ones without a usable default:
 | `BASE_URL` | production | Must be `https://`. Used in password-reset links |
 | `TRUSTED_PROXY_HOPS` | behind a proxy | `1` behind one reverse proxy, `2` with a CDN in front. `0` ignores `X-Forwarded-For` entirely, which is right when nothing is in front |
 
-`SEED_ON_START=true` upserts the bundled question bank on boot and leaves
-locally edited translations alone. Safe to leave on everywhere.
+`SEED_ON_START` is `false` and stays that way. The bundled question bank is
+real content, but it arrives by somebody asking for it once:
+
+```bash
+./bin/sirajctl seed
+```
+
+Idempotent, and it will not overwrite a translation that an import, the admin
+editor or an approved review has touched since — so re-run it after editing
+`internal/database/seed/questions.json`. Boot-time seeding is the thing to avoid:
+a restart is not a decision about content.
 
 **Secrets never go in the repository.** `.env` is git-ignored; put the real
 values in the host's secret store or the unit file's `EnvironmentFile`.
@@ -68,10 +77,20 @@ cp .env.example .env     # defaults point at the compose database
 make db-up               # PostgreSQL 16 on :5434
 make tools               # the templ CLI
 make run                 # http://localhost:8080
+go run ./cmd/sirajctl seed   # once, to put the question bank in
 ```
 
 `make check` runs vet and the tests. The suite builds and drops its own
 database, so it never touches your development data.
+
+Without `make` installed, the targets are thin enough to run by hand:
+
+```bash
+docker compose up -d db
+go run github.com/a-h/templ/cmd/templ@latest generate
+STATIC_DIR=./static go run ./cmd/server
+go vet ./... && go test ./... -count=1
+```
 
 ---
 
@@ -89,7 +108,12 @@ SESSION_SECRET=$(openssl rand -hex 32)
 BASE_URL=https://test.example
 EOF
 
-docker compose up -d --build
+# --profile full is not optional: the app service is behind that profile, so
+# a plain `docker compose up` starts the database and nothing else.
+docker compose --profile full up -d --build
+
+# once the app has booted and migrated, put the question bank in
+docker compose exec app /app/sirajctl seed
 ```
 
 The `app` service already sets `APP_ENV=production`, `SECURE_COOKIES=true` and
@@ -99,7 +123,9 @@ login and password-reset limiters end up keyed on an address the caller chose
 for themselves; with two proxies, raise it to `2`.
 
 `docker compose up db` alone is the dev database on `:5434` — the `app` service
-is the deployable one.
+is the deployable one, and it keeps uploads on a named `uploads` volume so
+attachments survive `up --build`. That volume is the one thing in this stack
+worth backing up besides the database.
 
 To refresh it from a prod backup:
 
@@ -132,6 +158,18 @@ temporary players whose time is up, spent password resets, old request keys. It
 is not a cron job and needs no scheduling, but it does mean **a single instance
 does this work** — run more than one and they will each sweep, which is
 harmless but wasteful.
+
+### First run
+
+Two things a fresh database does not have and the UI cannot give it:
+
+```bash
+./bin/sirajctl seed              # the question bank
+./bin/sirajctl promote <username>   # the first admin
+```
+
+Both are idempotent. `seed` is also how a content edit reaches production:
+edit the JSON, deploy, run it again.
 
 ### First administrator
 
@@ -171,3 +209,4 @@ Neither matters at one instance, and both are noted where they live.
 - [ ] `TRUSTED_PROXY_HOPS` matches the real number of proxies
 - [ ] `UPLOAD_DIR` on a volume that survives the deploy
 - [ ] An admin account exists
+- [ ] `sirajctl seed` has been run, so there are questions to play

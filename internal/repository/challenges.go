@@ -120,20 +120,6 @@ func (r *Repo) SetChallengeQuestions(ctx context.Context, id uuid.UUID, ids []in
 	return err
 }
 
-// PendingChallengeCount drives the navbar badge: matches waiting on this
-// person, whether they were invited or have joined and not yet played.
-func (r *Repo) PendingChallengeCount(ctx context.Context, userID uuid.UUID) (int, error) {
-	var n int
-	err := r.pool.QueryRow(ctx, `
-		SELECT count(*)
-		  FROM challenge_players p
-		  JOIN challenges c ON c.id = p.challenge_id
-		 WHERE p.user_id = $1 AND p.state IN ('invited', 'joined')
-		   AND c.status IN ('pending', 'accepted') AND c.expires_at > now()`,
-		userID).Scan(&n)
-	return n, err
-}
-
 // SetChallengeStatus moves a match that is still open.
 //
 // Guarded on it being open: a cancelled match is final, and without this a late

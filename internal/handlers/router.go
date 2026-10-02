@@ -90,6 +90,14 @@ func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 			// purpose.
 			r.Get("/api/people", h.People)
 
+			// Looking back over the round that just finished. The list of
+			// past rounds is history and needs an account; one round's own
+			// answers are part of that round, which a temporary player is
+			// entitled to read for as long as it exists. Review refuses any
+			// session but the reader's own, so opening it here widens who may
+			// look at their own round and nothing else.
+			r.Get("/history/{id}", h.Review)
+
 			r.Get("/questions/{id}/comments", h.QuestionComments)
 			r.Post("/questions/{id}/comments", h.PostQuestionComment)
 
@@ -132,48 +140,70 @@ func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 				r.Post("/{id}/start", h.StartChallenge)
 			})
 
-			// Everything below needs an account. Anonymous play is a complete
-			// game and deliberately nothing more: no saved progress, no
-			// friends, no messages, no history. Enforced here rather than by
-			// leaving links off a page, because a link is not a lock.
-			r.Group(func(r chi.Router) {
-				r.Use(h.RequireAccount)
+			// Rooms, which a temporary player may use and the rest of
+			// messaging is not.
+			//
+			// A room is the one place in this application where strangers
+			// meet, and meeting somebody is the whole of what anonymous play
+			// was missing: a guest could play, and had nobody to play with.
+			// So these routes sit outside RequireAccount, and the separation
+			// that keeps them safe is a different one — a temporary room
+			// holds temporary players only, enforced in the repository and
+			// again by a trigger. Everything else about a room is unchanged,
+			// including that every read and write below is gated on being a
+			// member of the thread.
+			r.Route("/messages", func(r chi.Router) {
+				r.Get("/", h.Messages)
+				r.Post("/new", h.CreateThread)
+				r.Post("/{id}/join", h.JoinRoom)
+				r.Post("/{id}/leave", h.LeaveThread)
+				r.Get("/{id}/members", h.ThreadMembers)
+				// The panel's numbers and previews on their own, for a page
+				// that has heard something changed and does not want to throw
+				// away a half-written message to find out what.
+				r.Get("/summary", h.ConversationSummary)
+				r.Get("/{id}", h.Messages)
+				r.Post("/{id}", h.SendMessage)
+				r.Get("/{id}/poll", h.PollMessages)
+				// Reading is its own act with its own route, so nothing can
+				// mark a message read as a side effect of fetching it.
+				r.Post("/{id}/read", h.MarkThreadRead)
+				r.Get("/{id}/receipts", h.Receipts)
+				r.Post("/{id}/m/{message}/withdraw", h.WithdrawMessage)
+				r.Post("/{id}/m/{message}/hide", h.HideMessage)
 
-				r.Route("/messages", func(r chi.Router) {
-					r.Get("/", h.Messages)
+				// The parts of a thread that only an account has: a private
+				// thread with one person, a group built out of friends, and
+				// the per-thread settings that go with keeping either.
+				r.Group(func(r chi.Router) {
+					r.Use(h.RequireAccount)
 					r.Get("/with/{username}", h.MessagesWith)
-					// Threads with more than two people in them. A group is
-					// people somebody chose; a room is a subject anybody may
-					// join. Both are reached through the same thread screen.
 					r.Get("/new/group", h.NewGroup)
-					r.Get("/new/room", h.NewRoom)
-					r.Post("/new", h.CreateThread)
-					r.Post("/{id}/join", h.JoinRoom)
-					r.Post("/{id}/leave", h.LeaveThread)
-					r.Get("/{id}/members", h.ThreadMembers)
-					// The panel's numbers and previews on their own, for a page
-					// that has heard something changed and does not want to throw
-					// away a half-written message to find out what.
-					r.Get("/summary", h.ConversationSummary)
-					r.Get("/{id}", h.Messages)
-					r.Post("/{id}", h.SendMessage)
-					r.Get("/{id}/poll", h.PollMessages)
-					// Reading is its own act with its own route, so nothing can
-					// mark a message read as a side effect of fetching it.
-					r.Post("/{id}/read", h.MarkThreadRead)
-					r.Get("/{id}/receipts", h.Receipts)
 					r.Post("/{id}/mute", h.MuteConversation)
 					r.Post("/{id}/delete", h.DeleteConversation)
-					r.Post("/{id}/m/{message}/withdraw", h.WithdrawMessage)
-					r.Post("/{id}/m/{message}/hide", h.HideMessage)
 				})
+			})
 
-				// What people sent each other. Guarded by who is in the
-				// conversation, so a guessed id reaches nothing.
-				r.Get("/files/{id}", h.Files)
+			// Everything below needs an account. Anonymous play is a complete
+			// game and deliberately nothing more: no saved progress, no
+			// friends, no history. Enforced here rather than by leaving links
+			// off a page, because a link is not a lock.
+			// What people sent each other. Guarded by who is in the
+			// conversation rather than by having an account, so a guessed id
+			// reaches nothing and a voice note in a guest's room still plays.
+			r.Get("/files/{id}", h.Files)
 
-				r.Get("/events", h.Events)
-				r.Get("/api/counts", h.UnreadCounts)
+			// The live stream and the badge counts. Both are per-person —
+			// the hub publishes to one subscriber and the counts are counted
+			// over that person's own threads — so a guest listening on them
+			// hears their own room and nothing else. Without this a room
+			// would be live for an account and silent for a guest, which is
+			// the same room behaving two ways.
+			r.Get("/events", h.Events)
+			r.Get("/api/counts", h.UnreadCounts)
+
+			r.Group(func(r chi.Router) {
+				r.Use(h.RequireAccount)
 
 				// What happened while they were away. Seven places write these;
 				// nothing read them back before this.
@@ -217,7 +247,6 @@ func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 				r.Get("/u/{username}", h.Profile)
 
 				r.Get("/history", h.History)
-				r.Get("/history/{id}", h.Review)
 
 				// Changing a password, revoking sessions and deleting an
 				// account are all about an account. A temporary player has

@@ -44,6 +44,13 @@ services:
       # keyed on an address the caller chose for themselves.
       TRUSTED_PROXY_HOPS: "1"
       DEFAULT_LOCALE: ar
+      # Photos and voice notes are written to disk with only their metadata in
+      # the database, so the directory has to outlive the container. Without
+      # the volume below every redeploy silently empties the message history
+      # of its attachments.
+      UPLOAD_DIR: /app/data/uploads
+    volumes:
+      - uploads:/app/data/uploads
     ports:
       - "8080:8080"
     healthcheck:
@@ -57,3 +64,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:

@@ -23,6 +23,10 @@ type SetupData struct {
 	// combinations the bank cannot fill, instead of letting a player pick one
 	// and be told afterwards.
 	Availability repository.Availability
+	// Match marks the screen that opens a match rather than a solo round.
+	// Set by the handler that serves it, because that is the one thing on
+	// this form which is about where you are rather than what you picked.
+	Match bool
 	// Opponent is set when the form is used to send a duel invitation. It is
 	// the first of Invited, kept for the one-against-one wording.
 	Opponent *models.UserCard
@@ -69,13 +73,22 @@ func (d SetupData) ChosenSource() string {
 		return models.SourceFriends
 	case len(d.RoomPeers) > 0:
 		return models.SourceRoom
-	case d.Seats.Any():
+	}
+	// Nobody anywhere: open on the device, because it is the one group that
+	// can be filled from this screen.
+	if d.Seats.Host != nil {
 		return models.SourceDevice
 	}
 	return models.SourceFriends
 }
 
-// HasSource reports whether one of the three has anybody to offer.
+// HasSource reports whether one of the three can be used.
+//
+// Friends and the room are lists: with nobody on them there is nothing to
+// pick and nothing this screen can do about it, so the tab is shut. The
+// device is not a list, it is a place — you can always add somebody to the
+// phone in your hand, and the form for doing it lives on that tab. Shutting
+// it when it was empty is what left a new player with no way in.
 func (d SetupData) HasSource(source string) bool {
 	switch source {
 	case models.SourceFriends:
@@ -83,15 +96,9 @@ func (d SetupData) HasSource(source string) bool {
 	case models.SourceRoom:
 		return len(d.RoomPeers) > 0
 	case models.SourceDevice:
-		return d.Seats.Any()
+		return d.Seats.Host != nil
 	}
 	return false
-}
-
-// CanInvite reports whether there is anybody to open a match with: a friend, a
-// person in the room, or a guest at this device.
-func (d SetupData) CanInvite() bool {
-	return len(d.Friends) > 0 || len(d.RoomPeers) > 0 || d.Seats.Any()
 }
 
 // Pickable is everyone who could be put on a side, flattened into one list for
@@ -110,30 +117,166 @@ type Pickable struct {
 // match they could not be in. Every row was a question about somebody the form
 // had already decided was not playing.
 //
-// Sides default to one, and the rows for a device match alternate, which is the
-// arrangement somebody setting up "us two against those two" would otherwise
-// make by hand every time.
+// Sides alternate, so the form opens on an arrangement the server accepts.
+//
+// They used to alternate for a device match and default to side one for
+// everybody else, which meant a team match with friends or with a room opened
+// with all four people on the same side — refused as one-sided the moment it
+// was sent. The person setting it up had to move half the names by hand
+// before the form would go through, with nothing on screen saying so until
+// after they pressed. The host is on side one, so the first name offered goes
+// to side two and they alternate from there: four people open as two against
+// two, which is what "us two against those two" means.
 func (d SetupData) Pickable() []Pickable {
 	switch d.ChosenSource() {
 	case models.SourceRoom:
-		return cards(d.RoomPeers, 1)
+		return cards(d.RoomPeers)
 	case models.SourceDevice:
 		out := make([]Pickable, 0, len(d.Seats.Players))
 		for i, p := range d.Seats.Players {
-			// Alternating, so a device of four opens as two against two
-			// rather than four against the host.
 			out = append(out, Pickable{
-				Key: p.ID.String(), Name: p.DisplayName, Team: 1 + (i+1)%2,
+				Key: p.ID.String(), Name: p.DisplayName, Team: alternating(i),
 			})
 		}
 		return out
 	default:
-		return cards(d.Friends, 1)
+		return cards(d.Friends)
 	}
 }
 
+// Picked is how many people the match would have in it as the page is drawn:
+// everybody already ticked, plus the host, who is always playing.
+//
+// Nobody at the device is ticked on arrival — the names are offered, not
+// chosen — so for that group this is the host alone until somebody presses
+// one, and the script takes it from there.
+func (d SetupData) Picked() int {
+	if d.ChosenSource() == models.SourceDevice {
+		return 1
+	}
+	return len(d.Invited) + 1
+}
+
+// devicePool is the people at this phone: who is here, who is in the match,
+// and how to add or drop somebody — as one list.
+//
+// It was two. A panel listed everybody as a chip with a ✕, and underneath it
+// the same people appeared again as tick-boxes, so a device with one guest on
+// it showed that guest's name three times in a column four inches tall and
+// asked two different questions about them without naming either.
+//
+// The forms were the other half, and the worse half. This sits inside the
+// form that sets the round up, and a form inside a form is not something HTML
+// has: the parser drops the inner tag and every control in it is adopted by
+// the outer one. So "Add" and "✕" submitted the challenge instead of adding
+// and dropping a player. They are declared outside now and referred to by id,
+// which is what the form attribute is for — the controls stay where they
+// belong on screen and belong to the right form underneath.
+templ devicePool(c Ctx, d SetupData, chosen string) {
+	<div data-source-pool={ models.SourceDevice } hidden?={ chosen != models.SourceDevice }>
+		<p class="tiny muted">{ c.T("players.hint") }</p>
+		<div class="pick-grid">
+			// The host is in every match they set up, so they are shown as
+			// playing rather than offered as something to choose.
+			if d.Seats.Host != nil {
+				<span class="pick">
+					<span class="pick__face">
+						<span class="avatar avatar--xs" style={ AvatarStyle(d.Seats.Host.ID.String()) }>
+							{ Initial(d.Seats.Host.DisplayName) }
+						</span>
+						<span class="truncate">{ d.Seats.Host.DisplayName }</span>
+						<span class="tag">{ c.T("players.you") }</span>
+					</span>
+				</span>
+			}
+			for _, player := range d.Seats.Players {
+				// The ✕ is a sibling of the label, not inside it: a button
+				// within a label is a press that also ticks the box.
+				<span class="row" style="gap:4px;min-width:0">
+					<label class="pick">
+						<input type="checkbox" name="local" value={ player.ID.String() }/>
+						<span class="pick__face">
+							<span class="avatar avatar--xs" style={ AvatarStyle(player.ID.String()) }>
+								{ Initial(player.DisplayName) }
+							</span>
+							<span class="truncate">{ player.DisplayName }</span>
+						</span>
+					</label>
+					<button
+						class="seat__drop"
+						type="submit"
+						form={ "drop-" + player.ID.String() }
+						aria-label={ c.T("players.remove") }
+						title={ c.T("players.removeConfirm", player.DisplayName) }
+					>✕</button>
+				</span>
+			}
+		</div>
+		if d.Seats.Full() {
+			<p class="tiny muted">{ c.T("players.tooMany", d.Seats.Max) }</p>
+		} else {
+			<span class="row" style="gap:8px">
+				<input
+					class="input input--sm"
+					type="text"
+					name="name"
+					form="add-player"
+					maxlength="40"
+					required
+					placeholder={ c.T("players.namePlaceholder") }
+					aria-label={ c.T("players.namePlaceholder") }
+				/>
+				<button class="btn btn--soft btn--sm" type="submit" form="add-player">
+					{ c.T("players.add") }
+				</button>
+			</span>
+		}
+	</div>
+}
+
+// deviceForms are the forms the controls above belong to, declared where a
+// form is allowed to be: outside the one that sets the round up.
+templ deviceForms(c Ctx, d SetupData) {
+	if d.Match && d.Seats.Host != nil {
+		<form id="add-player" method="post" action="/players" hidden>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<input type="hidden" name="request_key" value={ NewRequestKey() }/>
+		</form>
+		for _, player := range d.Seats.Players {
+			<form
+				id={ "drop-" + player.ID.String() }
+				method="post"
+				action={ templ.SafeURL("/players/" + player.ID.String() + "/remove") }
+				data-confirm={ c.T("players.removeConfirm", player.DisplayName) }
+				hidden
+			>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			</form>
+		}
+	}
+}
+
+// labelSpecimen is the number the plural label is rendered with for the
+// script to copy. Any number but one would do; the script swaps the digits
+// out for the real count, which is what keeps a format string off the page
+// even when the count changes without a page load.
+const labelSpecimen = 2
+
+// startLabel is the button's text for the number of people in the match.
+templ startLabel(c Ctx, d SetupData) {
+	if d.Picked() == 1 {
+		{ c.T("challenge.startOne", d.Picked()) }
+	} else {
+		{ c.T("challenge.startMany", d.Picked()) }
+	}
+}
+
+// alternating is the side the nth invited person opens on, counting the host
+// as the first player on side one.
+func alternating(n int) int { return 1 + (n+1)%2 }
+
 // cards turns one group into team rows.
-func cards(people []*models.UserCard, side int) []Pickable {
+func cards(people []*models.UserCard) []Pickable {
 	out := make([]Pickable, 0, len(people))
 	seen := map[string]bool{}
 	for _, p := range people {
@@ -141,7 +284,9 @@ func cards(people []*models.UserCard, side int) []Pickable {
 			continue
 		}
 		seen[p.Username] = true
-		out = append(out, Pickable{Key: p.Username, Name: p.DisplayName, Team: side})
+		out = append(out, Pickable{
+			Key: p.Username, Name: p.DisplayName, Team: alternating(len(out)),
+		})
 	}
 	return out
 }
@@ -222,11 +367,6 @@ templ Setup(c Ctx, d SetupData) {
 					</div>
 				</div>
 			}
-			// Several people, one phone. The panel is above the form because
-			// who is at the device decides who can be in the match, and being
-			// asked to tick somebody who is not on the list yet is the wrong
-			// way round.
-			@SharedDevice(c, d.Seats)
 			<div class="card card--pad-lg stack">
 				<h1 style="font-size:1.5rem">
 					if d.Opponent != nil {
@@ -250,7 +390,15 @@ templ Setup(c Ctx, d SetupData) {
 					// Who is playing. One friend is the duel this always was;
 					// ticking more makes a match, on the same screen, with no
 					// mode to choose first.
-					if d.CanInvite() {
+					//
+					// Always on the match screen, even with nobody to tick
+					// yet. It used to be hidden until somebody was pickable,
+					// which closed a loop the moment the panel for adding
+					// people moved inside it: a new player saw "Add at least
+					// 2 players to start" over a form with nothing to add
+					// them with. The screen for arranging a match must always
+					// carry the means of arranging one.
+					if d.Match {
 						<div class="field">
 							<span class="label">
 								{ c.T("challenge.players") }
@@ -315,25 +463,7 @@ templ Setup(c Ctx, d SetupData) {
 							</div>
 							// And whoever is sitting at this device. They need
 							// no invitation: they are already here.
-							<div data-source-pool={ models.SourceDevice } hidden?={ chosen != models.SourceDevice }>
-								if d.Seats.Any() {
-									<div class="pick-grid">
-										for _, player := range d.Seats.Players {
-											<label class="pick">
-												<input type="checkbox" name="local" value={ player.ID.String() }/>
-												<span class="pick__face">
-													<span class="avatar avatar--xs" style={ AvatarStyle(player.ID.String()) }>
-														{ Initial(player.DisplayName) }
-													</span>
-													<span class="truncate">{ player.DisplayName }</span>
-												</span>
-											</label>
-										}
-									</div>
-								} else {
-									<p class="muted small">{ c.T("players.noneHere") }</p>
-								}
-							</div>
+							@devicePool(c, d, chosen)
 							// One against one, or sides. A team match adds the
 							// scores up per side; with everybody on one side it
 							// would be a free-for-all with a different label, so
@@ -385,6 +515,12 @@ templ Setup(c Ctx, d SetupData) {
 									</label>
 								}
 								<p class="tiny muted" data-team-empty hidden>{ c.T("challenge.pickFirst") }</p>
+								// What is wrong with the split, while it is
+								// wrong. The server refuses a side of one, and
+								// finding that out after pressing Send means
+								// re-reading a form you thought you had
+								// finished.
+								<p class="tiny" data-team-split hidden>{ c.T("challenge.sideTooSmall", models.MinPerSide) }</p>
 							</div>
 						</div>
 					} else if d.Opponent != nil {
@@ -528,16 +664,43 @@ templ Setup(c Ctx, d SetupData) {
 							/>
 						</div>
 					}
-					<button class="btn btn--primary btn--block btn--lg" type="submit">
-						if d.Opponent != nil {
-							{ c.T("challenge.send") }
-						} else {
-							{ c.T("game.setup.start") }
-						}
-					</button>
+					// The button says what pressing it does, and keeps saying
+					// it as the ticks change.
+					//
+					// It used to read "Start" on both screens whatever was on
+					// them, which on the match screen is the one word that
+					// does not distinguish a round on your own from a match
+					// with three other people — the two things this form can
+					// make. The count comes from the people ticked plus the
+					// host, and it is recomputed in the browser as they are
+					// ticked; the two templates below are what it is rebuilt
+					// from, so the number is substituted into a translated
+					// sentence rather than a format string reaching the page.
+					if d.Match {
+						<button
+							class="btn btn--primary btn--block btn--lg"
+							type="submit"
+							disabled?={ d.Picked() < models.MinChallengePlayers }
+							data-start-button
+							data-label-one={ c.T("challenge.startOne", 1) }
+							data-label-many={ c.T("challenge.startMany", labelSpecimen) }
+						>
+							@startLabel(c, d)
+						</button>
+						<p
+							class="tiny muted"
+							data-start-hint
+							hidden?={ d.Picked() >= models.MinChallengePlayers }
+						>{ c.T("challenge.needTwoHint") }</p>
+					} else {
+						<button class="btn btn--primary btn--block btn--lg" type="submit">
+							{ c.T("game.setup.startPlay") }
+						</button>
+					}
 					<template data-i18n-setup-too-few>{ c.T("game.setup.tooFew") }</template>
 					<template data-i18n-setup-capped>{ c.T("game.setup.capped") }</template>
 				</form>
+				@deviceForms(c, d)
 			</div>
 		</div>
 	}
@@ -598,11 +761,21 @@ templ diffRadio(c Ctx, level int, icon string, checked bool, available int) {
 	</label>
 }
 
-// setupAction is where the form posts: a match when there is anybody to invite,
-// a solo round otherwise. The screens are the same shape; what differs is
-// whether anyone else is in it.
+// setupAction is where the form posts: the match screen opens a match, the
+// solo screen opens a round.
+//
+// It used to work this out by asking whether the viewer had any friends, and
+// that was wrong for everybody without one. A guest has none by definition,
+// so the screen they reached by pressing "New challenge" — with two people at
+// their device ticked, a category chosen and Teams offered — submitted to
+// /play/start and gave them a solo round of ten questions. The people they
+// had picked were simply dropped on the floor. The same held for anybody
+// playing with a room they had joined but no friends yet.
+//
+// Which screen you are on is a fact the handler knows. It is now carried
+// rather than guessed.
 func setupAction(d SetupData) string {
-	if d.Opponent != nil || len(d.Friends) > 0 {
+	if d.Match {
 		return "/challenges/new"
 	}
 	return "/play/start"
@@ -908,12 +1081,24 @@ templ Result(c Ctx, d ResultData) {
 					}
 				</section>
 			}
+			if c.IsGuest() {
+				// Said here because here is where it matters. A scoreboard is
+				// the moment somebody wants to keep something, and this one is
+				// on a timer: the round, the score and the players at this
+				// device all go when the guest does.
+				<div class="alert alert--info" role="status">
+					<span aria-hidden="true">⏳</span>
+					<span>{ c.T("guest.keepProgress") }</span>
+				</div>
+			}
 			<section class="row row--wrap" style="gap:10px">
 				<a class="btn btn--primary" href="/play">{ c.T("result.playAgain") }</a>
 				<a class="btn btn--ghost" href={ templ.SafeURL("/history/" + d.Session.ID.String()) }>
 					{ c.T("result.review") }
 				</a>
-				if len(d.Friends) > 0 {
+				if c.IsGuest() {
+					<a class="btn btn--soft" href="/register">{ c.T("guest.createAccount") }</a>
+				} else if len(d.Friends) > 0 {
 					<a class="btn btn--soft" href="/challenges/new">{ c.T("result.challenge") }</a>
 				}
 			</section>

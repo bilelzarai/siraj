@@ -57,18 +57,6 @@ func NewUploads(repo *repository.Repo, dir string, limit int64) *Uploads {
 // Enabled reports whether there is anywhere to put bytes.
 func (u *Uploads) Enabled() bool { return u != nil && u.dir != "" }
 
-func (u *Uploads) Limit() int64 { return u.limit }
-
-// Store reads the upload, decides what it is from its own first bytes, writes
-// it, and records it.
-//
-// The read is capped at one byte over the limit so an oversized file is
-// refused rather than buffered: without the cap the only thing standing
-// between the process and its memory is the honesty of Content-Length.
-func (u *Uploads) Store(ctx context.Context, ownerID uuid.UUID, name string, src io.Reader) (*models.Attachment, error) {
-	return u.store(ctx, ownerID, name, src, 0)
-}
-
 // StoreRecording is Store for a voice note, which arrives with a length the
 // bytes themselves do not carry: a WebM stream from MediaRecorder has no
 // duration in its header, so the only party that ever knows how long the
@@ -79,6 +67,16 @@ func (u *Uploads) Store(ctx context.Context, ownerID uuid.UUID, name string, src
 // one, and it is dropped rather than stored.
 func (u *Uploads) StoreRecording(ctx context.Context, ownerID uuid.UUID, name string, src io.Reader, durationMS int) (*models.Attachment, error) {
 	return u.store(ctx, ownerID, name, src, durationMS)
+}
+
+// Store reads the upload, decides what it is from its own first bytes, writes
+// it, and records it.
+//
+// The read is capped at one byte over the limit so an oversized file is
+// refused rather than buffered: without the cap the only thing standing
+// between the process and its memory is the honesty of Content-Length.
+func (u *Uploads) Store(ctx context.Context, ownerID uuid.UUID, name string, src io.Reader) (*models.Attachment, error) {
+	return u.store(ctx, ownerID, name, src, 0)
 }
 
 func (u *Uploads) store(ctx context.Context, ownerID uuid.UUID, name string, src io.Reader, durationMS int) (*models.Attachment, error) {

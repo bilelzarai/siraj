@@ -241,6 +241,17 @@ func janitor(ctx context.Context, repo *repository.Repo) {
 			slog.InfoContext(sweepCtx, "temporary players swept", "count", n)
 		}
 
+		// A room of guests, once the last of them has been swept. Deleting a
+		// guest nulls the owner of a room they opened but leaves the room
+		// standing, so without this a day of anonymous play leaves a
+		// directory of empty ones behind it. Runs after the guest sweep on
+		// purpose: the memberships it looks for are gone by then.
+		if n, err := repo.PurgeEmptyGuestRooms(sweepCtx); err != nil {
+			slog.ErrorContext(sweepCtx, "guest room sweep failed", "error", err)
+		} else if n > 0 {
+			slog.InfoContext(sweepCtx, "empty guest rooms swept", "count", n)
+		}
+
 		// The claims that make a resubmitted form harmless. Nothing reads one
 		// after a few hours, and a table that only grows eventually matters.
 		if n, err := repo.PurgeRequestKeys(sweepCtx); err != nil {

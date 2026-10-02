@@ -127,11 +127,29 @@ func TestHotSeatGoesRoundThePlayersOnEveryQuestion(t *testing.T) {
 		}
 	}
 
-	// The last answer sends the phone back to /play/round, which is where a
-	// device with nothing left to play closes every round and settles.
-	status, _ := a.get("/play/round")
-	if status != http.StatusSeeOther {
-		t.Fatalf("the finished round did not send the phone anywhere: %d", status)
+	// The last answer goes back to /play/round like every other one, and what
+	// is there is the last screen of the match rather than a redirect: the
+	// final question reviewed at the table, the scores, and the way on.
+	status, body := a.get("/play/round")
+	if status != http.StatusOK {
+		t.Fatalf("the last question did not get a screen of its own: %d", status)
+	}
+	last, err := a.repo.Question(t.Context(), match.QuestionIDs[total-1], "en", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, last.Choices[last.CorrectIndex]) {
+		t.Error("the last question's answer was never shown")
+	}
+	for _, p := range order {
+		if !strings.Contains(body, p.DisplayName) {
+			t.Errorf("the final scoreboard leaves out %s", p.DisplayName)
+		}
+	}
+
+	// Pressing on from it closes every round at the device.
+	if status, _ := a.post("/play/finish", url.Values{}); status != http.StatusSeeOther {
+		t.Fatalf("the way out of the last screen → %d", status)
 	}
 
 	// Everybody has played, so the match is settled and scored.

@@ -62,6 +62,12 @@ func (h *Handlers) Messages(w http.ResponseWriter, r *http.Request) {
 	default:
 		tab = models.ConversationDirect
 	}
+	// A guest has one of the three. Rooms are the whole of messaging without
+	// an account, so the panel opens on them and the other two segments are
+	// not drawn — there is nothing behind them and the server refuses both.
+	if c.IsGuest() {
+		tab = models.ConversationRoom
+	}
 
 	d := views.MessagesData{
 		Conversations: conversations,

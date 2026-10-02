@@ -18,3 +18,7 @@ data/
 /dist/
 *.out
 coverage.*
+
+# Compiled binaries built into the repository root.
+/sirajctl
+/server

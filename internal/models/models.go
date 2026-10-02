@@ -428,13 +428,17 @@ const (
 // than this and a team stops being a team.
 const MaxTeams = 4
 
-// MinTeamPlayers is how many people it takes before sides mean anything.
+// MinPerSide is how many people a side needs before it is a side.
 //
-// Three. With two, every arrangement is one person against one person, and
-// adding their scores up per side is addition with one number in it — the same
-// game as a duel, reported through a scoreboard that implies otherwise. Three
-// is the first count at which a side can actually be a side.
-const MinTeamPlayers = 3
+// Two. One person on their own is not a team, whatever the scoreboard adds
+// their score to, and a match of two sides where one of them is a single
+// player is a duel with an audience. This is the rule; MinTeamPlayers below
+// is what it works out to.
+const MinPerSide = 2
+
+// MinTeamPlayers is the smallest team match there is: two sides, both of them
+// real, which is four people.
+const MinTeamPlayers = MinPerSide * 2
 
 // Where the people in a match came from.
 //
@@ -821,7 +825,15 @@ type UserCard struct {
 	// Declining leaves no row, so it reads back as RelationNone and the pair
 	// can ask again rather than being stuck on "sent" for good.
 	Relation RelationState
+	// IsTemporary marks a player with no account: a guest at somebody's
+	// device, or somebody playing anonymously. They have no public profile
+	// and no private thread, so a list must not offer either.
+	IsTemporary bool
 }
+
+// HasProfile reports somebody there is a page to send a reader to. A
+// temporary player is a seat for an evening, not a person you can visit.
+func (u *UserCard) HasProfile() bool { return !u.IsTemporary }
 
 func (u *UserCard) Initials() string {
 	name := u.DisplayName
@@ -896,6 +908,11 @@ type Conversation struct {
 	// Joined reports whether the viewer is in this room. A room can be listed
 	// to somebody who has not joined it — that is what makes it open.
 	Joined bool
+	// IsTemporary marks a room opened by a player with no account. It holds
+	// temporary players and nothing else, and it is swept once the last of
+	// them is gone. Filled from the owner by a trigger, so it cannot disagree
+	// with who opened it.
+	IsTemporary bool
 }
 
 // IsDirect reports a thread between exactly two people.
@@ -1140,9 +1157,6 @@ type AdminQuestion struct {
 // mirrors len(i18n.Supported); models stays free of that import so it can
 // remain the one package that depends on nothing.
 const ShippedLocales = 3
-
-// Complete reports whether every shipped locale is present.
-func (q *AdminQuestion) Complete() bool { return q.LocaleCount >= ShippedLocales }
 
 // TranslationDraft is one locale of a question as the admin form edits it.
 type TranslationDraft struct {
@@ -1534,10 +1548,6 @@ func TicketNeedsPlayer(kind string) bool { return kind == TicketAbuse }
 // AwaitingStaff reports whether the player is the one currently waiting.
 func (t *Ticket) AwaitingStaff() bool {
 	return t.LastSender == "user" && (t.Status == TicketOpen || t.Status == TicketInProgress)
-}
-
-func (t *Ticket) IsOpen() bool {
-	return t.Status != TicketResolved && t.Status != TicketClosed
 }
 
 // Urgent covers the two priorities that should jump a queue.

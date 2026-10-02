@@ -28,12 +28,29 @@ var (
 	idAttr      = regexp.MustCompile(`(?i)\bid\s*=\s*"([^"]+)"`)
 	hasLang     = regexp.MustCompile(`(?i)<html[^>]*\blang\s*=\s*"[^"]+"`)
 	hasDir      = regexp.MustCompile(`(?i)<html[^>]*\bdir\s*=\s*"(ltr|rtl)"`)
+	labelTag    = regexp.MustCompile(`(?is)<label\b[^>]*>.*?</label>`)
 )
+
+// wrappedFields is every input that sits inside a <label>, which is the second
+// way HTML associates the two and the one most of these forms use: the label
+// wraps its control, so no id and no for attribute is needed. A check that
+// only knows about for="…" reports every one of them as unlabelled, which is
+// a false alarm loud enough to make the real ones unfindable.
+func wrappedFields(body string) map[string]bool {
+	inside := map[string]bool{}
+	for _, block := range labelTag.FindAllString(body, -1) {
+		for _, field := range inputTag.FindAllString(block, -1) {
+			inside[field] = true
+		}
+	}
+	return inside
+}
 
 // everyScreen is the set a signed-in player can reach, in both directions of
 // writing, so a fault that only shows under Arabic is caught too.
 var everyScreen = []string{
 	"/app", "/play", "/challenges", "/challenges/new", "/messages",
+	"/messages/new/room", "/messages/new/group",
 	"/friends", "/leaderboard", "/notifications", "/history", "/settings",
 	"/support", "/support/new", "/profile/edit", "/my/questions",
 }
@@ -101,6 +118,7 @@ func TestEveryScreenIsLabelledForAssistiveTech(t *testing.T) {
 
 				// Every field a person types in is either labelled or
 				// described. Hidden and structural inputs are not.
+				wrapped := wrappedFields(body)
 				for _, field := range inputTag.FindAllString(body, -1) {
 					kind := "text"
 					if m := typeAttr.FindStringSubmatch(field); m != nil {
@@ -116,6 +134,10 @@ func TestEveryScreenIsLabelledForAssistiveTech(t *testing.T) {
 						continue
 					}
 					if ariaLabel.MatchString(field) || ariaLabelBy.MatchString(field) {
+						continue
+					}
+					// Wrapped in its own label, which needs no id.
+					if wrapped[field] {
 						continue
 					}
 					m := idAttr.FindStringSubmatch(field)

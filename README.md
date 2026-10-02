@@ -75,7 +75,7 @@ All settings come from the environment (see `.env.example`):
 | `TRUSTED_PROXY_HOPS` | `0` | how many reverse proxies are in front. `0` ignores `X-Forwarded-For` entirely |
 | `SESSION_LIFETIME` | `720h` | how long a session cookie lasts |
 | `DEFAULT_LOCALE` | `ar` | last-resort locale |
-| `SEED_ON_START` | `true` | upserts the bundled question bank on boot, leaving locally edited translations alone |
+| `SEED_ON_START` | `false` | upserts the bundled question bank on boot, leaving locally edited translations alone. Prefer `sirajctl seed`, which does the same thing once, on purpose |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM_EMAIL` / `SMTP_FROM_NAME` / `SMTP_STARTTLS` | *(unset)* | outbound mail; with no host the mailer logs instead of sending |
 | `TRANSLATE_PROVIDER` | `none` | `claude` (needs `ANTHROPIC_API_KEY`, optionally `ANTHROPIC_MODEL`) or `libretranslate` (needs `LIBRETRANSLATE_URL`, optionally `LIBRETRANSLATE_API_KEY`) |
 | `STATIC_DIR` | *(unset)* | serve CSS/JS from disk instead of the embedded copy |

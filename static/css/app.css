@@ -287,7 +287,6 @@ h4 { font-size: 1rem; }
 }
 .row--between { justify-content: space-between; }
 .row--wrap    { flex-wrap: wrap; }
-.row--top     { align-items: flex-start; }
 .spacer       { flex: 1; }
 
 .grid { display: grid; gap: 18px; }
@@ -419,7 +418,6 @@ h4 { font-size: 1rem; }
 
 .nav__actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
-.nav__toggle { display: none; }
 
 /* mobile tab bar */
 .tabbar {
@@ -469,15 +467,6 @@ h4 { font-size: 1rem; }
 .card--flush { padding: 0; overflow: hidden; }
 .card--pad-lg { padding: 28px; }
 
-.card--link {
-  display: block;
-  transition: transform .18s var(--ease), box-shadow .18s var(--ease), border-color .18s var(--ease);
-}
-.card--link:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
-  border-color: var(--border-strong);
-}
 
 .card__head {
   display: flex;
@@ -648,11 +637,28 @@ h4 { font-size: 1rem; }
   transition: background .15s var(--ease), color .15s var(--ease);
 }
 .segment__item:hover { color: var(--text); }
-.segment__item[aria-selected="true"], .segment__item.is-active {
-  background: var(--surface);
-  color: var(--text);
+
+/* The one you are on.
+ *
+ * is-on as well as is-active, because both are written: the thread switcher
+ * and the theme picker set is-active, and the player-group bar — rendered by
+ * the server and re-toggled by the script — sets is-on. Only one of the two
+ * was styled, so "Friends / My room / This device" had a selected tab that
+ * looked exactly like the two beside it.
+ *
+ * Coloured rather than merely raised. This bar decides which group a match is
+ * with, and the three are not interchangeable; a white chip on a grey strip
+ * is a weak signal for a choice that changes who the invitation goes to. */
+.segment__item[aria-selected="true"],
+.segment__item.is-active,
+.segment__item.is-on {
+  background: var(--brand-600);
+  color: #fff;
   box-shadow: var(--shadow-sm);
 }
+.segment__item[aria-selected="true"]:hover,
+.segment__item.is-active:hover,
+.segment__item.is-on:hover { color: #fff; }
 
 /* option chips — used in the round setup form */
 .choice-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
@@ -1306,12 +1312,6 @@ h4 { font-size: 1rem; }
   font-variant-numeric: tabular-nums;
 }
 
-.streak-flame {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  animation: pop .45s var(--ease-out-back);
-}
 
 /* ============================================================== results */
 
@@ -1527,13 +1527,6 @@ h4 { font-size: 1rem; }
   text-transform: uppercase;
   letter-spacing: .06em;
   color: var(--text-faint);
-}
-.sheet__more {
-  display: block;
-  padding: 10px 12px;
-  font-size: .85rem;
-  font-weight: 600;
-  color: var(--accent-ink);
 }
 /* Making a new one is folded away until it is wanted: most of the time the
    answer is already in the list above it. */
@@ -2047,19 +2040,6 @@ h4 { font-size: 1rem; }
 .lb-row:hover { background: var(--surface-2); }
 .lb-row.is-me { background: var(--accent-soft); }
 
-.lb-rank {
-  width: 34px;
-  flex-shrink: 0;
-  text-align: center;
-  font-weight: 800;
-  font-size: .95rem;
-  font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  color: var(--text-faint);
-}
-.lb-rank--1 { color: var(--gold-500); font-size: 1.2rem; }
-.lb-rank--2 { color: #94a3b8; font-size: 1.1rem; }
-.lb-rank--3 { color: #b45309; font-size: 1.05rem; }
 
 .lb-xp {
   font-weight: 800;

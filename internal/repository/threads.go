@@ -42,7 +42,8 @@ func (r *Repo) attachMembers(ctx context.Context, convs []*models.Conversation) 
 
 	rows, err := r.pool.Query(ctx, `
 		SELECT m.conversation_id,
-		       u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at
+		       u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp,
+		       u.last_seen_at, u.is_temporary
 		  FROM conversation_members m
 		  JOIN users u ON u.id = m.user_id
 		 WHERE m.conversation_id = ANY($1)
@@ -56,7 +57,7 @@ func (r *Repo) attachMembers(ctx context.Context, convs []*models.Conversation) 
 		var convID uuid.UUID
 		var u models.UserCard
 		if err := rows.Scan(&convID, &u.ID, &u.Username, &u.DisplayName,
-			&u.AvatarSeed, &u.Country, &u.XP, &u.LastSeenAt); err != nil {
+			&u.AvatarSeed, &u.Country, &u.XP, &u.LastSeenAt, &u.IsTemporary); err != nil {
 			return err
 		}
 		c := byID[convID]
@@ -71,7 +72,7 @@ func (r *Repo) attachMembers(ctx context.Context, convs []*models.Conversation) 
 // Members is everyone in a thread, for the screen that says who is here.
 func (r *Repo) Members(ctx context.Context, convID uuid.UUID) ([]*models.UserCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at
+		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
 		  FROM conversation_members m
 		  JOIN users u ON u.id = m.user_id
 		 WHERE m.conversation_id = $1
@@ -85,7 +86,7 @@ func (r *Repo) Members(ctx context.Context, convID uuid.UUID) ([]*models.UserCar
 	for rows.Next() {
 		var u models.UserCard
 		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName,
-			&u.AvatarSeed, &u.Country, &u.XP, &u.LastSeenAt); err != nil {
+			&u.AvatarSeed, &u.Country, &u.XP, &u.LastSeenAt, &u.IsTemporary); err != nil {
 			return nil, err
 		}
 		out = append(out, &u)
@@ -114,17 +115,6 @@ func (r *Repo) MemberIDs(ctx context.Context, convID uuid.UUID) ([]uuid.UUID, er
 	return out, rows.Err()
 }
 
-// IsMember is the whole access rule for a thread: you may read it and write to
-// it if you are in it, and not otherwise.
-func (r *Repo) IsMember(ctx context.Context, convID, userID uuid.UUID) (bool, error) {
-	var ok bool
-	err := r.pool.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM conversation_members
-		                WHERE conversation_id = $1 AND user_id = $2)`,
-		convID, userID).Scan(&ok)
-	return ok, err
-}
-
 // CreateThread opens a group or a room and puts its members in it.
 //
 // The owner is a member like everyone else — the role only decides who may
@@ -140,17 +130,28 @@ func (r *Repo) CreateThread(ctx context.Context, kind, title, topic string, owne
 		err := tx.QueryRow(ctx, `
 			INSERT INTO conversations (kind, title, topic, owner_id)
 			VALUES ($1, $2, $3, $4)
-			RETURNING id, kind, title, topic, owner_id, last_message_at`,
+			RETURNING id, kind, title, topic, owner_id, last_message_at, is_temporary`,
 			kind, title, strings.TrimSpace(topic), ownerID,
-		).Scan(&c.ID, &c.Kind, &c.Title, &c.Topic, &c.OwnerID, &c.LastMessageAt)
+		).Scan(&c.ID, &c.Kind, &c.Title, &c.Topic, &c.OwnerID, &c.LastMessageAt,
+			&c.IsTemporary)
 		if err != nil {
 			return err
 		}
 
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO conversation_members (conversation_id, user_id, role)
-			VALUES ($1, $2, 'owner')`, c.ID, ownerID); err != nil {
-			return err
+		// A room is made, not entered. Opening one while standing in another
+		// is an ordinary thing to do — you are setting a place up, not moving
+		// into it — and seating the owner made it impossible: the one-room
+		// index refused the insert and the screen said "leave the room you
+		// are in first" to somebody who had not asked to go anywhere.
+		//
+		// A group is the opposite. It is people who were chosen, and the
+		// person choosing is one of them.
+		if kind != models.ConversationRoom {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO conversation_members (conversation_id, user_id, role)
+				VALUES ($1, $2, 'owner')`, c.ID, ownerID); err != nil {
+				return err
+			}
 		}
 		for _, id := range members {
 			if id == ownerID {
@@ -164,15 +165,10 @@ func (r *Repo) CreateThread(ctx context.Context, kind, title, topic string, owne
 		}
 		return nil
 	})
-	if isUniqueViolation(err) {
-		// The only unique constraint a thread creation can trip: opening a room
-		// puts the owner in it, and they are already in one.
-		return nil, ErrBusy
-	}
 	if err != nil {
 		return nil, err
 	}
-	c.Joined = true
+	c.Joined = kind != models.ConversationRoom
 	return &c, nil
 }
 
@@ -192,14 +188,17 @@ func (r *Repo) JoinThread(ctx context.Context, convID, userID uuid.UUID) (*uuid.
 	var left *uuid.UUID
 
 	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
-		// Is this a room at all, and are they already in it? Asked first so
-		// that a mistyped id never costs somebody the room they are in.
-		var isRoom, already bool
+		// Is this a room at all, is it a room for them, and are they already
+		// in it? Asked first so that a mistyped id never costs somebody the
+		// room they are in.
+		var isRoom, already, roomTemporary, meTemporary bool
 		err := tx.QueryRow(ctx, `
-			SELECT c.kind = 'room',
+			SELECT c.kind = 'room', c.is_temporary,
+			       (SELECT u.is_temporary FROM users u WHERE u.id = $2),
 			       EXISTS (SELECT 1 FROM conversation_members m
 			                WHERE m.conversation_id = c.id AND m.user_id = $2)
-			  FROM conversations c WHERE c.id = $1`, convID, userID).Scan(&isRoom, &already)
+			  FROM conversations c WHERE c.id = $1`, convID, userID).
+			Scan(&isRoom, &roomTemporary, &meTemporary, &already)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -208,6 +207,13 @@ func (r *Repo) JoinThread(ctx context.Context, convID, userID uuid.UUID) (*uuid.
 		}
 		if !isRoom {
 			return ErrNotFound
+		}
+		// A temporary room holds temporary players and nothing else. The
+		// trigger refuses this too, and would do so correctly, but an
+		// exception raised inside the transaction aborts it; answering here
+		// keeps the refusal an answer rather than a fault.
+		if roomTemporary != meTemporary {
+			return ErrForbidden
 		}
 		if already {
 			return nil
@@ -256,14 +262,16 @@ func (r *Repo) JoinThread(ctx context.Context, convID, userID uuid.UUID) (*uuid.
 func (r *Repo) RoomPreview(ctx context.Context, convID, viewerID uuid.UUID) (*models.Conversation, error) {
 	var c models.Conversation
 	err := r.pool.QueryRow(ctx, `
-		SELECT c.id, c.kind, c.title, c.topic, c.owner_id, c.last_message_at,
+		SELECT c.id, c.kind, c.title, c.topic, c.owner_id, c.last_message_at, c.is_temporary,
 		       (SELECT count(*) FROM conversation_members x WHERE x.conversation_id = c.id),
 		       EXISTS (SELECT 1 FROM conversation_members x
 		                WHERE x.conversation_id = c.id AND x.user_id = $2)
 		  FROM conversations c
-		 WHERE c.id = $1 AND c.kind = 'room'`, convID, viewerID).
+		 WHERE c.id = $1 AND c.kind = 'room'
+		   AND c.is_temporary = (SELECT u.is_temporary FROM users u WHERE u.id = $2)`,
+		convID, viewerID).
 		Scan(&c.ID, &c.Kind, &c.Title, &c.Topic, &c.OwnerID, &c.LastMessageAt,
-			&c.MemberCount, &c.Joined)
+			&c.IsTemporary, &c.MemberCount, &c.Joined)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -284,12 +292,13 @@ func (r *Repo) RoomPreview(ctx context.Context, convID, viewerID uuid.UUID) (*mo
 func (r *Repo) CurrentRoom(ctx context.Context, userID uuid.UUID) (*models.Conversation, error) {
 	var c models.Conversation
 	err := r.pool.QueryRow(ctx, `
-		SELECT c.id, c.kind, c.title, c.topic, c.owner_id, c.last_message_at,
+		SELECT c.id, c.kind, c.title, c.topic, c.owner_id, c.last_message_at, c.is_temporary,
 		       (SELECT count(*) FROM conversation_members x WHERE x.conversation_id = c.id)
 		  FROM conversation_members m
 		  JOIN conversations c ON c.id = m.conversation_id
 		 WHERE m.user_id = $1 AND m.is_room`, userID).
-		Scan(&c.ID, &c.Kind, &c.Title, &c.Topic, &c.OwnerID, &c.LastMessageAt, &c.MemberCount)
+		Scan(&c.ID, &c.Kind, &c.Title, &c.Topic, &c.OwnerID, &c.LastMessageAt,
+			&c.IsTemporary, &c.MemberCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -333,12 +342,16 @@ const RoomPeersShown = 50
 // from the room, not from the first page of it.
 func (r *Repo) RoomPeers(ctx context.Context, viewerID uuid.UUID, query string, limit, offset int) ([]*models.UserCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at
+		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
 		  FROM conversation_members mine
 		  JOIN conversation_members peer ON peer.conversation_id = mine.conversation_id
 		  JOIN users u ON u.id = peer.user_id
 		 WHERE mine.user_id = $1 AND mine.is_room AND peer.user_id <> $1
-		   AND NOT u.is_temporary
+		   -- Temporary players are not filtered out here, and deliberately
+		   -- not: in a guest's room they are everybody in it, and the room
+		   -- itself is what keeps the two kinds apart. The filter used to
+		   -- stand in for that separation, and with a real one in place it
+		   -- only made a guest's room look empty to the person standing in it.
 		   AND ($2 = '' OR u.display_name ILIKE '%' || $2 || '%' OR u.username ILIKE '%' || $2 || '%')
 		 ORDER BY u.last_seen_at DESC, u.id
 		 LIMIT CASE WHEN $3 > 0 THEN $3 END OFFSET $4`,
@@ -369,12 +382,16 @@ func (r *Repo) LeaveThread(ctx context.Context, convID, userID uuid.UUID) error 
 // only the name, the subject and how many people are inside.
 func (r *Repo) OpenRooms(ctx context.Context, viewerID uuid.UUID, query string, limit int) ([]*models.Conversation, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT c.id, c.kind, c.title, c.topic, c.owner_id, c.last_message_at,
+		SELECT c.id, c.kind, c.title, c.topic, c.owner_id, c.last_message_at, c.is_temporary,
 		       (SELECT count(*) FROM conversation_members x WHERE x.conversation_id = c.id),
 		       EXISTS (SELECT 1 FROM conversation_members x
 		                WHERE x.conversation_id = c.id AND x.user_id = $1)
 		  FROM conversations c
 		 WHERE c.kind = 'room'
+		   -- Rooms of the viewer's own kind, and only those. A guest's rooms
+		   -- are a separate directory from an account's; the subquery rather
+		   -- than a parameter so a caller cannot pass the wrong answer.
+		   AND c.is_temporary = (SELECT u.is_temporary FROM users u WHERE u.id = $1)
 		   AND ($2 = '' OR c.title ILIKE '%' || $2 || '%' OR c.topic ILIKE '%' || $2 || '%')
 		 ORDER BY c.last_message_at DESC
 		 LIMIT $3`, viewerID, strings.TrimSpace(query), limit)
@@ -387,7 +404,7 @@ func (r *Repo) OpenRooms(ctx context.Context, viewerID uuid.UUID, query string, 
 	for rows.Next() {
 		var c models.Conversation
 		if err := rows.Scan(&c.ID, &c.Kind, &c.Title, &c.Topic, &c.OwnerID,
-			&c.LastMessageAt, &c.MemberCount, &c.Joined); err != nil {
+			&c.LastMessageAt, &c.IsTemporary, &c.MemberCount, &c.Joined); err != nil {
 			return nil, err
 		}
 		out = append(out, &c)
@@ -396,6 +413,33 @@ func (r *Repo) OpenRooms(ctx context.Context, viewerID uuid.UUID, query string, 
 		return nil, err
 	}
 	return out, r.attachMembers(ctx, out)
+}
+
+// PurgeEmptyGuestRooms deletes temporary rooms that nobody is in and nobody
+// is left to walk into.
+//
+// Both halves are needed. Emptiness alone would collect a room in the second
+// between being created and anybody joining it — creating a room does not put
+// you in it, so every new room is empty. A gone owner alone would collect a
+// room with people still talking in it. Together they describe a room with
+// nothing left: deleting a guest nulls owner_id and takes their membership
+// with it by cascade, so the pair goes true exactly when the last person who
+// could have used the room has been swept.
+//
+// It terminates because every member of a temporary room is a temporary
+// player, and every temporary player is swept when their time is up. A room
+// of guests therefore always drains, and this is what collects it afterwards.
+func (r *Repo) PurgeEmptyGuestRooms(ctx context.Context) (int64, error) {
+	ct, err := r.pool.Exec(ctx, `
+		DELETE FROM conversations c
+		 WHERE c.kind = 'room' AND c.is_temporary
+		   AND c.owner_id IS NULL
+		   AND NOT EXISTS (SELECT 1 FROM conversation_members m
+		                    WHERE m.conversation_id = c.id)`)
+	if err != nil {
+		return 0, err
+	}
+	return ct.RowsAffected(), nil
 }
 
 // MarkThreadSeen moves a member's high-water mark to the newest message.
@@ -416,16 +460,4 @@ func (r *Repo) MarkThreadSeen(ctx context.Context, convID, userID uuid.UUID) (in
 		return 0, err
 	}
 	return ct.RowsAffected(), nil
-}
-
-// SeenBy is how many members have read a message, and who. It is what a group
-// shows instead of two ticks: "read by three of five" is the honest answer
-// when there is more than one person who could have read it.
-func (r *Repo) SeenBy(ctx context.Context, convID uuid.UUID, messageID int64, senderID uuid.UUID) (int, error) {
-	var n int
-	err := r.pool.QueryRow(ctx, `
-		SELECT count(*) FROM conversation_members
-		 WHERE conversation_id = $1 AND user_id <> $2 AND last_read_id >= $3`,
-		convID, senderID, messageID).Scan(&n)
-	return n, err
 }

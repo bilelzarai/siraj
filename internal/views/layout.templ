@@ -92,11 +92,15 @@ templ navbar(c Ctx) {
 					@navLink(c, "/app", "🏠", c.T("nav.home"), 0)
 					@navLink(c, "/play", "🎮", c.T("nav.play"), 0)
 					@navLink(c, "/challenges", "⚔️", c.T("nav.challenges"), c.PendingChallenges)
-					// A temporary player has no messages, no friends and no
-					// place on the board. The server refuses all three; leaving
-					// the links out is so they are not offered a door that
-					// opens onto a sign-up form.
-					if !c.IsGuest() {
+					// A temporary player has no friends and no place on the
+					// board. The server refuses both; leaving the links out is
+					// so they are not offered a door that opens onto a sign-up
+					// form. Rooms they do have — it is where they find somebody
+					// to play against — so the link stays and is named for the
+					// one thing behind it.
+					if c.IsGuest() {
+						@navLink(c, "/messages?tab=room", "🚪", c.T("threads.tab.room"), c.UnreadMessages)
+					} else {
 						@navLink(c, "/messages", "💬", c.T("nav.messages"), c.UnreadMessages)
 						@navLink(c, "/friends", "🤝", c.T("nav.friends"), c.FriendRequests)
 						@navLink(c, "/leaderboard", "🏆", c.T("nav.leaderboard"), 0)
@@ -149,7 +153,9 @@ templ tabbar(c Ctx) {
 			@tabLink(c, "/app", "🏠", c.T("nav.home"), 0)
 			@tabLink(c, "/play", "🎮", c.T("nav.play"), 0)
 			@tabLink(c, "/challenges", "⚔️", c.T("nav.challenges"), c.PendingChallenges)
-			if !c.IsGuest() {
+			if c.IsGuest() {
+				@tabLink(c, "/messages?tab=room", "🚪", c.T("threads.tab.room"), c.UnreadMessages)
+			} else {
 				@tabLink(c, "/messages", "💬", c.T("nav.messages"), c.UnreadMessages)
 				@tabLink(c, "/friends", "🤝", c.T("nav.friends"), c.FriendRequests)
 			}

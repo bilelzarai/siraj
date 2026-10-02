@@ -156,6 +156,34 @@ func (p *Players) RemoveLocal(ctx context.Context, hostID, playerID uuid.UUID) e
 	return p.repo.DeleteLocalPlayer(ctx, hostID, playerID)
 }
 
+// Retire closes the anonymous player a browser was, now that it has an
+// account.
+//
+// Clearing the cookie is not enough on its own. The temporary player keeps
+// existing until their timer runs out, and whatever they were a member of
+// keeps them: a guest who signs up in the middle of a conversation leaves a
+// name standing in a temporary room for the rest of the day, and the room
+// cannot be collected while it is there. Walking them out is the honest
+// version of "starts fresh".
+func (p *Players) Retire(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	p.ClearGuestCookie(w)
+
+	key := guestKeyFrom(r)
+	if key == "" {
+		return
+	}
+	guest, err := p.repo.GuestByKey(ctx, key)
+	if err != nil {
+		return // nothing to retire, which is the ordinary case
+	}
+	// Best effort, and deliberately so: this runs on the way into a new
+	// account, and failing to tidy a temporary room is not a reason to refuse
+	// somebody their sign-up. The janitor collects what is left.
+	if room, err := p.repo.CurrentRoom(ctx, guest.ID); err == nil {
+		_ = p.repo.LeaveThread(ctx, room.ID, guest.ID)
+	}
+}
+
 // ClearGuestCookie is called when somebody signs in or registers: the account
 // is now who they are, and the anonymous player they were is finished with.
 func (p *Players) ClearGuestCookie(w http.ResponseWriter) {

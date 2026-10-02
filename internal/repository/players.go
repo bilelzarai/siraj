@@ -249,14 +249,44 @@ func (r *Repo) TouchGuest(ctx context.Context, userID uuid.UUID) error {
 	return err
 }
 
-// PurgeExpiredGuests deletes temporary players whose time is up. Their rounds,
-// their place in any match and their session go with them, by cascade — which
-// is what makes anonymous data temporary rather than merely unlabelled.
+// PurgeExpiredGuests deletes temporary players whose time is up, and
+// everything they left anywhere.
+//
+// Most of it goes by cascade: rounds, answers, places in a match, sessions,
+// room memberships. Two things do not, and they are the reason this is a
+// transaction rather than one statement. A question comment and an authored
+// question both point at their writer with ON DELETE SET NULL, because for an
+// account that is right — somebody closing their account should not silently
+// erase a discussion other people took part in, and anonymising the author
+// keeps the thread readable.
+//
+// For a guest it is wrong. "Nothing is saved" is a promise made on the way in,
+// and a comment that outlives its author by forever, attached to no one, is
+// that promise quietly broken. So the rows a guest wrote are deleted with
+// them, before the cascade takes the rest.
 func (r *Repo) PurgeExpiredGuests(ctx context.Context) (int64, error) {
-	ct, err := r.pool.Exec(ctx,
-		`DELETE FROM users WHERE is_temporary AND expires_at < now()`)
-	if err != nil {
-		return 0, err
-	}
-	return ct.RowsAffected(), nil
+	var n int64
+	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		const expiring = `SELECT id FROM users WHERE is_temporary AND expires_at < now()`
+
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM question_comments WHERE user_id IN (`+expiring+`)`); err != nil {
+			return err
+		}
+		// Their questions go too, and everything hanging off them — answers,
+		// ratings and comments — by cascade. A question written for one
+		// evening's match has no life after the match.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM questions WHERE author_id IN (`+expiring+`)`); err != nil {
+			return err
+		}
+
+		ct, err := tx.Exec(ctx, `DELETE FROM users WHERE is_temporary AND expires_at < now()`)
+		if err != nil {
+			return err
+		}
+		n = ct.RowsAffected()
+		return nil
+	})
+	return n, err
 }

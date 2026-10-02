@@ -25,6 +25,16 @@ type HandoverData struct {
 	Total    int
 	// Standing is everyone at this device and what they have so far.
 	Standing []SeatScore
+	// Sides is what each team has between them, for a match played in sides.
+	// Empty in a free-for-all, where the individual scores are the result
+	// rather than the detail.
+	Sides []SeatSide
+	// Teams reports a match scored by side.
+	Teams bool
+	// Over marks the last screen of the match: everybody here has played
+	// their last question, so there is nobody to hand the phone to and the
+	// button leads to the result instead.
+	Over bool
 	// Reveal is the question everybody here has just answered, or nil when the
 	// round has not come round to a complete question yet.
 	Reveal *RevealData
@@ -34,8 +44,17 @@ type HandoverData struct {
 type SeatScore struct {
 	Player *models.User
 	Score  int
+	// Team is the side they are on, or 0 in a free-for-all.
+	Team int
 	// Turn marks the person about to play.
 	Turn bool
+}
+
+// SeatSide is one side's total.
+type SeatSide struct {
+	Number  int
+	Score   int
+	Leading bool
 }
 
 // RevealData is what a finished question looked like for everybody here.
@@ -48,6 +67,8 @@ type RevealData struct {
 // RevealRow is one player's answer to it.
 type RevealRow struct {
 	Player *models.User
+	// Team is the side they answered for, or 0 in a free-for-all.
+	Team int
 	// Answered is false when they ran out of time or walked away, which is a
 	// different thing from choosing wrongly and is shown as one.
 	Answered bool
@@ -66,30 +87,50 @@ templ Handover(c Ctx, d HandoverData) {
 				if d.Reveal != nil {
 					@revealCard(c, d.Reveal)
 				}
-				<div class="pass__card">
-					<p class="eyebrow">{ c.T("hotseat.pass") }</p>
-					<span class="avatar avatar--lg" style={ AvatarStyle(d.Next.ID.String()) }>
-						{ Initial(d.Next.DisplayName) }
-					</span>
-					<h1 class="pass__name truncate">{ d.Next.DisplayName }</h1>
-					<p class="muted">{ c.T("game.progress", d.Position + 1, d.Total) }</p>
-					// A form, so the turn is taken by a press rather than by
-					// arriving here — and so the seat is set server-side before
-					// the question is drawn.
-					<form method="post" action="/play/seat">
-						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-						<input type="hidden" name="player" value={ d.Next.ID.String() }/>
-						<button class="btn btn--primary btn--lg btn--block" type="submit" autofocus>
-							{ c.T("hotseat.ready", d.Next.DisplayName) }
-						</button>
-					</form>
-					<p class="tiny muted">{ c.T("hotseat.handHint") }</p>
-				</div>
+				if d.Over {
+					// Nobody left to pass it to. The reveal above is the last
+					// question, the scoreboard below is final, and the only
+					// thing left is to go and look at the result.
+					<div class="pass__card">
+						<p class="eyebrow">{ c.T("hotseat.allPlayed") }</p>
+						<h1 class="pass__name">{ c.T("hotseat.over") }</h1>
+						<p class="muted">{ c.T("game.progress", d.Total, d.Total) }</p>
+						<form method="post" action="/play/finish">
+							<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+							<button class="btn btn--primary btn--lg btn--block" type="submit" autofocus>
+								{ c.T("hotseat.seeResult") }
+							</button>
+						</form>
+					</div>
+				} else {
+					<div class="pass__card">
+						<p class="eyebrow">{ c.T("hotseat.pass") }</p>
+						<span class="avatar avatar--lg" style={ AvatarStyle(d.Next.ID.String()) }>
+							{ Initial(d.Next.DisplayName) }
+						</span>
+						<h1 class="pass__name truncate">{ d.Next.DisplayName }</h1>
+						<p class="muted">{ c.T("game.progress", d.Position + 1, d.Total) }</p>
+						// A form, so the turn is taken by a press rather than by
+						// arriving here — and so the seat is set server-side before
+						// the question is drawn.
+						<form method="post" action="/play/seat">
+							<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+							<input type="hidden" name="player" value={ d.Next.ID.String() }/>
+							<button class="btn btn--primary btn--lg btn--block" type="submit" autofocus>
+								{ c.T("hotseat.ready", d.Next.DisplayName) }
+							</button>
+						</form>
+						<p class="tiny muted">{ c.T("hotseat.handHint") }</p>
+					</div>
+				}
+				@sideStanding(c, d)
 				@seatStanding(c, d.Standing)
-				<form method="post" action="/play/quit" data-confirm={ c.T("hotseat.stopConfirm") }>
-					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-					<button class="btn btn--ghost btn--sm" type="submit">{ c.T("hotseat.stop") }</button>
-				</form>
+				if !d.Over {
+					<form method="post" action="/play/quit" data-confirm={ c.T("hotseat.stopConfirm") }>
+						<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+						<button class="btn btn--ghost btn--sm" type="submit">{ c.T("hotseat.stop") }</button>
+					</form>
+				}
 			</div>
 		</div>
 	}
@@ -113,6 +154,9 @@ templ revealCard(c Ctx, d *RevealData) {
 						{ Initial(row.Player.DisplayName) }
 					</span>
 					<span class="truncate">{ row.Player.DisplayName }</span>
+					if row.Team > 0 {
+						<span class="tag tiny">{ c.T("challenge.team", row.Team) }</span>
+					}
 					if !row.Answered {
 						<span class="tiny muted">{ c.T("hotseat.noAnswer") }</span>
 					} else if row.Correct {
@@ -131,6 +175,26 @@ templ revealCard(c Ctx, d *RevealData) {
 	</div>
 }
 
+// sideStanding is what each side has between them.
+//
+// Above the individual scores and not instead of them: in a team match the
+// side's total is the result and a person's own score is what they did, and
+// the table wants both. Without this the handover showed four names and four
+// numbers in a match whose whole question is which pair is ahead.
+templ sideStanding(c Ctx, d HandoverData) {
+	if d.Teams && len(d.Sides) > 1 {
+		<div class="card stack-sm">
+			<p class="eyebrow">{ c.T("hotseat.sides") }</p>
+			for _, side := range d.Sides {
+				<div class={ "side", templ.KV("is-winner", side.Leading) }>
+					<b>{ c.T("challenge.team", side.Number) }</b>
+					<b class="num">{ fmt.Sprint(side.Score) }</b>
+				</div>
+			}
+		</div>
+	}
+}
+
 // seatStanding is the running scoreboard at this device.
 templ seatStanding(c Ctx, rows []SeatScore) {
 	if len(rows) > 1 {
@@ -143,6 +207,9 @@ templ seatStanding(c Ctx, rows []SeatScore) {
 							{ Initial(row.Player.DisplayName) }
 						</span>
 						<span class="truncate">{ row.Player.DisplayName }</span>
+						if row.Team > 0 {
+							<span class="tag tiny">{ c.T("challenge.team", row.Team) }</span>
+						}
 					</span>
 					<b class="num">{ fmt.Sprint(row.Score) }</b>
 				</div>

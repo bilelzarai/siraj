@@ -115,9 +115,16 @@ func (h *Handlers) RequireAccount(next http.Handler) http.Handler {
 }
 
 // RequireGuest keeps signed-in users off the login and register pages.
+//
+// A temporary player is not signed in for this purpose, and treating them as
+// if they were shut the only door out of anonymous play: the avatar menu
+// offers "Create an account", the register page bounced it straight back to
+// the dashboard, and there was no way to become a real player without first
+// working out that logging out was the trick. Signing up is the one thing an
+// anonymous player is most likely to want to do.
 func (h *Handlers) RequireGuest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if userFrom(r) != nil {
+		if user := userFrom(r); user != nil && !user.IsGuest() {
 			redirect(w, r, "/app")
 			return
 		}

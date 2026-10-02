@@ -85,24 +85,6 @@ func (r *Repo) QuestionSet(ctx context.Context, id, ownerID uuid.UUID) (*models.
 	return &s, err
 }
 
-// RenameQuestionSet changes what a collection is called.
-func (r *Repo) RenameQuestionSet(ctx context.Context, id, ownerID uuid.UUID, name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return ErrForbidden
-	}
-	ct, err := r.pool.Exec(ctx,
-		`UPDATE question_sets SET name = $3, updated_at = now()
-		  WHERE id = $1 AND owner_id = $2`, id, ownerID, name)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 // DeleteQuestionSet removes a collection and the questions in it.
 //
 // The questions go with it — they were written for this and nothing else —

@@ -9,16 +9,36 @@ import (
 )
 
 // openRoom creates a room as the signed-in browser and answers with its id.
+//
+// Creating does not enter: the room appears in the directory and the creator
+// walks in when they choose to, like anybody else. So the id comes from the
+// row rather than from a redirect into it.
 func openRoom(t *testing.T, a *app, title, topic string) string {
 	t.Helper()
-	a.get("/messages/new/room")
 	code, loc := a.post("/messages/new", url.Values{
 		"kind": {"room"}, "title": {title}, "topic": {topic},
 	})
-	if code != http.StatusSeeOther || !strings.HasPrefix(loc, "/messages/") {
+	if code != http.StatusSeeOther {
 		t.Fatalf("opening a room → %d %q", code, loc)
 	}
-	return strings.TrimPrefix(loc, "/messages/")
+	var id string
+	if err := testPool.QueryRow(t.Context(),
+		`SELECT id FROM conversations WHERE kind = 'room' AND title = $1`, title).
+		Scan(&id); err != nil {
+		t.Fatalf("the room %q was not created: %v", title, err)
+	}
+	return id
+}
+
+// enterRoom opens a room and walks in, for the tests whose subject is being
+// in one rather than making one.
+func enterRoom(t *testing.T, a *app, title, topic string) string {
+	t.Helper()
+	id := openRoom(t, a, title, topic)
+	if code, _ := a.post("/messages/"+id+"/join", url.Values{}); code != http.StatusSeeOther {
+		t.Fatalf("walking into %q → %d", title, code)
+	}
+	return id
 }
 
 // A group is people who were chosen. Everyone in it sees what anyone says,
@@ -106,7 +126,9 @@ func TestARoomIsOpenToAnybody(t *testing.T) {
 	a.register("roomowner")
 	b.register("passerby")
 
-	room := openRoom(t, a, "Tajweed practice", "Reading together on Fridays")
+	// Opened and walked into, because this test is about what a member can
+	// do that a stranger cannot — and opening a room does not make you one.
+	room := enterRoom(t, a, "Tajweed practice", "Reading together on Fridays")
 
 	// It is listed to somebody who has never been in it.
 	code, body := b.get("/messages?tab=room")

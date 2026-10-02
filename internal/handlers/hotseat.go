@@ -42,6 +42,8 @@ import (
 type deviceSeat struct {
 	Player  *models.User
 	Session *models.GameSession
+	// Team is the side they are on, or 0 in a free-for-all.
+	Team int
 }
 
 // deviceRound is the state of a match being played on one device.
@@ -57,7 +59,14 @@ type deviceRound struct {
 	// wrapped back to the first seat, which is exactly when the last player of
 	// a question has committed.
 	Reveal int
+	// Format is the match's shape. A team match is scored by side, and the
+	// handover has to say so: four names and four numbers do not tell anybody
+	// who is winning when the answer is "the other two".
+	Format string
 }
+
+// Teamed reports a match played in sides.
+func (d *deviceRound) Teamed() bool { return d != nil && d.Format == models.FormatTeam }
 
 // Hot reports a device with more than one person playing this match on it.
 // With one person there is no seat to hand over and no verdict to hold back.
@@ -65,16 +74,6 @@ func (d *deviceRound) Hot() bool { return d != nil && len(d.Seats) > 1 }
 
 // Done reports that everyone at this device has run out of questions.
 func (d *deviceRound) Done() bool { return d != nil && d.Next == nil }
-
-// SeatOf finds one player's seat.
-func (d *deviceRound) SeatOf(id uuid.UUID) *deviceSeat {
-	for i := range d.Seats {
-		if d.Seats[i].Player.ID == id {
-			return &d.Seats[i]
-		}
-	}
-	return nil
-}
 
 // deviceRoundFor assembles the hot seat around whoever is signed in.
 //
@@ -135,10 +134,15 @@ func (h *Handlers) deviceRound(r *http.Request) (*deviceRound, error) {
 		byPlayer[s.UserID] = s
 	}
 
-	d := &deviceRound{MatchID: matchID, Reveal: -1}
+	format, sides, err := h.repo.MatchSides(ctx, matchID)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+
+	d := &deviceRound{MatchID: matchID, Reveal: -1, Format: format}
 	for _, p := range people {
 		if s := byPlayer[p.ID]; s != nil {
-			d.Seats = append(d.Seats, deviceSeat{Player: p, Session: s})
+			d.Seats = append(d.Seats, deviceSeat{Player: p, Session: s, Team: sides[p.ID]})
 		}
 	}
 	if len(d.Seats) == 0 {
@@ -170,26 +174,32 @@ func (d *deviceRound) chooseNext() {
 			playing = append(playing, &d.Seats[i])
 		}
 	}
-	if len(playing) == 0 {
-		return
+	if len(playing) > 0 {
+		// SliceStable, so equal cursors keep seating order and the phone goes
+		// round the table the same way every question.
+		sort.SliceStable(playing, func(a, b int) bool {
+			return playing[a].Session.Cursor < playing[b].Session.Cursor
+		})
+		d.Next = playing[0]
 	}
-	// SliceStable, so equal cursors keep seating order and the phone goes
-	// round the table the same way every question.
-	sort.SliceStable(playing, func(a, b int) bool {
-		return playing[a].Session.Cursor < playing[b].Session.Cursor
-	})
-	d.Next = playing[0]
 
-	// The verdict is due exactly when everybody still playing has answered the
-	// same number of questions: that is the moment the last of them committed,
-	// and the first moment showing the answer tells nobody anything they could
+	// The verdict is due exactly when everybody here has answered the same
+	// number of questions: that is the moment the last of them committed, and
+	// the first moment showing the answer tells nobody anything they could
 	// have used. Mid-rotation the cursors differ and nothing is shown.
-	level := playing[0].Session.Cursor
+	//
+	// Over every seat, not only the ones with a question left. The last
+	// question of a match used to be the one question nobody ever saw the
+	// answer to: by the time the last player committed to it everybody was
+	// complete, the set this was computed from was empty, and the device went
+	// straight to the result page. Four questions were reviewed at the table
+	// and the fifth was not.
+	level := d.Seats[0].Session.Cursor
 	if level == 0 {
 		return
 	}
-	for _, seat := range playing {
-		if seat.Session.Cursor != level {
+	for i := range d.Seats {
+		if d.Seats[i].Session.Cursor != level {
 			return
 		}
 	}
@@ -236,14 +246,24 @@ func (h *Handlers) TakeTurn(w http.ResponseWriter, r *http.Request) {
 // handover renders the screen between two players: who the phone is for, and —
 // when the question has just been answered by everybody here — what the answer
 // was and who got it.
+//
+// It is also the last screen of the match. With nobody left to hand the phone
+// to it keeps the reveal and the scoreboard and swaps the "pass it to Amina"
+// button for the way to the result, so the final question is reviewed at the
+// table like every other one instead of vanishing into a redirect.
 func (h *Handlers) handover(w http.ResponseWriter, r *http.Request, d *deviceRound) {
 	c := h.viewCtx(w, r)
 	ctx := r.Context()
 
-	view := views.HandoverData{
-		Next:     d.Next.Player,
-		Position: d.Next.Session.Cursor,
-		Total:    d.Next.Session.TotalQuestions,
+	view := views.HandoverData{Teams: d.Teamed()}
+	if d.Next != nil {
+		view.Next = d.Next.Player
+		view.Position = d.Next.Session.Cursor
+		view.Total = d.Next.Session.TotalQuestions
+	} else {
+		view.Over = true
+		view.Position = d.Seats[0].Session.Cursor
+		view.Total = d.Seats[0].Session.TotalQuestions
 	}
 
 	// The scoreboard is held back for the same reason the verdict is.
@@ -258,9 +278,11 @@ func (h *Handlers) handover(w http.ResponseWriter, r *http.Request, d *deviceRou
 			view.Standing = append(view.Standing, views.SeatScore{
 				Player: d.Seats[i].Player,
 				Score:  d.Seats[i].Session.Score,
-				Turn:   d.Seats[i].Player.ID == d.Next.Player.ID,
+				Team:   d.Seats[i].Team,
+				Turn:   d.Next != nil && d.Seats[i].Player.ID == d.Next.Player.ID,
 			})
 		}
+		view.Sides = sideTotals(d)
 	}
 
 	if d.Reveal >= 0 {
@@ -303,7 +325,7 @@ func (h *Handlers) buildReveal(r *http.Request, d *deviceRound, position int) (*
 	out := &views.RevealData{Question: question, Position: position}
 	for i := range d.Seats {
 		seat := d.Seats[i]
-		row := views.RevealRow{Player: seat.Player}
+		row := views.RevealRow{Player: seat.Player, Team: seat.Team}
 		if a := answers[seat.Session.ID]; a != nil {
 			row.Answered = a.Answered()
 			row.Correct = a.IsCorrect
@@ -315,6 +337,52 @@ func (h *Handlers) buildReveal(r *http.Request, d *deviceRound, position int) (*
 		out.Rows = append(out.Rows, row)
 	}
 	return out, nil
+}
+
+// sideTotals is what each side has between them, in side order.
+//
+// A team match is won by a side, so a column of four individual numbers is the
+// detail rather than the score. Nil for a free-for-all, where the individual
+// numbers are the whole of it.
+func sideTotals(d *deviceRound) []views.SeatSide {
+	if !d.Teamed() {
+		return nil
+	}
+	order := make([]int, 0, len(d.Seats))
+	total := map[int]int{}
+	for i := range d.Seats {
+		team := d.Seats[i].Team
+		if _, seen := total[team]; !seen {
+			order = append(order, team)
+		}
+		total[team] += d.Seats[i].Session.Score
+	}
+	sort.Ints(order)
+
+	best := 0
+	for _, team := range order {
+		if total[team] > best {
+			best = total[team]
+		}
+	}
+	// A side only leads if nobody has drawn level with it. Marking two sides
+	// as winning is worse than marking neither.
+	leaders := 0
+	for _, team := range order {
+		if total[team] == best {
+			leaders++
+		}
+	}
+
+	out := make([]views.SeatSide, 0, len(order))
+	for _, team := range order {
+		out = append(out, views.SeatSide{
+			Number:  team,
+			Score:   total[team],
+			Leading: leaders == 1 && total[team] == best,
+		})
+	}
+	return out
 }
 
 // finishDevice closes every round at this device and sends the phone to the

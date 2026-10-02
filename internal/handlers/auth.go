@@ -76,7 +76,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	// The account is who they are now. Letting the guest cookie stand would
 	// mean a later "play without an account" picked up the temporary player
 	// they used to be, along with whatever half-finished round it was holding.
-	h.players.ClearGuestCookie(w)
+	h.players.Retire(r.Context(), w, r)
 	h.clearSeat(w)
 
 	redirect(w, r, safeNext(r.URL.Query().Get("next")))
@@ -145,7 +145,7 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 	// Whatever they were playing as a guest stays with the guest and is swept
 	// on its own timer. Anonymous progress is temporary by design, and pulling
 	// it into a fresh account would make that promise conditional.
-	h.players.ClearGuestCookie(w)
+	h.players.Retire(r.Context(), w, r)
 	h.clearSeat(w)
 	redirect(w, r, safeNext(r.URL.Query().Get("next")))
 }

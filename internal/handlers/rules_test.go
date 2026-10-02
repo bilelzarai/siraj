@@ -57,14 +57,34 @@ func TestAnonymousPlayerCanPlayAndNothingElse(t *testing.T) {
 
 	// And everything an account is for is refused — by the server, not by a
 	// missing link.
+	//
+	// Rooms are the one part of messaging that is not on this list, and they
+	// are a deliberate exception rather than a hole: a room is where a player
+	// finds somebody to play against, which is the one thing anonymous play
+	// could not do. A guest's rooms are their own — see the guest-room rules
+	// below — and the rest of messaging is still shut.
 	for _, path := range []string{
-		"/messages", "/friends", "/leaderboard", "/history",
+		"/friends", "/leaderboard", "/history",
 		"/notifications", "/settings", "/my/questions", "/support",
+		"/messages/new/group", "/messages/with/somebody",
 	} {
 		status, body := a.get(path)
 		if status != http.StatusSeeOther {
 			t.Errorf("GET %s as a guest → %d, want a redirect to register; body starts %q",
 				path, status, clip(body, 80))
+		}
+	}
+
+	// The messages screen a guest does reach is the room directory and
+	// nothing else: no people segment, no groups segment, nothing to open a
+	// private thread with.
+	status, body := a.get("/messages")
+	if status != http.StatusOK {
+		t.Fatalf("GET /messages as a guest → %d, want the room directory", status)
+	}
+	for _, offered := range []string{"/messages/new/group", "/messages/with/"} {
+		if strings.Contains(body, offered) {
+			t.Errorf("the guest's messages screen offers %s", offered)
 		}
 	}
 }
@@ -1051,9 +1071,15 @@ func TestEachSideIsToldWhoseMoveItIs(t *testing.T) {
 }
 
 // statusTags is what the challenge cards on this browser's screen say.
+// statusTags is what the cards on the challenge list say about themselves.
+//
+// The tab is named rather than left to the default, because the default
+// landing hands the phone on when a match is live on this device — which is
+// the right thing for somebody playing and the wrong thing for a test about
+// what the list says.
 func statusTags(t *testing.T, a *app) []string {
 	t.Helper()
-	_, body := a.get("/challenges")
+	_, body := a.get("/challenges?tab=incoming")
 	var out []string
 	for _, m := range tagPattern.FindAllStringSubmatch(body, -1) {
 		out = append(out, strings.TrimSpace(m[1]))
@@ -1136,15 +1162,58 @@ func TestTeamsNeedMoreThanTwoPlayers(t *testing.T) {
 		t.Errorf("three sides of one → %d, want a refusal (%s)", status, clip(body, 160))
 	}
 
-	// Three players, two of them together: that is a team match.
+	// Three players, two of them together: still refused. A side of one is
+	// not a side, so this is a duel in which one of the duellists happens to
+	// be a pair — and the scoreboard would report a single player's score as
+	// a team total.
 	status, body = a.postJSONForm(t, "/challenges/new", url.Values{
 		"opponent": {"team_one", "team_two"}, "player_source": {"friends"},
 		"format": {"team"}, "host_team": {"1"},
 		"team_team_one": {"1"}, "team_team_two": {"2"},
 		"source": {"bank"}, "request_key": {"team-2v1"},
 	})
+	if status != http.StatusUnprocessableEntity {
+		t.Errorf("two against one → %d, want a refusal (%s)", status, clip(body, 160))
+	}
+
+	// Four players split three against one: enough people, two sides, and
+	// still not a team match. This is the case the player count alone cannot
+	// catch, which is why the per-side rule exists separately from it.
+	fourth := newAppSharing(t, a)
+	fourth.register("team_four")
+	odd, err := a.repo.UserByUsername(t.Context(), "team_four")
+	if err != nil {
+		t.Fatal(err)
+	}
+	befriendThrough(t, a, host.ID, odd.ID)
+
+	status, body = a.postJSONForm(t, "/challenges/new", url.Values{
+		"opponent": {"team_one", "team_two", "team_four"}, "player_source": {"friends"},
+		"format": {"team"}, "host_team": {"1"},
+		"team_team_one": {"1"}, "team_team_two": {"1"}, "team_team_four": {"2"},
+		"source": {"bank"}, "request_key": {"team-3v1"},
+	})
+	if status != http.StatusUnprocessableEntity {
+		t.Errorf("three against one → %d, want a refusal (%s)", status, clip(body, 160))
+	}
+
+	// Four players, two a side: that is a team match.
+	third := newAppSharing(t, a)
+	third.register("team_three")
+	who, err := a.repo.UserByUsername(t.Context(), "team_three")
+	if err != nil {
+		t.Fatal(err)
+	}
+	befriendThrough(t, a, host.ID, who.ID)
+
+	status, body = a.postJSONForm(t, "/challenges/new", url.Values{
+		"opponent": {"team_one", "team_two", "team_three"}, "player_source": {"friends"},
+		"format": {"team"}, "host_team": {"1"},
+		"team_team_one": {"1"}, "team_team_two": {"2"}, "team_team_three": {"2"},
+		"source": {"bank"}, "request_key": {"team-2v2"},
+	})
 	if status != http.StatusOK {
-		t.Fatalf("a two-against-one team match → %d (%s)", status, clip(body, 160))
+		t.Fatalf("a two-against-two team match → %d (%s)", status, clip(body, 160))
 	}
 	match, err := a.repo.ActiveMatchFor(t.Context(), host.ID, "en")
 	if err != nil {
@@ -1157,8 +1226,8 @@ func TestTeamsNeedMoreThanTwoPlayers(t *testing.T) {
 	for _, p := range match.Players {
 		sides[p.Team]++
 	}
-	if sides[1] != 2 || sides[2] != 1 {
-		t.Errorf("sides came out as %v, want two on one side and one on the other", sides)
+	if sides[1] != 2 || sides[2] != 2 {
+		t.Errorf("sides came out as %v, want two a side", sides)
 	}
 }
 
@@ -1169,6 +1238,11 @@ func TestTheFormAndTheServerAgreeOnTheTeamMinimum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the script: %v", err)
 	}
+	perSide := fmt.Sprintf("const MIN_PER_SIDE = %d;", models.MinPerSide)
+	if !strings.Contains(string(script), perSide) {
+		t.Errorf("the form and the server disagree on how many a side needs: looked for %q", perSide)
+	}
+
 	want := fmt.Sprintf("const MIN_TEAM_PLAYERS = %d;", models.MinTeamPlayers)
 	if !strings.Contains(string(script), want) {
 		t.Errorf("the script does not carry %q — the form would offer teams the server refuses", want)

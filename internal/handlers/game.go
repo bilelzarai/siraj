@@ -192,8 +192,13 @@ func (h *Handlers) PlayRound(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if device.Hot() {
+		// Everybody here has played their last question. The handover screen
+		// shows it — the answer, who got it and the final scores — and the
+		// rounds are closed when somebody presses on from it. Going straight
+		// to the result page instead, which is what this did, meant the last
+		// question of every match was the one nobody saw the answer to.
 		if device.Done() {
-			h.finishDevice(w, r, device)
+			h.handover(w, r, device)
 			return
 		}
 		// Until the next player has actually taken the phone — which is the
@@ -392,6 +397,19 @@ func (h *Handlers) PlayAnswer(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) PlayFinish(w http.ResponseWriter, r *http.Request) {
 	c := h.viewCtx(w, r)
 	actor := actorFrom(r)
+
+	// On a shared device this is the press on the last handover screen, and
+	// it closes everybody's round rather than only the seated player's. One
+	// person finishing while three stay open is a match that never settles.
+	device, err := h.deviceRound(r)
+	if err != nil {
+		h.serverError(w, r, err)
+		return
+	}
+	if device.Hot() && device.Done() {
+		h.finishDevice(w, r, device)
+		return
+	}
 
 	session, err := h.repo.ActiveGame(r.Context(), actor.ID, c.Locale)
 	if err != nil {

@@ -2757,7 +2757,12 @@
     // The team minimum, kept beside the server's own number. A test reads this
     // line and fails if the two ever disagree, so the form can never offer a
     // shape the server refuses.
-    const MIN_TEAM_PLAYERS = 3;
+    const MIN_TEAM_PLAYERS = 4;
+    // And how many of them each side needs. A side of one is not a side.
+    const MIN_PER_SIDE = 2;
+    // And the smallest match there is. One person is a solo round, which is
+    // the other screen.
+    const MIN_PLAYERS = 2;
 
     // Who is actually ticked, read from the boxes themselves.
     //
@@ -2784,6 +2789,7 @@
 
     function syncTeams() {
       const picked = pickedKeys();
+      const enoughPlayers = syncStart(picked.size);
 
       // A side-picker beside the name of somebody who is not playing is a
       // question about a non-player.
@@ -2814,6 +2820,70 @@
           duel.dispatchEvent(new Event("change", { bubbles: true }));
         }
       }
+
+      syncSplit(teamRadio.checked && enough, enoughPlayers);
+    }
+
+    // What the start button says, and whether it can be pressed.
+    //
+    // The count is the people ticked plus the host, who is always in it. The
+    // wording is rebuilt from the two sentences the server rendered — one
+    // singular, one plural with a specimen number in it — by swapping the
+    // digits for the real count. Building it from a format string instead is
+    // how "%d" ends up on a button, which has happened here before.
+    function syncStart(picked) {
+      const button = $("[data-start-button]");
+      if (!button) return;
+
+      const total = picked + 1;
+      const template = total === 1 ? button.dataset.labelOne : button.dataset.labelMany;
+      if (template) button.textContent = template.replace(/\d+/, String(total));
+
+      const enough = total >= MIN_PLAYERS;
+      button.disabled = !enough;
+      const hint = $("[data-start-hint]");
+      if (hint) hint.hidden = enough;
+      return enough;
+    }
+
+    // Whether the sides, as they currently stand, are sides.
+    //
+    // Enough players is not the same question as a workable split: four
+    // people arranged three against one is a duel in which one of the
+    // duellists is a crowd, and the server refuses it. It used to refuse it
+    // after the form was sent, which is the worst moment to learn that one
+    // dropdown needed changing. So the split is counted here as it is edited,
+    // and the button is held until it adds up.
+    function syncSplit(isTeams, enoughHere) {
+      const warning = $("[data-team-split]");
+      const submit = $("[data-start-button]");
+
+      if (!isTeams) {
+        if (warning) warning.hidden = true;
+        // Only the split's own objection is lifted here. Whether there are
+        // enough people at all is syncStart's answer, and it stands.
+        if (submit && enoughHere) submit.disabled = false;
+        return;
+      }
+
+      // The host counts, and so does everybody whose row is on screen —
+      // a hidden row belongs to somebody who is not playing.
+      const sides = new Map();
+      const add = (side) => sides.set(side, (sides.get(side) || 0) + 1);
+
+      const host = $("select[name=host_team]");
+      add(host ? host.value : "1");
+      $$("[data-team-row]").forEach((row) => {
+        if (row.hidden) return;
+        const pick = $("select", row);
+        if (pick) add(pick.value);
+      });
+
+      let ok = sides.size >= 2;
+      sides.forEach((count) => { if (count < MIN_PER_SIDE) ok = false; });
+
+      if (warning) warning.hidden = ok;
+      if (submit) submit.disabled = !ok || !enoughHere;
     }
 
 
@@ -2836,6 +2906,8 @@
     // Ticking a person is what decides whether they get a side.
     document.addEventListener("change", (e) => {
       if (e.target.name === "opponent" || e.target.name === "local") syncTeams();
+      if (e.target.name === "host_team" || e.target.name.startsWith("team_") ||
+          e.target.name === "format") syncTeams();
     });
     sync();
   })();

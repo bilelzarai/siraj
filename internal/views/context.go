@@ -52,18 +52,6 @@ func (c Ctx) IsAuthed() bool { return c.User != nil }
 // offer an account rather than pretending everything is available.
 func (c Ctx) IsGuest() bool { return c.User != nil && c.User.IsGuest() }
 
-// ActorID is whose turn it is: the player holding the device, or the signed-in
-// user when nobody has taken it.
-func (c Ctx) ActorID() uuid.UUID {
-	if c.Acting != nil {
-		return c.Acting.ID
-	}
-	if c.User != nil {
-		return c.User.ID
-	}
-	return uuid.Nil
-}
-
 // Seated is the id this device should be asked about for one match.
 //
 // The rule itself is models.Challenge.WhoActs, and this is only the view's way
@@ -86,12 +74,6 @@ func (c Ctx) Seated(ch matchView) uuid.UUID {
 // matchView is the little a Ctx needs to know about a match to answer that.
 type matchView interface {
 	WhoActs(seat, account uuid.UUID) uuid.UUID
-}
-
-// SharedDeviceInUse reports that somebody other than the account holder is
-// currently playing, so a screen can name them.
-func (c Ctx) SharedDeviceInUse() bool {
-	return c.Acting != nil && c.User != nil && c.Acting.ID != c.User.ID
 }
 
 func (c Ctx) IsRTL() bool { return c.Dir == "rtl" }

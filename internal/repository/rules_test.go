@@ -226,22 +226,18 @@ func TestTheDatabaseRefusesASecondRoom(t *testing.T) {
 	user := newUser(t, "two_rooms", "two.rooms@example.com")
 	owner := newUser(t, "two_rooms_owner", "two.rooms.owner@example.com")
 
+	// Opening rooms is not being in them. Somebody may set up as many places
+	// as they like; the rule is about where they are standing.
 	first, err := r.CreateThread(ctx, "room", "First room", "", owner.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := r.CreateThread(ctx, "room", "Second room", "", owner.ID, nil)
-	if err == nil {
-		t.Fatal("the owner opened a second room while still in the first")
-	}
-	// Opening the second is refused for the owner because creating puts them
-	// in it. Step out of the first and it works.
-	if err := r.LeaveThread(ctx, first.ID, owner.ID); err != nil {
-		t.Fatal(err)
-	}
-	second, err = r.CreateThread(ctx, "room", "Second room", "", owner.ID, nil)
 	if err != nil {
-		t.Fatalf("opening a room after leaving the previous one: %v", err)
+		t.Fatalf("opening a second room: %v", err)
+	}
+	if _, err := r.JoinThread(ctx, first.ID, owner.ID); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, err := r.JoinThread(ctx, first.ID, user.ID); err != nil {
@@ -290,11 +286,16 @@ func TestSharingARoomIsWhatMakesSomebodyReachable(t *testing.T) {
 		t.Fatal("two strangers already share a room")
 	}
 
-	if _, err := r.JoinThread(ctx, room.ID, a.ID); err != nil {
-		t.Fatal(err)
+	// Making a room does not put the owner in it, so there is nobody in this
+	// one until somebody walks in.
+	if empty, err := r.Members(ctx, room.ID); err != nil || len(empty) != 0 {
+		t.Fatalf("a newly opened room already holds %d people (err %v)", len(empty), err)
 	}
-	if _, err := r.JoinThread(ctx, room.ID, b.ID); err != nil {
-		t.Fatal(err)
+
+	for _, who := range []*models.User{owner, a, b} {
+		if _, err := r.JoinThread(ctx, room.ID, who.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if shared, err = r.ShareRoom(ctx, a.ID, b.ID); err != nil || !shared {
 		t.Errorf("two people in the same room do not share it (err %v)", err)

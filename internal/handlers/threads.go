@@ -29,20 +29,15 @@ func (h *Handlers) NewGroup(w http.ResponseWriter, r *http.Request) {
 		h.serverError(w, r, err)
 		return
 	}
-	h.render(w, r, http.StatusOK, views.NewThread(c, views.NewThreadData{
-		Kind: models.ConversationGroup, Friends: friends,
-	}))
+	h.render(w, r, http.StatusOK, views.NewThread(c, views.NewThreadData{Friends: friends}))
 }
 
-// NewRoom is the screen for opening a room: a name and what it is about.
-func (h *Handlers) NewRoom(w http.ResponseWriter, r *http.Request) {
-	c := h.viewCtx(w, r)
-	h.render(w, r, http.StatusOK, views.NewThread(c, views.NewThreadData{
-		Kind: models.ConversationRoom,
-	}))
-}
-
-// CreateThread opens a group or a room and sends its owner straight into it.
+// CreateThread opens a group or a room.
+//
+// A group is entered — it is people who were chosen, and the chooser is one of
+// them — so it opens on the thread. A room is only made: it appears in the
+// directory and whoever made it walks in when they choose to, which is the
+// same deliberate act as walking into anybody else's.
 func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 	if h.tooManyWrites(w, r, service.LimitMessage) {
 		return
@@ -52,6 +47,15 @@ func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 	kind := r.PostFormValue("kind")
 	title := r.PostFormValue("title")
 	topic := r.PostFormValue("topic")
+
+	// This route is reachable without an account because a room is, and a
+	// group is not. The service refuses it as well; refusing here is what
+	// sends them somewhere useful rather than to a server error.
+	if c.IsGuest() && kind != models.ConversationRoom {
+		h.flash(w, "info", c.T("guest.accountNeeded"))
+		redirect(w, r, "/messages?tab=room")
+		return
+	}
 
 	// Who was ticked. Usernames rather than ids, because that is what the
 	// form shows and what a person can check by reading it.
@@ -90,18 +94,27 @@ func (h *Handlers) CreateThread(w http.ResponseWriter, r *http.Request) {
 			key = "threads.needName"
 		case errors.Is(err, service.ErrNotFriends):
 			key = "threads.friendsOnly"
-		case errors.Is(err, service.ErrInRoom), errors.Is(err, repository.ErrBusy):
-			key = "rooms.leaveFirst"
+		case errors.Is(err, service.ErrGuest):
+			key = "guest.accountNeeded"
 		default:
 			h.serverError(w, r, err)
 			return
 		}
 		h.flash(w, "error", c.T(key))
 		if kind == models.ConversationRoom {
-			redirect(w, r, "/messages/new/room")
+			redirect(w, r, "/messages?tab=room")
 		} else {
 			redirect(w, r, "/messages/new/group")
 		}
+		return
+	}
+
+	if kind == models.ConversationRoom {
+		// Back to the list, with the new room in it. Said out loud, because
+		// a directory one row longer is a change that is easy to miss.
+		h.flash(w, "success", c.T("rooms.opened", conv.Title))
+		h.completeRequest(r, "/messages?tab=room")
+		redirect(w, r, "/messages?tab=room")
 		return
 	}
 	h.completeRequest(r, "/messages/"+conv.ID.String())
@@ -122,6 +135,15 @@ func (h *Handlers) JoinRoom(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			h.NotFound(w, r)
+			return
+		}
+		// A guest at the door of an account's room, or the other way about.
+		// The directory does not list it, so this is a stale page or a
+		// guessed id; either way it is a refusal with a reason, not a fault.
+		if errors.Is(err, service.ErrOtherKindOfRoom) {
+			c := h.viewCtx(w, r)
+			h.flash(w, "error", c.T("rooms.notYours"))
+			redirect(w, r, "/messages?tab=room")
 			return
 		}
 		h.serverError(w, r, err)

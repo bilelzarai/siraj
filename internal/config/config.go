@@ -85,7 +85,9 @@ func Load() (*Config, error) {
 		SessionLifetime: envDuration("SESSION_LIFETIME", 30*24*time.Hour),
 		SecureCookies:   envBool("SECURE_COOKIES", false),
 		DefaultLocale:   env("DEFAULT_LOCALE", "ar"),
-		Seed:            envBool("SEED_ON_START", true),
+		// Off by default: loading the question bank is a deliberate one-off
+		// (sirajctl seed), not something a restart should decide.
+		Seed: envBool("SEED_ON_START", false),
 
 		TrustedProxyHops: envInt("TRUSTED_PROXY_HOPS", 0),
 

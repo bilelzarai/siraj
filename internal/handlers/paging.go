@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -131,10 +130,6 @@ func (p Paging) Range() (int, int) {
 		last = p.Total
 	}
 	return first, last
-}
-
-func (p Paging) String() string {
-	return fmt.Sprintf("page %d of %d, %d rows", p.Page, p.Pages, p.Size)
 }
 
 // pagerFor is the view's half of the same window.

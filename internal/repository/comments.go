@@ -111,10 +111,6 @@ func (r *Repo) QuestionCommentsPage(ctx context.Context, includeHidden bool, lim
 	return r.questionComments(ctx, includeHidden, limit, offset)
 }
 
-func (r *Repo) RecentQuestionComments(ctx context.Context, includeHidden bool, limit int) ([]*models.QuestionComment, error) {
-	return r.questionComments(ctx, includeHidden, limit, 0)
-}
-
 func (r *Repo) questionComments(ctx context.Context, includeHidden bool, limit, offset int) ([]*models.QuestionComment, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT qc.id, qc.question_id, qc.locale, qc.body, qc.created_at,

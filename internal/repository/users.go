@@ -184,7 +184,7 @@ func collectUserCards(rows pgx.Rows) ([]*models.UserCard, error) {
 	for rows.Next() {
 		var c models.UserCard
 		if err := rows.Scan(&c.ID, &c.Username, &c.DisplayName, &c.AvatarSeed,
-			&c.Country, &c.XP, &c.LastSeenAt); err != nil {
+			&c.Country, &c.XP, &c.LastSeenAt, &c.IsTemporary); err != nil {
 			return nil, err
 		}
 		out = append(out, &c)
@@ -199,7 +199,7 @@ func collectUserCardsWithRelation(rows pgx.Rows) ([]*models.UserCard, error) {
 	for rows.Next() {
 		var c models.UserCard
 		if err := rows.Scan(&c.ID, &c.Username, &c.DisplayName, &c.AvatarSeed,
-			&c.Country, &c.XP, &c.LastSeenAt, &c.Relation); err != nil {
+			&c.Country, &c.XP, &c.LastSeenAt, &c.IsTemporary, &c.Relation); err != nil {
 			return nil, err
 		}
 		out = append(out, &c)
@@ -213,6 +213,33 @@ func (r *Repo) UserCardByUsername(ctx context.Context, username string) (*models
 		SELECT id, username, display_name, avatar_seed, country, xp, last_seen_at
 		  FROM users WHERE username = $1 AND NOT is_temporary`, username,
 	).Scan(&c.ID, &c.Username, &c.DisplayName, &c.AvatarSeed, &c.Country, &c.XP, &c.LastSeenAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &c, err
+}
+
+// UserCardInMyRoom resolves a name among the people in the viewer's room,
+// temporary players included.
+//
+// UserCardByUsername deliberately cannot see a guest: a temporary player is
+// invisible to the rest of the site, which is what stops them turning up in
+// search, on the leaderboard or in a stranger's friend list. Inside a room the
+// opposite is true — the people in it are exactly who you came to find, and in
+// a guest's room all of them are guests. So the lookup that has to see them is
+// a separate one, scoped to the room, rather than a flag loosening the lookup
+// that must not.
+func (r *Repo) UserCardInMyRoom(ctx context.Context, viewerID uuid.UUID, username string) (*models.UserCard, error) {
+	var c models.UserCard
+	err := r.pool.QueryRow(ctx, `
+		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
+		  FROM conversation_members mine
+		  JOIN conversation_members peer ON peer.conversation_id = mine.conversation_id
+		  JOIN users u ON u.id = peer.user_id
+		 WHERE mine.user_id = $1 AND mine.is_room
+		   AND peer.user_id <> $1 AND u.username = $2`, viewerID, username,
+	).Scan(&c.ID, &c.Username, &c.DisplayName, &c.AvatarSeed, &c.Country, &c.XP,
+		&c.LastSeenAt, &c.IsTemporary)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

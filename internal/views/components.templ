@@ -309,13 +309,28 @@ templ StatTile(icon, value, label string) {
 // profile instead. Anything nested in a link is a link, whatever it looks like.
 templ UserRow(c Ctx, u *models.UserCard, subtitle string) {
 	<div class="user-row">
-		<a class="user-row__link" href={ templ.SafeURL("/u/" + u.Username) }>
-			@AvatarWithPresence(u, "sm")
-			<div class="user-row__body">
-				<div class="user-row__name truncate">{ u.DisplayName }</div>
-				<div class="user-row__meta truncate">{ subtitle }</div>
+		// A temporary player has no page to go to — that is the rule, not an
+		// oversight — so their name is not a link. It used to be one on every
+		// list that could contain them, and following it reached the Not
+		// Found page: a row that looked exactly like the rows either side of
+		// it and behaved like a broken URL.
+		if u.HasProfile() {
+			<a class="user-row__link" href={ templ.SafeURL("/u/" + u.Username) }>
+				@AvatarWithPresence(u, "sm")
+				<div class="user-row__body">
+					<div class="user-row__name truncate">{ u.DisplayName }</div>
+					<div class="user-row__meta truncate">{ subtitle }</div>
+				</div>
+			</a>
+		} else {
+			<div class="user-row__link">
+				@AvatarWithPresence(u, "sm")
+				<div class="user-row__body">
+					<div class="user-row__name truncate">{ u.DisplayName }</div>
+					<div class="user-row__meta truncate">{ subtitle }</div>
+				</div>
 			</div>
-		</a>
+		}
 		<div class="user-row__actions">
 			{ children... }
 		</div>

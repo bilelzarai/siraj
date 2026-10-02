@@ -341,6 +341,43 @@ func (r *Repo) RecordMatchScore(ctx context.Context, challengeID, userID uuid.UU
 	})
 }
 
+// MatchSides is the format of a match and which side each player is on.
+//
+// Deliberately not Challenge(): the hot seat asks this on every render of the
+// handover screen, and all it needs is a format and a handful of small
+// integers. Challenge() hydrates every player's card, their scores and the
+// question set with it, which is a great deal of work to learn that four
+// people are on two sides.
+func (r *Repo) MatchSides(ctx context.Context, challengeID uuid.UUID) (string, map[uuid.UUID]int, error) {
+	var format string
+	err := r.pool.QueryRow(ctx,
+		`SELECT format FROM challenges WHERE id = $1`, challengeID).Scan(&format)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil, ErrNotFound
+	}
+	if err != nil {
+		return "", nil, err
+	}
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT user_id, team FROM challenge_players WHERE challenge_id = $1`, challengeID)
+	if err != nil {
+		return "", nil, err
+	}
+	defer rows.Close()
+
+	sides := map[uuid.UUID]int{}
+	for rows.Next() {
+		var id uuid.UUID
+		var team int
+		if err := rows.Scan(&id, &team); err != nil {
+			return "", nil, err
+		}
+		sides[id] = team
+	}
+	return format, sides, rows.Err()
+}
+
 // ------------------------------------------------------------ calling it off --
 
 // CancelOutcome is what happened to a match somebody answered.

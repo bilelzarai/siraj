@@ -35,6 +35,7 @@ Commands:
   whois   <username>     Show one account
   passwd  <username>     Set a password, read from stdin
   stats                  Print platform totals
+  seed                   Load the bundled question bank into the database
 
 Passwords are stored as bcrypt hashes and cannot be read back — not by this
 tool, not by an admin, not from the database. passwd sets a new one:
@@ -43,6 +44,11 @@ tool, not by an admin, not from the database. passwd sets a new one:
 
 Reading it from stdin rather than an argument keeps it out of shell history
 and out of the process list, where any other user on the box could see it.
+
+seed loads internal/database/seed/questions.json. It is idempotent and will
+not overwrite a translation that something else has edited since, so it is safe
+to re-run after editing the file. Run it once on a new database — the server
+does not seed on boot unless SEED_ON_START says so, and it is not meant to.
 
 Every command reads DATABASE_URL from the environment or from .env.
 `
@@ -93,6 +99,8 @@ func run(command string, args []string) error {
 		return whois(ctx, pool, args)
 	case "stats":
 		return stats(ctx, pool)
+	case "seed":
+		return seedBank(ctx, pool)
 	default:
 		flag.Usage()
 		return fmt.Errorf("unknown command %q", command)
@@ -356,7 +364,7 @@ func stats(ctx context.Context, pool *pgxpool.Pool) error {
 		{"translations", `SELECT count(*) FROM question_translations`},
 		{"rounds finished", `SELECT count(*) FROM game_sessions WHERE status = 'finished'`},
 		{"answers recorded", `SELECT count(*) FROM game_answers`},
-		{"duels", `SELECT count(*) FROM challenges`},
+		{"matches", `SELECT count(*) FROM challenges`},
 		{"friendships", `SELECT count(*) FROM friendships WHERE status = 'accepted'`},
 		{"messages", `SELECT count(*) FROM messages`},
 	}
@@ -380,4 +388,36 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// seedBank loads the bundled question bank on demand.
+//
+// It is a command rather than a boot-time flag because loading content is
+// something somebody does once, on purpose. A server that seeds on every
+// restart is a server that can revert content between deploys — the upsert is
+// careful about translations, but the decision to run it at all belongs to an
+// operator and not to a process restart.
+func seedBank(ctx context.Context, pool *pgxpool.Pool) error {
+	// The bank references categories by slug, which migration 0002 creates. On
+	// a database the server has never booted against, neither table exists yet,
+	// and the error from the upsert names a missing category rather than the
+	// missing schema.
+	var categories int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM categories`).Scan(&categories); err != nil {
+		return fmt.Errorf("no schema yet — start the server once so it migrates, then seed: %w", err)
+	}
+
+	if err := database.SeedQuestions(ctx, pool); err != nil {
+		return err
+	}
+
+	var questions, translations int
+	if err := pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM questions),
+		       (SELECT count(*) FROM question_translations)`,
+	).Scan(&questions, &translations); err != nil {
+		return err
+	}
+	fmt.Printf("question bank loaded: %d questions, %d translations\n", questions, translations)
+	return nil
 }

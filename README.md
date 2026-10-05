@@ -176,9 +176,25 @@ fails if any catalog is missing a key or has mismatched format verbs.
 ```bash
 go test ./...            # unit tests
 python3 scripts/check-i18n.py   # every T() call matches its key's arity
-./scripts/smoke.sh       # 240 end-to-end HTTP checks against a running server
+./scripts/smoke.sh       # 263 end-to-end HTTP checks against a running server
 ./scripts/reset-test-data.sh    # clear player data, keep the content bank
 ```
+
+The smoke script drives one database — the local one in `docker-compose.yml` —
+through psql, through the server and through `sirajctl`, so the server it is
+aimed at has to be the same one:
+
+```bash
+make db-up
+DATABASE_URL=postgres://islamic:islamic@localhost:5434/islamic_game?sslmode=disable \
+  STATIC_DIR=./static go run ./cmd/server &
+./scripts/smoke.sh
+```
+
+Pointing the server anywhere else now stops the run after registration with the
+URL it expected, rather than reporting the whole admin half as missing pages.
+Override the target with `SMOKE_DATABASE_URL`, and the container it resets with
+`DB_CONTAINER` / `DB_USER` / `DB_NAME` / `DB_PORT`.
 
 > `scripts/reset-test-data.sh` uses `DELETE`, not `TRUNCATE ... CASCADE`.
 > `questions.created_by` references `users`, and `TRUNCATE users CASCADE`

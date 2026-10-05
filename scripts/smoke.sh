@@ -8,6 +8,28 @@ DIR=${SMOKE_TMP:-$(mktemp -d)}
 trap '[ -n "${SMOKE_TMP:-}" ] || rm -rf "$DIR"' EXIT
 A=$DIR/cookieA.txt
 B=$DIR/cookieB.txt
+
+# Three things here read the database — this script through psql, the server
+# under test, and sirajctl — and they have to be the same database. Named once,
+# here, because the one that was left implicit was sirajctl: it falls back to
+# DATABASE_URL in .env, which holds whatever the last deploy was pointed at. So
+# `promote` landed on another server, the account under test stayed a player,
+# and seventy-six admin checks reported 404 without a word about why.
+DB_CONTAINER=${DB_CONTAINER:-islamic-game-db}
+DB_USER=${DB_USER:-islamic}
+DB_NAME=${DB_NAME:-islamic_game}
+DB_PASSWORD=${DB_PASSWORD:-islamic}
+DB_PORT=${DB_PORT:-5434}
+export DATABASE_URL=${SMOKE_DATABASE_URL:-postgres://$DB_USER:$DB_PASSWORD@localhost:$DB_PORT/$DB_NAME?sslmode=disable}
+
+# Built from source rather than taken from bin/, which is ignored by git: on a
+# fresh clone it does not exist, and on an old one it is whatever was last
+# compiled. Either way the admin half of this suite was testing nothing.
+CTL=$DIR/sirajctl
+if ! (cd "$REPO" && go build -o "$CTL" ./cmd/sirajctl); then
+  echo "cannot build cmd/sirajctl — the admin checks need it" >&2
+  exit 1
+fi
 "$REPO/scripts/reset-test-data.sh" >/dev/null 2>&1 || true
 rm -f "$A" "$B"
 
@@ -74,6 +96,18 @@ TOKB=$(csrf "$B")
 check "register B" 303 "$(curl -s -b "$B" -c "$B" -o /dev/null -w '%{http_code}' -X POST $BASE/register \
   -d "csrf_token=$TOKB" -d "display_name=Bilal Test" -d "username=bilal_t" \
   -d "email=bilal@example.com" -d "password=supersecret1" -d "password_confirm=supersecret1")"
+
+# Everything below reads back what the server wrote, so a server pointed at
+# another database turns the rest of this run into noise. Asking once, here,
+# costs one query and replaces a page of unexplained failures.
+SEEN=$(docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+  "SELECT count(*) FROM users WHERE username = 'aisha_t';" 2>/dev/null)
+if [ "${SEEN:-0}" != "1" ]; then
+  echo
+  echo "  FAIL the server under test is not using the database this script manages"
+  echo "       start it with DATABASE_URL=$DATABASE_URL"
+  exit 1
+fi
 
 echo "== validation =="
 curl -s -c $DIR/cookieC.txt "$BASE/register?lang=en" -o /dev/null
@@ -302,7 +336,7 @@ check "player cannot see /admin/users" 404 "$(code x /dev/null -b "$A" $BASE/adm
 check "player cannot see /admin/support" 404 "$(code x /dev/null -b "$A" $BASE/admin/support)"
 
 echo "== admin area (promoted account) =="
-"$REPO/bin/sirajctl" promote aisha_t > /dev/null 2>&1
+"$CTL" promote aisha_t > /dev/null 2>&1
 for path in /admin /admin/users /admin/users/new /admin/support /admin/questions \
             /admin/questions/import /admin/review /admin/integrity /admin/audit; do
   check "admin $path" 200 "$(code x /dev/null -b "$A" "$BASE$path")"
@@ -322,7 +356,7 @@ contains "moderator listed" "mod_person" $DIR/users.html
 
 echo "== admin cannot demote the last admin or act on self =="
 check "self-action blocked" 303 "$(curl -s -b "$A" -o /dev/null -w '%{http_code}' -X POST \
-  "$BASE/admin/users/$("$REPO/bin/sirajctl" whois aisha_t | grep -oP '^id:\s+\K\S+')/suspend" -d "csrf_token=$(csrf "$A")")"
+  "$BASE/admin/users/$("$CTL" whois aisha_t | grep -oP '^id:\s+\K\S+')/suspend" -d "csrf_token=$(csrf "$A")")"
 
 echo "== bulk import: preview writes nothing, commit writes =="
 cat > $DIR/imp.json <<'JSON'
@@ -331,11 +365,11 @@ cat > $DIR/imp.json <<'JSON'
  {"id":9202,"category":"bogus_category","difficulty":1,"correct":0,
   "t":{"en":{"prompt":"Smoke test: bad category","choices":["a","b","c","d"],"explanation":"x"}}}]
 JSON
-BEFORE_Q=$("$REPO/bin/sirajctl" stats | grep -oP '^questions:\s+\K\d+')
+BEFORE_Q=$("$CTL" stats | grep -oP '^questions:\s+\K\d+')
 check "import preview" 200 "$(curl -s -b "$A" -o $DIR/prev.html -w '%{http_code}' -X POST $BASE/admin/questions/import \
   -F "csrf_token=$(csrf "$A")" -F "commit=0" -F "file=@$DIR/imp.json")"
 contains "preview flags the bad category" "unknown category" $DIR/prev.html
-MID_Q=$("$REPO/bin/sirajctl" stats | grep -oP '^questions:\s+\K\d+')
+MID_Q=$("$CTL" stats | grep -oP '^questions:\s+\K\d+')
 check "preview wrote nothing" "$BEFORE_Q" "$MID_Q"
 # Applying is one press on a file the server already holds from the preview.
 # It used to mean attaching the same file a second time, which asked the admin
@@ -347,12 +381,12 @@ contains "apply asks for no second file" "$STASH" $DIR/prev.html
 # A commit with no token behind it never had a preview.
 check "a commit with no token" 200 "$(curl -s -b "$A" -o /dev/null -w '%{http_code}' -X POST $BASE/admin/questions/import \
   -F "csrf_token=$(csrf "$A")" -F "commit=1" -F "file=@$DIR/imp.json")"
-BARE_Q=$("$REPO/bin/sirajctl" stats | grep -oP '^questions:\s+\K\d+')
+BARE_Q=$("$CTL" stats | grep -oP '^questions:\s+\K\d+')
 check "and wrote nothing" "$BEFORE_Q" "$BARE_Q"
 
 check "import commit" 200 "$(curl -s -b "$A" -o /dev/null -w '%{http_code}' -X POST $BASE/admin/questions/import \
   -d "csrf_token=$(csrf "$A")" -d "commit=1" -d "stash=$STASH")"
-AFTER_Q=$("$REPO/bin/sirajctl" stats | grep -oP '^questions:\s+\K\d+')
+AFTER_Q=$("$CTL" stats | grep -oP '^questions:\s+\K\d+')
 check "commit added exactly one" "$((BEFORE_Q+1))" "$AFTER_Q"
 
 echo "== support: staff triage =="
@@ -546,7 +580,7 @@ if [ "$SKIP_RESET" = "0" ]; then
       -d "csrf_token=$(csrf $DIR/cookieU.txt)" -d "identifier=bilal_t" -d "password=supersecret1")"
     # Put the fixture back, or every later run starts with a password nobody
     # reading this script would expect.
-    printf 'supersecret1' | "$REPO/bin/sirajctl" passwd bilal_t >/dev/null
+    printf 'supersecret1' | "$CTL" passwd bilal_t >/dev/null
 fi
 else
   echo "  --   MailHog not reachable at $MH; skipping the reset flow"

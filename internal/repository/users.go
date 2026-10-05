@@ -24,6 +24,16 @@ const userColumns = `
 	last_seen_at, created_at, updated_at,
 	is_temporary, host_user_id, guest_key, expires_at`
 
+// userCardColumns is the same idea for the short card the lists render, in the
+// order collectUserCards scans it. Every query feeding those collectors builds
+// its list from here, because the ones that spelled it out by hand drifted:
+// StaffMembers and SearchUsers each selected seven columns while the scan asked
+// for eight, which pgx answers with an error — and both call sites discard it,
+// so the assignment menu and the people search simply came back empty.
+const userCardColumns = `
+	id, username, display_name, avatar_seed, country, xp, last_seen_at,
+	is_temporary`
+
 // accountsOnly is the predicate every list of people carries. A temporary
 // player is a player — they answer questions and hold a place in a match — but
 // they are not somebody you can befriend, rank, write to or find by name, and
@@ -154,8 +164,7 @@ func (r *Repo) SearchUsers(ctx context.Context, viewerID uuid.UUID, query string
 	// the search list can offer the action that actually applies to that person
 	// instead of "Add friend" for everyone.
 	rows, err := r.pool.Query(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country,
-		       u.xp, u.last_seen_at, u.is_temporary,
+		SELECT `+prefixed(userCardColumns, "u")+`,
 		       COALESCE(
 		         CASE
 		           WHEN f.status = 'blocked'  THEN 'blocked'
@@ -210,9 +219,10 @@ func collectUserCardsWithRelation(rows pgx.Rows) ([]*models.UserCard, error) {
 func (r *Repo) UserCardByUsername(ctx context.Context, username string) (*models.UserCard, error) {
 	var c models.UserCard
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, username, display_name, avatar_seed, country, xp, last_seen_at
-		  FROM users WHERE username = $1 AND NOT is_temporary`, username,
-	).Scan(&c.ID, &c.Username, &c.DisplayName, &c.AvatarSeed, &c.Country, &c.XP, &c.LastSeenAt)
+		SELECT `+userCardColumns+`
+		  FROM users WHERE username = $1 AND `+accountsOnly, username,
+	).Scan(&c.ID, &c.Username, &c.DisplayName, &c.AvatarSeed, &c.Country, &c.XP,
+		&c.LastSeenAt, &c.IsTemporary)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -232,7 +242,7 @@ func (r *Repo) UserCardByUsername(ctx context.Context, username string) (*models
 func (r *Repo) UserCardInMyRoom(ctx context.Context, viewerID uuid.UUID, username string) (*models.UserCard, error) {
 	var c models.UserCard
 	err := r.pool.QueryRow(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
+		SELECT `+prefixed(userCardColumns, "u")+`
 		  FROM conversation_members mine
 		  JOIN conversation_members peer ON peer.conversation_id = mine.conversation_id
 		  JOIN users u ON u.id = peer.user_id

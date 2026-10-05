@@ -155,7 +155,7 @@ func (r *Repo) IsBlockedBetween(ctx context.Context, a, b uuid.UUID) (bool, erro
 // Friends lists accepted friends of a user, online people first.
 func (r *Repo) Friends(ctx context.Context, userID uuid.UUID) ([]*models.UserCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
+		SELECT `+prefixed(userCardColumns, "u")+`
 		  FROM friendships f
 		  JOIN users u ON u.id = CASE WHEN f.requester_id = $1
 		                              THEN f.addressee_id ELSE f.requester_id END
@@ -176,7 +176,7 @@ func (r *Repo) Friends(ctx context.Context, userID uuid.UUID) ([]*models.UserCar
 // a "load more" rather than two hundred rows rendered before it opens.
 func (r *Repo) SearchFriends(ctx context.Context, userID uuid.UUID, query string, limit, offset int) ([]*models.UserCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
+		SELECT `+prefixed(userCardColumns, "u")+`
 		  FROM friendships f
 		  JOIN users u ON u.id = CASE WHEN f.requester_id = $1
 		                              THEN f.addressee_id ELSE f.requester_id END
@@ -206,7 +206,7 @@ func (r *Repo) FriendCount(ctx context.Context, userID uuid.UUID) (int, error) {
 // IncomingRequests are people waiting for this user to respond.
 func (r *Repo) IncomingRequests(ctx context.Context, userID uuid.UUID) ([]*models.UserCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
+		SELECT `+prefixed(userCardColumns, "u")+`
 		  FROM friendships f
 		  JOIN users u ON u.id = f.requester_id
 		 WHERE f.addressee_id = $1 AND f.status = 'pending'
@@ -220,7 +220,7 @@ func (r *Repo) IncomingRequests(ctx context.Context, userID uuid.UUID) ([]*model
 
 func (r *Repo) OutgoingRequests(ctx context.Context, userID uuid.UUID) ([]*models.UserCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
+		SELECT `+prefixed(userCardColumns, "u")+`
 		  FROM friendships f
 		  JOIN users u ON u.id = f.addressee_id
 		 WHERE f.requester_id = $1 AND f.status = 'pending'

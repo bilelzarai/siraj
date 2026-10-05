@@ -464,7 +464,7 @@ func (r *Repo) TicketOwnerContact(ctx context.Context, ticketID uuid.UUID) (Cont
 // StaffMembers lists who a ticket can be assigned to.
 func (r *Repo) StaffMembers(ctx context.Context) ([]*models.UserCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, username, display_name, avatar_seed, country, xp, last_seen_at
+		SELECT `+userCardColumns+`
 		  FROM users WHERE role IN ('admin', 'moderator') ORDER BY display_name`)
 	if err != nil {
 		return nil, err

@@ -41,9 +41,7 @@ func (r *Repo) attachMembers(ctx context.Context, convs []*models.Conversation) 
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT m.conversation_id,
-		       u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp,
-		       u.last_seen_at, u.is_temporary
+		SELECT m.conversation_id, `+prefixed(userCardColumns, "u")+`
 		  FROM conversation_members m
 		  JOIN users u ON u.id = m.user_id
 		 WHERE m.conversation_id = ANY($1)
@@ -72,7 +70,7 @@ func (r *Repo) attachMembers(ctx context.Context, convs []*models.Conversation) 
 // Members is everyone in a thread, for the screen that says who is here.
 func (r *Repo) Members(ctx context.Context, convID uuid.UUID) ([]*models.UserCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
+		SELECT `+prefixed(userCardColumns, "u")+`
 		  FROM conversation_members m
 		  JOIN users u ON u.id = m.user_id
 		 WHERE m.conversation_id = $1
@@ -81,17 +79,7 @@ func (r *Repo) Members(ctx context.Context, convID uuid.UUID) ([]*models.UserCar
 		return nil, err
 	}
 	defer rows.Close()
-
-	var out []*models.UserCard
-	for rows.Next() {
-		var u models.UserCard
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName,
-			&u.AvatarSeed, &u.Country, &u.XP, &u.LastSeenAt, &u.IsTemporary); err != nil {
-			return nil, err
-		}
-		out = append(out, &u)
-	}
-	return out, rows.Err()
+	return collectUserCards(rows)
 }
 
 // MemberIDs is everyone a message in this thread has to reach. The live stream
@@ -342,7 +330,7 @@ const RoomPeersShown = 50
 // from the room, not from the first page of it.
 func (r *Repo) RoomPeers(ctx context.Context, viewerID uuid.UUID, query string, limit, offset int) ([]*models.UserCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country, u.xp, u.last_seen_at, u.is_temporary
+		SELECT `+prefixed(userCardColumns, "u")+`
 		  FROM conversation_members mine
 		  JOIN conversation_members peer ON peer.conversation_id = mine.conversation_id
 		  JOIN users u ON u.id = peer.user_id

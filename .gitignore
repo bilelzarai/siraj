@@ -22,3 +22,5 @@ coverage.*
 # Compiled binaries built into the repository root.
 /sirajctl
 /server
+.neon
+node_modules/

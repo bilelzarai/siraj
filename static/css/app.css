@@ -76,6 +76,11 @@ ul, ol { list-style: none; padding: 0; }
   --surface:      #ffffff;
   --surface-2:    #f1f5f4;
   --surface-3:    #e6ecea;
+  /* The raised tab on the group picker. Lighter than the --surface-2 track
+     it sits in, which is what makes it read as lifted rather than recessed —
+     so it is a token and not var(--surface): in dark that would be darker
+     than the track and the selected tab would look like the hole. */
+  --segment-pill: #ffffff;
   --border:       #e2e8e6;
   --border-strong:#cbd5d2;
 
@@ -138,6 +143,7 @@ ul, ol { list-style: none; padding: 0; }
     --surface:      #0e1a17;
     --surface-2:    #142520;
     --surface-3:    #1c322b;
+    --segment-pill: #1c322b;
     --border:       #1e352e;
     --border-strong:#2a4a40;
 
@@ -176,6 +182,7 @@ ul, ol { list-style: none; padding: 0; }
   --surface:      #0e1a17;
   --surface-2:    #142520;
   --surface-3:    #1c322b;
+  --segment-pill: #1c322b;
   --border:       #1e352e;
   --border-strong:#2a4a40;
 
@@ -660,8 +667,46 @@ h4 { font-size: 1rem; }
 .segment__item.is-active:hover,
 .segment__item.is-on:hover { color: #fff; }
 
+/* Except on the group picker, which is a raised pill.
+ *
+ * The paragraph above argued for colour on exactly this bar — a weak signal
+ * for a choice that changes who the invitation goes to. It is not weak here
+ * any more: the group's own list opens directly beneath the tab, so what has
+ * been chosen is legible from the names on screen rather than from the tab
+ * alone, and the one block of solid accent left in the card is the Start
+ * button at its foot, which is the thing to press. Two of them competed.
+ *
+ * Scoped to [data-source-group]: every other segment on the site — the
+ * challenge tabs, the friends tabs, the leaderboard scope — keeps the filled
+ * state, because none of them is standing over the list it selects. */
+[data-source-group] .segment__item.is-on,
+[data-source-group] .segment__item.is-on:hover {
+  background: var(--segment-pill);
+  color: var(--text);
+}
+
 /* option chips — used in the round setup form */
 .choice-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+
+/* The bank's own two rows — category and difficulty — are a grid of many small
+   tiles rather than a handful of wide ones, so they are sized to hold a label
+   and a count and no more.
+
+   At 130px the third tile missed the edge of a phone-width card by a fraction
+   of a pixel and auto-fit dropped to two columns, which stretched each tile to
+   twice the width its text needs and pushed difficulty a screenful down. The
+   smaller minimum keeps the tile the same size at every width and lets the
+   count of columns follow the screen: two on a small phone, three at the width
+   this was drawn for, four on a desktop. The format and source pickers keep
+   the wider default — their labels are sentences, not names. */
+.choice-grid--tight { gap: 8px; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); }
+/* A narrower tile has to spend less of itself on padding, or the name it
+   exists to show is the only part that gives way: at the wide chip's inset
+   every category read "Al…", "Th…", "Pr…" — three dots and a letter, which
+   names nothing. The inset and the count shrink with the tile so the label
+   keeps the room it needs. */
+.choice-grid--tight .chip-radio__face { gap: 5px; padding: 9px 8px; font-size: .78rem; }
+.choice-grid--tight .chip-radio__count { padding: 1px 4px; font-size: .66rem; }
 
 .chip-radio { position: relative; }
 .chip-radio input { position: absolute; opacity: 0; pointer-events: none; }
@@ -1602,8 +1647,12 @@ h4 { font-size: 1rem; }
 }
 .bubble-row--out .bubble__name { display: none; }
 
-/* Choosing the people for a group. */
-.pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }
+/* Choosing the people for a group.
+   Named .pick-list, not .pick: .pick is one chip on the match screen, and a
+   grid container under the same name turned every one of those chips into a
+   190px-wide grid of its own — wide enough to push the ✕ beside it out past
+   the edge of the card. One name, one meaning. */
+.pick-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }
 .pick__one {
   display: flex;
   align-items: center;

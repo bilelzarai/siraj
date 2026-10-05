@@ -1,4 +1,8 @@
+# Every env file, not only `.env`: a `.env.production` or a `.env.bak` holds the
+# same credentials and the bare name matched neither.
 .env
+.env.*
+!.env.example
 /bin/
 /tmp/
 *.log

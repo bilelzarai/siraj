@@ -244,6 +244,10 @@
     // A lifted menu is positioned against where the button was. Scroll the
     // panel under it and it would hang in the air pointing at nothing.
     window.addEventListener("scroll", () => closeAll(null), true);
+    // Same reason, for a phone turning on its side: the menu is pinned to a
+    // coordinate measured before the rotation, so it would point at nothing.
+    window.addEventListener("resize", () => closeAll(null));
+    window.addEventListener("orientationchange", () => closeAll(null));
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closeAll(null);
     });

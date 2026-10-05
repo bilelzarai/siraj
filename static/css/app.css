@@ -1462,6 +1462,10 @@ h4 { font-size: 1rem; }
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* A grid item floors its track at its own min-content width unless told
+     otherwise, so on a 320px screen the single-column track resolved to 363px
+     and the panel hung off the edge with the compose button out of reach. */
+  min-width: 0;
 }
 .chat__list-head {
   display: flex;
@@ -1789,6 +1793,15 @@ h4 { font-size: 1rem; }
 .chat__item:hover .chat__item-menu .btn,
 .chat__item:focus-within .chat__item-menu .btn,
 .chat__item.is-active .chat__item-menu .btn { opacity: 1; }
+/* "View all" and the other small text links render 20px tall, under the 24px
+   minimum for something a thumb has to hit. The pseudo-element grows only the
+   area that responds to a touch — it is absolutely positioned, so nothing on
+   the page moves and the type stays the size it was designed at. */
+@media (hover: none) {
+  a.tiny { position: relative; }
+  a.tiny::after { content: ""; position: absolute; inset-block: -4px; inset-inline: 0; }
+}
+
 @media (hover: none) {
   .chat__item-menu .btn { opacity: 1; }
 }
@@ -2059,6 +2072,58 @@ h4 { font-size: 1rem; }
 /* The arrow points the way the language runs. */
 [dir="rtl"] .chat__send .icon { transform: scaleX(-1); }
 
+/* ---- the signed-out header on a phone ---------------------------------
+   The brand and the action cluster were both pinned at their natural width
+   (flex-shrink: 0), so the row could only be as wide as its contents wanted:
+   426px in English and 477px in French. Every signed-out screen — the landing
+   page, log in, sign up, the password reset — scrolled sideways on every phone
+   from 320px to 412px, which is the first thing a new player ever sees. */
+@media (max-width: 560px) {
+  .nav__inner { padding-inline: 14px; gap: 6px; }
+  .brand { margin-inline-end: 6px; min-width: 0; }
+  .nav__actions { flex-shrink: 1; min-width: 0; gap: 6px; }
+  .nav__actions .btn--sm { padding-inline: 10px; }
+}
+
+@media (max-width: 430px) {
+  /* The mark alone still identifies the site and is still the link home. The
+     word beside it is what stops two auth buttons fitting in French. */
+  .brand > span:not(.brand__mark) { display: none; }
+  .brand { margin-inline-end: 2px; }
+  .nav__actions .btn--sm { padding-inline: 8px; font-size: .78rem; }
+}
+
+/* The narrowest phones still in use, where "Se connecter" and "S'inscrire"
+   together are wider than the screen. Log in keeps its label and its place —
+   it sheds the button chrome and reads as the link it already was, which is
+   what buys the room. Nothing is dropped from the header. */
+@media (max-width: 400px) {
+  .nav__inner { padding-inline: 8px; gap: 3px; }
+  .nav__actions { gap: 3px; }
+  /* The round buttons keep their shape. Letting the action row shrink is what
+     stops the overflow, but a square button that shrinks is a 14px sliver
+     nobody can press — the give has to come from padding, not from these. */
+  .nav__actions .btn--icon,
+  .nav__actions .dropdown { flex-shrink: 0; }
+  .nav__actions .btn--icon { width: 34px; height: 34px; padding: 6px; }
+  .nav__actions .btn--ghost.btn--sm {
+    padding-inline: 4px;
+    background: none;
+    border-color: transparent;
+    box-shadow: none;
+  }
+  .nav__actions .btn--sm { padding-inline: 5px; font-size: .76rem; }
+}
+
+/* 320px, the narrowest screen still worth supporting, where French has to fit
+   "Se connecter" and "Créer un compte" beside the mark and two round buttons.
+   A couple of points off the mark and the labels is all that is left to give,
+   and it is less bad than dropping a control the visitor came for. */
+@media (max-width: 340px) {
+  .brand__mark { width: 28px; height: 28px; border-radius: 9px; font-size: .92rem; }
+  .nav__actions .btn--sm { padding-inline: 4px; font-size: .72rem; }
+}
+
 @media (max-width: 430px) {
   .chat__compose { padding-block: 8px; padding-inline: 10px; }
   .chat__row { gap: 6px; }
@@ -2326,6 +2391,8 @@ h4 { font-size: 1rem; }
   inset-block-start: calc(100% + 8px);
   inset-inline-end: 0;
   min-width: 190px;
+  /* Never wider than the screen it is on, whatever the longest item says. */
+  max-width: calc(100vw - 16px);
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--r);

@@ -169,9 +169,14 @@ check "create challenge" 303 "$(curl -s -b "$A" -o /dev/null -w '%{http_code}' -
 check "B sees challenge" 200 "$(code x $DIR/ch.html -b "$B" "$BASE/challenges?tab=incoming")"
 contains "challenge listed" "Aisha Test" $DIR/ch.html
 CH_ID=$(grep -oP '/challenges/\K[0-9a-f-]{36}' $DIR/ch.html | head -1)
-# The first press joins; the second, carrying the confirmation, starts.
+# Accepting joins; it no longer opens a round. The host sets the match going
+# with one press on /start, which opens a round for everybody who accepted at
+# the same moment — their own included. Driving it the old way (a second accept
+# carrying confirm=1) still answers 303, so this flow has to assert the state
+# it produces and not only the status code.
 check "B joins the match" 303 "$(curl -s -b "$B" -o /dev/null -w '%{http_code}' -X POST $BASE/challenges/$CH_ID/accept -d "csrf_token=$(csrf "$B")")"
-check "B starts their round" 303 "$(curl -s -b "$B" -o /dev/null -w '%{http_code}' -X POST $BASE/challenges/$CH_ID/accept -d "csrf_token=$(csrf "$B")" -d "confirm=1")"
+check "the host starts the match" 303 "$(curl -s -b "$A" -o /dev/null -w '%{http_code}' -X POST $BASE/challenges/$CH_ID/start -d "csrf_token=$(csrf "$A")")"
+check "B has a round to play" 200 "$(code x /dev/null -b "$B" $BASE/play/round)"
 
 for i in 0 1 2 3 4; do
   curl -s -b "$B" -X POST $BASE/play/answer -H 'Content-Type: application/json' -H 'Accept: application/json' \
@@ -180,10 +185,9 @@ for i in 0 1 2 3 4; do
 done
 curl -s -b "$B" -o /dev/null -X POST $BASE/play/finish -d "csrf_token=$(csrf "$B")"
 
-# Starting a round in a match asks first: the press that spends your one
-# attempt at these questions carries confirm=1, which is what the dialog on the
-# button submits.
-check "A plays their side" 303 "$(curl -s -b "$A" -o /dev/null -w '%{http_code}' -X POST $BASE/challenges/$CH_ID/accept -d "csrf_token=$(csrf "$A")" -d "confirm=1")"
+# The host's round opened with the press that started the match, so they play
+# straight away rather than accepting their own challenge.
+check "A has a round to play" 200 "$(code x /dev/null -b "$A" $BASE/play/round)"
 for i in 0 1 2 3 4; do
   curl -s -b "$A" -X POST $BASE/play/answer -H 'Content-Type: application/json' -H 'Accept: application/json' \
     -H "X-CSRF-Token: $(csrf "$A")" -d "{\"position\":$i,\"choice\":2,\"timeMs\":1500}" > /dev/null

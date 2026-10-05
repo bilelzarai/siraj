@@ -155,7 +155,7 @@ func (r *Repo) SearchUsers(ctx context.Context, viewerID uuid.UUID, query string
 	// instead of "Add friend" for everyone.
 	rows, err := r.pool.Query(ctx, `
 		SELECT u.id, u.username, u.display_name, u.avatar_seed, u.country,
-		       u.xp, u.last_seen_at,
+		       u.xp, u.last_seen_at, u.is_temporary,
 		       COALESCE(
 		         CASE
 		           WHEN f.status = 'blocked'  THEN 'blocked'

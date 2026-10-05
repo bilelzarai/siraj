@@ -174,7 +174,12 @@ templ tabLink(c Ctx, href, icon, label string, count int) {
 }
 
 templ localeMenu(c Ctx) {
-	<div class="dropdown" data-dropdown>
+	// data-dropdown-float lifts the menu out of flow and clamps it inside the
+	// viewport. This button sits near the inline-start of the header while the
+	// menu is anchored to the button's inline-end, so without the clamp the
+	// panel hangs off the edge of the screen — off the left in English and
+	// French, off the right in Arabic, at every width from 320px up.
+	<div class="dropdown" data-dropdown data-dropdown-float>
 		<button
 			class="btn btn--ghost btn--icon"
 			type="button"

@@ -3,6 +3,12 @@ BIN     := bin/server
 CTL     := bin/sirajctl
 TEMPL   := $(shell $(GO) env GOPATH)/bin/templ
 
+# The suite builds its own database and drops it again, so it must never be
+# aimed at a deployment. repository_test falls back to .env when this is unset,
+# and .env holds whatever the last deploy was pointed at. Override to use
+# another server: make test TEST_DATABASE_URL=...
+TEST_DATABASE_URL ?= postgres://islamic:islamic@localhost:5434/islamic_game?sslmode=disable
+
 .PHONY: help
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -10,7 +16,7 @@ help:
 
 .PHONY: tools
 tools: ## Install the templ CLI
-	$(GO) install github.com/a-h/templ/cmd/templ@latest
+	$(GO) install github.com/a-h/templ/cmd/templ@$$($(GO) list -m -f '{{.Version}}' github.com/a-h/templ)
 
 .PHONY: generate
 generate: ## Regenerate *_templ.go from *.templ
@@ -43,7 +49,7 @@ db-shell: ## Open psql against the dev database
 
 .PHONY: test
 test: generate ## Run the test suite
-	$(GO) test ./... -count=1
+	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" $(GO) test ./... -count=1
 
 .PHONY: vet
 vet: generate ## Run go vet

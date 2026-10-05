@@ -41,14 +41,17 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
 
       - name: Templates are current
         # The generated files are committed, so a .templ edited without
         # regenerating would otherwise build green and ship the old markup.
         run: |
-          go tool templ generate 2>/dev/null || go run github.com/a-h/templ/cmd/templ@latest generate
+          # The version in go.mod, not @latest: a newer CLI can emit different
+          # markup and fail this gate for a reason that is not in the commit.
+          templ_version="$(go list -m -f '{{.Version}}' github.com/a-h/templ)"
+          go run "github.com/a-h/templ/cmd/templ@${templ_version}" generate
           git diff --exit-code -- '*_templ.go' \
             || { echo "::error::templ output is stale — run 'make generate' and commit"; exit 1; }
 

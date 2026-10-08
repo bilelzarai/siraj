@@ -221,3 +221,31 @@ func TestFindClashesCatchesTheFileRepeatingItself(t *testing.T) {
 		t.Error("an unrelated row was flagged")
 	}
 }
+
+// The subject-area column is optional and it is a check, not a second way to
+// file a question. A file written before the taxonomy had two levels parses
+// exactly as it did; one that names a subject area is asserting where the
+// category sits, and a spreadsheet gets that wrong silently.
+func TestParseCSVReadsTheOptionalSubjectArea(t *testing.T) {
+	const withoutIt = "id,category,difficulty,points,correct,locale,prompt,choice1,choice2,choice3,choice4,explanation\n" +
+		"8,quran,1,10,0,en,Question?,a,b,c,d,why\n"
+	const withIt = "id,category,difficulty,points,correct,locale,prompt,choice1,choice2,choice3,choice4,explanation,domain\n" +
+		"9,quran,1,10,0,en,Question?,a,b,c,d,why,islamic\n"
+
+	before, rejected, err := (&Importer{}).Parse(strings.NewReader(withoutIt), "csv")
+	if err != nil || len(rejected) != 0 {
+		t.Fatalf("a file without the column was not accepted: err=%v rejected=%+v", err, rejected)
+	}
+	if len(before) != 1 || before[0].Domain != "" {
+		t.Fatalf("a missing column read as %q, want empty — an absent assertion is not a wrong one",
+			before[0].Domain)
+	}
+
+	after, rejected, err := (&Importer{}).Parse(strings.NewReader(withIt), "csv")
+	if err != nil || len(rejected) != 0 {
+		t.Fatalf("a file with the column was not accepted: err=%v rejected=%+v", err, rejected)
+	}
+	if len(after) != 1 || after[0].Domain != "islamic" {
+		t.Fatalf("the column read as %q, want islamic", after[0].Domain)
+	}
+}

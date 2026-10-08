@@ -38,7 +38,7 @@ func (h *Handlers) Support(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) SupportNewForm(w http.ResponseWriter, r *http.Request) {
 	c := h.viewCtx(w, r)
 
-	categories, _ := h.repo.Categories(r.Context(), c.Locale)
+	categories, _ := h.repo.Categories(r.Context(), c.Locale, 0)
 
 	h.render(w, r, http.StatusOK, views.SupportNew(c, views.SupportNewData{
 		Kind:       validTicketKind(r.URL.Query().Get("kind")),
@@ -66,7 +66,7 @@ func (h *Handlers) SupportCreate(w http.ResponseWriter, r *http.Request) {
 		PagePath: clip(r.PostFormValue("page_path"), 200),
 		Reported: clip(strings.TrimSpace(r.PostFormValue("reported")), 40),
 	}
-	form.Categories, _ = h.repo.Categories(r.Context(), c.Locale)
+	form.Categories, _ = h.repo.Categories(r.Context(), c.Locale, 0)
 	form.Known = h.reportablePeople(r)
 
 	// A category belongs to a message about a question. Read only for the kinds
@@ -126,6 +126,7 @@ func (h *Handlers) SupportCreate(w http.ResponseWriter, r *http.Request) {
 		Subject:        form.Subject,
 		Locale:         c.Locale,
 		PagePath:       form.PagePath,
+		UserAgent:      clip(r.UserAgent(), 400),
 		ReportedUserID: reported,
 	}
 	// Reports of abuse are the one kind that should not sit in a normal
@@ -249,11 +250,23 @@ func (h *Handlers) SupportReply(w http.ResponseWriter, r *http.Request) {
 // AdminSupport is the triage inbox: every filter staff need to understand a
 // queue without opening each conversation.
 func (h *Handlers) AdminSupport(w http.ResponseWriter, r *http.Request) {
+	h.supportInbox(w, r, uuid.Nil)
+}
+
+// supportInbox renders the inbox, with one conversation open in it when there
+// is one.
+//
+// One screen rather than two. The list and the thread are read together — you
+// work down a queue, and the next ticket is the one under the one you just
+// answered — so a thread on a page of its own means losing the queue every
+// time a reply is sent. Both routes land here; the thread route arrives with
+// an id.
+func (h *Handlers) supportInbox(w http.ResponseWriter, r *http.Request, open uuid.UUID) {
 	c, chrome := h.adminCtx(w, r)
 
 	paging := h.paging(w, r)
 	filter := repository.TicketFilter{
-		Query:    strings.TrimSpace(r.URL.Query().Get("q")),
+		Query:    clip(strings.TrimSpace(r.URL.Query().Get("q")), 120),
 		Kind:     validTicketKind(r.URL.Query().Get("kind")),
 		Status:   validTicketStatus(r.URL.Query().Get("status")),
 		Priority: validTicketPriority(r.URL.Query().Get("priority")),
@@ -275,7 +288,7 @@ func (h *Handlers) AdminSupport(w http.ResponseWriter, r *http.Request) {
 	breakdown, _ := h.repo.TicketKindBreakdown(r.Context())
 	staff, _ := h.repo.StaffMembers(r.Context())
 
-	h.render(w, r, http.StatusOK, views.AdminSupport(c, chrome, views.AdminSupportData{
+	data := views.AdminSupportData{
 		Tickets:   tickets,
 		Total:     total,
 		Pager:     pagerFor(paging),
@@ -290,45 +303,43 @@ func (h *Handlers) AdminSupport(w http.ResponseWriter, r *http.Request) {
 			Assignee: filter.Assignee,
 			Waiting:  filter.Waiting,
 		},
-	}))
+	}
+
+	if open != uuid.Nil {
+		ticket, err := h.repo.Ticket(r.Context(), open, c.User.ID, true)
+		if err != nil {
+			h.notFoundOrError(w, r, err)
+			return
+		}
+		// Staff see the internal notes; that is what they are for.
+		messages, err := h.repo.TicketMessages(r.Context(), open, true)
+		if err != nil {
+			h.serverError(w, r, err)
+			return
+		}
+		// Opening a conversation is reading it, so the unread count it was
+		// carrying in the queue goes with the opening.
+		if err := h.repo.MarkTicketRead(r.Context(), open, true); err != nil {
+			slogError(r, fmt.Errorf("mark ticket read: %w", err))
+		}
+		canned, _ := h.repo.CannedReplies(r.Context(), ticket.Locale)
+
+		data.Open = ticket
+		data.Messages = messages
+		data.Canned = canned
+	}
+
+	h.render(w, r, http.StatusOK, views.AdminSupport(c, chrome, data))
 }
 
-// AdminSupportThread is the staff view of one conversation, including the
-// internal notes a player never sees.
+// AdminSupportThread is the inbox with one conversation open in it.
 func (h *Handlers) AdminSupportThread(w http.ResponseWriter, r *http.Request) {
-	c, chrome := h.adminCtx(w, r)
-
 	id, ok := parseUUID(chi.URLParam(r, "id"))
 	if !ok {
 		h.NotFound(w, r)
 		return
 	}
-
-	ticket, err := h.repo.Ticket(r.Context(), id, c.User.ID, true)
-	if err != nil {
-		h.notFoundOrError(w, r, err)
-		return
-	}
-	messages, err := h.repo.TicketMessages(r.Context(), id, true)
-	if err != nil {
-		h.serverError(w, r, err)
-		return
-	}
-	if err := h.repo.MarkTicketRead(r.Context(), id, true); err != nil {
-		h.serverError(w, r, err)
-		return
-	}
-	ticket.StaffUnread = 0
-
-	staff, _ := h.repo.StaffMembers(r.Context())
-	canned, _ := h.repo.CannedReplies(r.Context(), ticket.Locale)
-
-	h.render(w, r, http.StatusOK, views.AdminSupportThread(c, chrome, views.AdminSupportThreadData{
-		Ticket:   ticket,
-		Messages: messages,
-		Staff:    staff,
-		Canned:   canned,
-	}))
+	h.supportInbox(w, r, id)
 }
 
 // AdminSupportReply posts a staff reply or an internal note.
@@ -370,7 +381,22 @@ func (h *Handlers) AdminSupportReply(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, action, "ticket", id.String(), map[string]any{"internal": internal})
 
-	redirect(w, r, "/admin/support/"+id.String())
+	// "Send and resolve" is the common ending: the answer is the last thing
+	// the ticket needed, and asking staff to then find the status select is
+	// asking them to do one job in two places. An internal note never
+	// resolves — a note to each other is not an answer to the player.
+	if r.PostFormValue("resolve") == "1" && !internal {
+		if err := h.repo.UpdateTicket(r.Context(), id, models.TicketResolved,
+			"", "", nil, false); err != nil {
+			h.serverError(w, r, err)
+			return
+		}
+		h.auditChange(r, "support.triage", "ticket", id.String(), ticket.Subject,
+			map[string]any{"status": ticket.Status},
+			map[string]any{"status": models.TicketResolved})
+	}
+
+	redirect(w, r, backTo(r, "/admin/support/"+id.String()))
 }
 
 // AdminSupportUpdate applies triage: status, priority, kind, assignment.
@@ -386,6 +412,15 @@ func (h *Handlers) AdminSupportUpdate(w http.ResponseWriter, r *http.Request) {
 	status := validTicketStatus(r.PostFormValue("status"))
 	priority := validTicketPriority(r.PostFormValue("priority"))
 	kind := validTicketKind(r.PostFormValue("kind"))
+
+	// Read before the write, so the trail can say what triage changed rather
+	// than only what it was set to. A ticket that is already high priority and
+	// one that was just escalated look identical otherwise.
+	before, err := h.repo.Ticket(r.Context(), id, c.User.ID, true)
+	if err != nil {
+		h.notFoundOrError(w, r, err)
+		return
+	}
 
 	var assignee *uuid.UUID
 	clearAssignee := false
@@ -408,9 +443,30 @@ func (h *Handlers) AdminSupportUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.audit(r, "support.triage", "ticket", id.String(), map[string]any{
-		"status": status, "priority": priority, "kind": kind,
-	})
+	// Only the fields this submission actually carried, and only where the
+	// value moved. An empty string means "not part of this form", which is not
+	// the same as "cleared".
+	was, now := map[string]any{}, map[string]any{}
+	for _, f := range []struct{ name, old, new string }{
+		{"status", before.Status, status},
+		{"priority", before.Priority, priority},
+		{"topic", before.Kind, kind},
+	} {
+		if f.new != "" && f.new != f.old {
+			was[f.name], now[f.name] = f.old, f.new
+		}
+	}
+	switch {
+	case clearAssignee && before.AssignedTo != nil:
+		was["assignee"], now["assignee"] = before.AssigneeUsername, "unassigned"
+	case assignee != nil && (before.AssignedTo == nil || *before.AssignedTo != *assignee):
+		was["assignee"] = before.AssigneeUsername
+		if before.AssignedTo == nil {
+			was["assignee"] = "unassigned"
+		}
+		now["assignee"] = assignee.String()
+	}
+	h.auditChange(r, "support.triage", "ticket", id.String(), before.Subject, was, now)
 	redirect(w, r, backTo(r, "/admin/support/"+id.String()))
 }
 

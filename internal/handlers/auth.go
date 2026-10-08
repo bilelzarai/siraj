@@ -23,7 +23,7 @@ func (h *Handlers) Landing(w http.ResponseWriter, r *http.Request) {
 		h.serverError(w, r, err)
 		return
 	}
-	cats, err := h.repo.Categories(r.Context(), c.Locale)
+	cats, err := h.repo.Categories(r.Context(), c.Locale, 0)
 	if err != nil {
 		h.serverError(w, r, err)
 		return

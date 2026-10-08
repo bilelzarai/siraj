@@ -10,7 +10,7 @@ set -euo pipefail
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$REPO"
 
-CONTAINER=${DB_CONTAINER:-islamic-game-db}
+CONTAINER=${DB_CONTAINER:-siraj-game-db}
 PORT=${PORT:-8080}
 export PATH="$PATH:$(go env GOPATH)/bin"
 
@@ -37,15 +37,15 @@ elif [ -n "$(docker ps -aq -f "name=^/${CONTAINER}$")" ]; then
   docker start "$CONTAINER" >/dev/null
 else
   say "creating database container"
-  docker compose up -d db
+  docker compose -f deploy/compose.yaml up -d db
 fi
 
 say "waiting for PostgreSQL"
 for _ in $(seq 1 30); do
-  docker exec "$CONTAINER" pg_isready -U islamic -d islamic_game >/dev/null 2>&1 && break
+  docker exec "$CONTAINER" pg_isready -U siraj -d siraj-db >/dev/null 2>&1 && break
   sleep 1
 done
-docker exec "$CONTAINER" pg_isready -U islamic -d islamic_game >/dev/null
+docker exec "$CONTAINER" pg_isready -U siraj -d siraj-db >/dev/null
 
 # --- 3. stop a previous server ---------------------------------------------
 # A previous run still holding the port would make this one die on bind. Match
@@ -60,7 +60,18 @@ for pid in $(pgrep -f 'bin/server' 2>/dev/null || true); do
   fi
 done
 
-# --- 4. templates -----------------------------------------------------------
+# --- 4. assets --------------------------------------------------------------
+# Built before the server starts, because the page links what the bundler wrote.
+# Without this step a clean clone serves an unstyled page and nothing says why.
+if command -v npm >/dev/null; then
+  [ -d node_modules ] || { say "installing frontend packages"; npm install; }
+  say "building assets"
+  npm run build --silent
+else
+  say "npm not found — skipping the asset build; the page will have no styles"
+fi
+
+# --- 5. templates -----------------------------------------------------------
 if ! command -v templ >/dev/null; then
   say "installing the templ CLI"
   go install github.com/a-h/templ/cmd/templ@latest
@@ -68,7 +79,7 @@ fi
 say "generating templates"
 templ generate
 
-# --- 5. server --------------------------------------------------------------
+# --- 6. server --------------------------------------------------------------
 # STATIC_DIR serves css/js from disk, so edits land without a rebuild.
 say "serving on http://localhost:${PORT}  (ctrl-c to stop)"
 exec env STATIC_DIR=./static APP_ADDR=":${PORT}" go run ./cmd/server

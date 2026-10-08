@@ -2,6 +2,8 @@ package views
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/bilelzarai/siraj/internal/i18n"
 	"github.com/bilelzarai/siraj/internal/models"
@@ -13,50 +15,291 @@ import (
 type AdminQuestionsData struct {
 	Questions  []*models.AdminQuestion
 	Categories []*models.Category
+	// Domains is the level above the categories, so the category select can be
+	// grouped by subject area and narrowed to one. A bank large enough to need
+	// a filter is one where a flat list of every category is unreadable.
+	Domains    []*models.AdminDomain
 	Total      int
 	Pager      Pager
 	Query      string
 	CategoryID int
+	DomainID   int
 	Difficulty int
 	OnlyReview bool
+	// OnlyNoted, OnlyActive and Retired are the state tabs. All three off means
+	// the whole bank, which is what the screen opens on.
+	OnlyNoted  bool
+	OnlyActive bool
+	Retired    bool
+	// MinLocales is set when the translation-coverage filter is asking for
+	// questions short of a language.
+	MinLocales int
 	// ForceIDs are the questions whose first delete attempt was refused
 	// because they have recorded answers. Those rows come back ticked and the
 	// delete button turns explicit, rather than the warning being a dead end
 	// the admin cannot get past.
 	ForceIDs map[int]bool
+	// Sorting is which column the bank is ordered by and how to change it.
+	Sorting SortState
+}
+
+// CategoriesIn is the categories filed under one domain, for the grouped
+// select. Built here rather than queried per domain: the whole list is already
+// loaded, and a dozen round trips to group a dozen rows is not a trade.
+func (d AdminQuestionsData) CategoriesIn(domainID int) []*models.Category {
+	var out []*models.Category
+	for _, cat := range d.Categories {
+		if cat.DomainID == domainID {
+			out = append(out, cat)
+		}
+	}
+	return out
+}
+
+// Filtered reports whether anything is narrowing the list, which is what
+// decides whether "Clear filters" is offered.
+func (d AdminQuestionsData) Filtered() bool {
+	return d.Query != "" || d.CategoryID > 0 || d.DomainID > 0 || d.Difficulty > 0 ||
+		d.OnlyReview || d.OnlyNoted || d.OnlyActive || d.Retired || d.MinLocales > 0
+}
+
+// questionStateTab is one of the state tabs above the table, named by the
+// parameter it sets rather than by a label — the filter is read from the query
+// string by one function, and the tabs have to write exactly what it reads.
+type questionStateTab struct {
+	Field    string
+	Value    string
+	LabelKey string
+}
+
+// The tabs, in the order the screen shows them. "All" is the empty value of
+// both fields, which is also the zero value of the filter: opening the screen
+// with no parameters shows the whole bank.
+var questionStateTabs = []questionStateTab{
+	{Field: "state", Value: "", LabelKey: "admin.questions.tab.all"},
+	{Field: "state", Value: "live", LabelKey: "admin.questions.live"},
+	{Field: "review", Value: "1", LabelKey: "admin.questions.inReview"},
+	{Field: "review", Value: "changes", LabelKey: "admin.questions.changesRequested"},
+	{Field: "state", Value: "retired", LabelKey: "admin.questions.retired"},
+}
+
+// stateIs reports whether one tab is the one currently selected.
+func (d AdminQuestionsData) stateIs(value string) bool {
+	switch value {
+	case "live":
+		return d.OnlyActive
+	case "retired":
+		return d.Retired
+	case "1":
+		return d.OnlyReview
+	case "changes":
+		return d.OnlyNoted
+	default:
+		return !d.OnlyActive && !d.Retired && !d.OnlyReview && !d.OnlyNoted
+	}
+}
+
+// FilterFields is the current filter as form fields, for the bulk form.
+//
+// The bulk action resolves "everything matching" on the server from exactly
+// these names, so they are produced here from the same state the toolbar
+// shows. A field the toolbar grew and this map did not would widen a bulk
+// delete past what the screen was displaying — which is the failure this
+// rebuilds against rather than trusting a list of ids.
+func (d AdminQuestionsData) FilterFields() map[string]string {
+	out := map[string]string{}
+	if d.Query != "" {
+		out["q"] = d.Query
+	}
+	if d.CategoryID > 0 {
+		out["category"] = fmt.Sprint(d.CategoryID)
+	}
+	if d.DomainID > 0 {
+		out["domain"] = fmt.Sprint(d.DomainID)
+	}
+	if d.Difficulty > 0 {
+		out["difficulty"] = fmt.Sprint(d.Difficulty)
+	}
+	if d.MinLocales > 0 {
+		out["coverage"] = "partial"
+	}
+	switch {
+	case d.OnlyNoted:
+		out["review"] = "changes"
+	case d.OnlyReview:
+		out["review"] = "1"
+	}
+	switch {
+	case d.OnlyActive:
+		out["state"] = "live"
+	case d.Retired:
+		out["state"] = "retired"
+	}
+	return out
+}
+
+// FilterQuery is the same filter as a query string, for the export link.
+func (d AdminQuestionsData) FilterQuery() string {
+	v := url.Values{}
+	for name, value := range d.FilterFields() {
+		v.Set(name, value)
+	}
+	return v.Encode()
+}
+
+// localeStateLabel says what one language of one question is: written and
+// published, written but still awaiting review, or not written at all.
+func localeStateLabel(c Ctx, q *models.AdminQuestion, locale string) string {
+	switch {
+	case !q.HasLocale(locale):
+		return c.T("admin.questions.langMissing", strings.ToUpper(locale))
+	case q.IsPending(locale):
+		return c.T("admin.questions.langPending", strings.ToUpper(locale))
+	default:
+		return c.T("admin.questions.langLive", strings.ToUpper(locale))
+	}
 }
 
 templ AdminQuestions(c Ctx, a AdminChrome, d AdminQuestionsData) {
 	@adminShell(c, a, c.T("admin.nav.questions")) {
-		<div class="row row--between row--wrap">
-			<span class="muted small">{ c.T("admin.questions.count", d.Total) }</span>
-			<div class="row" style="gap:8px">
-				<a class="btn btn--soft btn--sm" href="/admin/questions/import">
-					<span aria-hidden="true">📥</span> { c.T("admin.nav.import") }
-				</a>
-				<a class="btn btn--primary btn--sm" href="/admin/questions/new">
-					<span aria-hidden="true">＋</span> { c.T("admin.question.new") }
-				</a>
-			</div>
-		</div>
-		<form method="get" action="/admin/questions" class="card row row--wrap" style="gap:10px">
-			<input
-				class="input"
-				name="q"
-				type="search"
-				value={ d.Query }
-				placeholder={ c.T("admin.questions.searchPlaceholder") }
-				style="flex:2;min-width:180px"
-			/>
-			<select class="select" name="category" style="flex:1;min-width:150px">
-				<option value="0">{ c.T("game.setup.category.all") }</option>
-				for _, cat := range d.Categories {
-					<option value={ fmt.Sprint(cat.ID) } selected?={ d.CategoryID == cat.ID }>
-						{ cat.Name }
+		@adminPageHead(c, c.T("admin.nav.questions"), c.T("admin.questions.sub")) {
+			<a class="btn" href="/admin/questions/import">
+				@adminIcon("i-upload", "")
+				{ c.T("admin.nav.import") }
+			</a>
+			<a class="btn" href={ templ.SafeURL("/admin/questions/export.csv?" + d.FilterQuery()) }>
+				@adminIcon("i-download", "")
+				{ c.T("common.export") }
+			</a>
+			<a class="btn btn-primary" href="/admin/questions/new">
+				@adminIcon("i-plus", "")
+				{ c.T("admin.question.new") }
+			</a>
+		}
+		<section class="panel">
+			@adminQuestionFilters(c, d)
+			if len(d.Questions) == 0 {
+				@adminEmpty(c, "i-search", c.T("admin.questions.noneTitle"), c.T("admin.questions.noneSub")) {
+					if d.Filtered() {
+						<a class="btn btn-sm" href="/admin/questions">{ c.T("admin.filters.clear") }</a>
+					} else {
+						<a class="btn btn-sm btn-primary" href="/admin/questions/new">{ c.T("admin.question.new") }</a>
+					}
+				}
+			} else {
+				// The bulk form carries only its own controls, and the table stays
+				// outside it: every row already holds action forms of its own, and
+				// a form inside a form is not a thing HTML has. The checkboxes join
+				// it by id instead, which is exactly what form= is for.
+				<form id="questions-bulk" method="post" action="/admin/questions/bulk" data-bulk>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					// The search this screen is showing, so "everything matching"
+					// can be rebuilt server-side instead of trusting a list of ids.
+					for name, value := range d.FilterFields() {
+						<input type="hidden" name={ name } value={ value }/>
+					}
+					// A refused delete comes back with its rows ticked; this is what
+					// makes the second press the confirmation rather than a repeat.
+					if d.pending() {
+						<input type="hidden" name="confirm" value="delete"/>
+					}
+					@adminQuestionsBulkBar(c, d)
+				</form>
+				<div class="table-wrap">
+					<table class="table stack-sm">
+						<caption class="sr-only">{ c.T("admin.nav.questions") }</caption>
+						<thead>
+							<tr>
+								<th class="t-check" scope="col">
+									<label class="check">
+										<input
+											type="checkbox"
+											form="questions-bulk"
+											data-bulk-all
+											aria-label={ c.T("admin.questions.bulk.selectPage") }
+										/>
+									</label>
+								</th>
+								@sortHeader(c, d.Sorting, SortCol{Column: "prompt", Label: c.T("admin.questions.prompt")})
+								@sortHeader(c, d.Sorting, SortCol{Column: "difficulty", Label: c.T("game.setup.difficulty")})
+								@sortHeader(c, d.Sorting, SortCol{Column: "languages", Label: c.T("admin.questions.locales")})
+								@sortHeader(c, d.Sorting, SortCol{Column: "accuracy", Label: c.T("admin.dash.accuracy"), DescFirst: true, Class: "hide-md"})
+								@sortHeader(c, d.Sorting, SortCol{Column: "plays", Label: c.T("admin.questions.plays"), DescFirst: true, Numeric: true, Class: "hide-md"})
+								@sortHeader(c, d.Sorting, SortCol{Column: "status", Label: c.T("admin.users.status")})
+								<th scope="col"><span class="sr-only">{ c.T("common.actions") }</span></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, q := range d.Questions {
+								@adminQuestionRow(c, d, q)
+							}
+						</tbody>
+					</table>
+				</div>
+				@adminPager(c, d.Pager)
+			}
+		</section>
+	}
+}
+
+// adminQuestionFilters is the two-row toolbar above the bank.
+//
+// A GET form, not the kit's in-page filtering. The bank is paged, so filtering
+// the rows on screen would narrow forty of two thousand and quietly report
+// that as the answer; the count beside the tabs is the server's, which is the
+// only one that is true.
+templ adminQuestionFilters(c Ctx, d AdminQuestionsData) {
+	<form method="get" action="/admin/questions">
+		<div class="toolbar">
+			<label class="input-icon">
+				@adminIcon("i-search", "")
+				<span class="sr-only">{ c.T("admin.questions.searchPlaceholder") }</span>
+				<input
+					class="input input-sm"
+					type="search"
+					name="q"
+					value={ d.Query }
+					placeholder={ c.T("admin.questions.searchPlaceholder") }
+				/>
+			</label>
+			<select class="select input-sm" id="q-domain" name="domain" aria-label={ c.T("admin.nav.domains") }>
+				<option value="0">{ c.T("admin.questions.allDomains") }</option>
+				for _, dom := range d.Domains {
+					<option value={ fmt.Sprint(dom.ID) } selected?={ d.DomainID == dom.ID }>
+						{ dom.Name }
 					</option>
 				}
 			</select>
-			<select class="select" name="difficulty" style="flex:1;min-width:130px">
+			// Grouped by subject area, and narrowed to the chosen one by
+			// admin-console.js. Not the kit's data-depends: that is written
+			// for a client-side filter and treats "all" as the unfiltered
+			// value, where these filters are server-side and the handler
+			// reads 0. With no script every category is still in the list
+			// under its own heading, which is the point of the grouping — it
+			// degrades to a longer select, not a broken one.
+			<select
+				class="select input-sm"
+				id="q-cat"
+				name="category"
+				aria-label={ c.T("game.setup.category") }
+				data-narrow-by="q-domain"
+			>
+				<option value="0">{ c.T("game.setup.category.all") }</option>
+				for _, dom := range d.Domains {
+					<optgroup label={ dom.Name }>
+						for _, cat := range d.CategoriesIn(dom.ID) {
+							<option
+								value={ fmt.Sprint(cat.ID) }
+								data-domain={ fmt.Sprint(dom.ID) }
+								selected?={ d.CategoryID == cat.ID }
+							>
+								{ cat.Name }
+							</option>
+						}
+					</optgroup>
+				}
+			</select>
+			<select class="select input-sm" name="difficulty" aria-label={ c.T("game.setup.difficulty") }>
 				<option value="0">{ c.T("game.difficulty.any") }</option>
 				for _, level := range []int{1, 2, 3} {
 					<option value={ fmt.Sprint(level) } selected?={ d.Difficulty == level }>
@@ -64,132 +307,199 @@ templ AdminQuestions(c Ctx, a AdminChrome, d AdminQuestionsData) {
 					</option>
 				}
 			</select>
-			<button class="btn btn--primary" type="submit">{ c.T("common.search") }</button>
-		</form>
-		if len(d.Questions) == 0 {
-			@Empty("❓", c.T("admin.questions.empty"))
-		} else {
-			// The bulk form carries only its own controls, and the table stays
-			// outside it: every row already holds action forms of its own, and
-			// a form inside a form is not a thing HTML has. The checkboxes join
-			// it by id instead, which is exactly what form= is for.
-			<form id="questions-bulk" method="post" action="/admin/questions/bulk" data-bulk>
-				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-				// The search this screen is showing, so "everything matching"
-				// can be rebuilt server-side instead of trusting a list of ids.
-				<input type="hidden" name="q" value={ d.Query }/>
-				<input type="hidden" name="category" value={ fmt.Sprint(d.CategoryID) }/>
-				<input type="hidden" name="difficulty" value={ fmt.Sprint(d.Difficulty) }/>
-				if d.OnlyReview {
-					<input type="hidden" name="review" value="1"/>
+			<select class="select input-sm" name="coverage" aria-label={ c.T("admin.questions.locales") }>
+				<option value="">{ c.T("admin.questions.anyCoverage") }</option>
+				<option value="partial" selected?={ d.MinLocales > 0 }>
+					{ c.T("admin.questions.missingALanguage") }
+				</option>
+			</select>
+		</div>
+		<div class="toolbar" style="padding-block:10px">
+			// The state tabs are radio inputs rather than the kit's segmented
+			// buttons: they are part of this form and have to travel with it on
+			// submit, and a set of radios is a single-choice control that works
+			// with no script at all.
+			<div class="segmented" role="radiogroup" aria-label={ c.T("admin.users.status") }>
+				for _, tab := range questionStateTabs {
+					<label class={ "seg-radio", templ.KV("is-on", d.stateIs(tab.Value)) }>
+						<input
+							type="radio"
+							name={ tab.Field }
+							value={ tab.Value }
+							checked?={ d.stateIs(tab.Value) }
+							onchange="this.form.submit()"
+						/>
+						<span>{ c.T(tab.LabelKey) }</span>
+					</label>
 				}
-				// A refused delete comes back with its rows ticked; this is what
-				// makes the second press the confirmation rather than a repeat.
-				if d.pending() {
-					<input type="hidden" name="confirm" value="delete"/>
-				}
-				@adminQuestionsBulkBar(c, d)
-			</form>
-			<div class="card card--flush scroll-x">
-				<table class="table">
-					<thead>
-						<tr>
-							<th style="width:1%">
-								<input
-									class="checkbox"
-									type="checkbox"
-									form="questions-bulk"
-									data-bulk-all
-									aria-label={ c.T("admin.questions.bulk.selectPage") }
-								/>
-							</th>
-							<th class="num">#</th>
-							<th>{ c.T("admin.questions.prompt") }</th>
-							<th>{ c.T("game.setup.category") }</th>
-							<th>{ c.T("game.setup.difficulty") }</th>
-							<th>{ c.T("admin.questions.locales") }</th>
-							<th></th>
-						</tr>
-					</thead>
-					<tbody>
-						for _, q := range d.Questions {
-							<tr class={ templ.KV("is-inactive", !q.IsActive) }>
-								<td>
-									<input
-										class="checkbox"
-										type="checkbox"
-										form="questions-bulk"
-										name="ids"
-										value={ fmt.Sprint(q.ID) }
-										checked?={ d.forced(q.ID) }
-										data-bulk-item
-										data-active={ fmt.Sprint(q.IsActive) }
-										aria-label={ c.T("admin.questions.bulk.selectOne", q.ID) }
-									/>
-								</td>
-								<td class="num tiny muted">{ fmt.Sprint(q.ID) }</td>
-								<td>
-									<div class="truncate" style="max-width:38ch">{ q.Prompt }</div>
-									if q.PendingReview > 0 {
-										<span class="tag tag--warning tiny">
-											{ c.T("admin.questions.awaitingReview", q.PendingReview) }
-										</span>
-									}
-								</td>
-								<td class="tiny">
-									<span aria-hidden="true">{ q.CategoryIcon }</span> { q.CategoryName }
-								</td>
-								<td class="tiny">{ c.T(DifficultyKey(q.Difficulty)) }</td>
-								<td>
-									<span class={ "tag", localeTagClass(q.LocaleCount) }>
-										{ fmt.Sprintf("%d/3", q.LocaleCount) }
-									</span>
-								</td>
-								<td>
-									<div class="row" style="gap:6px;justify-content:flex-end">
-										<a
-											class="btn btn--soft btn--sm"
-											href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }
-										>
-											{ c.T("common.edit") }
-										</a>
-										if q.IsActive {
-											@adminQuestionAction(c, q.ID, "deactivate", "btn--ghost", c.T("admin.questions.deactivate"))
-										} else {
-											@adminQuestionAction(c, q.ID, "activate", "btn--soft", c.T("admin.questions.activate"))
-										}
-										// Deletion cascades into game_answers, so it rewrites
-										// players' history. The server refuses a question with
-										// recorded answers on the first attempt and sends the
-										// admin back here with this row unlocked, so getting past
-										// the warning takes a second, deliberate press.
-										<form
-											method="post"
-											action={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/delete", q.ID)) }
-											data-confirm={ c.T("admin.questions.deleteConfirm", q.ID) }
-										>
-											<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-											if d.forced(q.ID) {
-												<input type="hidden" name="confirm" value="delete"/>
-												<button class="btn btn--danger btn--sm" type="submit">
-													{ c.T("admin.questions.deleteAnyway") }
-												</button>
-											} else {
-												<button class="btn btn--ghost btn--sm" type="submit">
-													{ c.T("common.delete") }
-												</button>
-											}
-										</form>
-									</div>
-								</td>
-							</tr>
-						}
-					</tbody>
-				</table>
 			</div>
-			@PagerBar(c, d.Pager)
-		}
+			<span class="spacer"></span>
+			<span class="result-meta">
+				<b class="num">{ fmt.Sprint(d.Total) }</b>
+				{ " " }
+				{ c.T("admin.questions.countedLabel") }
+			</span>
+			<button class="btn btn-sm btn-primary" type="submit">{ c.T("common.search") }</button>
+			if d.Filtered() {
+				<a class="btn btn-ghost btn-sm" href="/admin/questions">
+					@adminIcon("i-x", "icon-sm")
+					{ c.T("admin.filters.clear") }
+				</a>
+			}
+		</div>
+	</form>
+}
+
+templ adminQuestionRow(c Ctx, d AdminQuestionsData, q *models.AdminQuestion) {
+	<tr>
+		<td class="t-check">
+			<label class="check">
+				<input
+					type="checkbox"
+					form="questions-bulk"
+					name="ids"
+					value={ fmt.Sprint(q.ID) }
+					checked?={ d.forced(q.ID) }
+					data-bulk-item
+					data-active={ fmt.Sprint(q.IsActive) }
+					aria-label={ c.T("admin.questions.bulk.selectOne", q.ID) }
+				/>
+			</label>
+		</td>
+		<td class="cell-first" data-label={ c.T("admin.questions.prompt") }>
+			<div class="cell-main" style="min-width:260px">
+				<span class="cat-tile" aria-hidden="true">{ q.CategoryIcon }</span>
+				<div style="min-width:0">
+					<div class="t cell-clip" title={ q.Prompt }>{ q.Prompt }</div>
+					<div class="s truncate">
+						<a class="qid" href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }>
+							{ fmt.Sprintf("#%d", q.ID) }
+						</a>
+						{ " · " + q.CategoryName + " · " }
+						{ c.T("admin.questions.pointsValue", q.Points) }
+					</div>
+				</div>
+			</div>
+		</td>
+		<td data-label={ c.T("game.setup.difficulty") } data-value={ fmt.Sprint(q.Difficulty) }>
+			<span class="diff">
+				<span class="pips" data-level={ fmt.Sprint(q.Difficulty) } title={ c.T(DifficultyKey(q.Difficulty)) }>
+					<i></i><i></i><i></i>
+				</span>
+				<span class="pips-label">{ c.T(DifficultyKey(q.Difficulty)) }</span>
+			</span>
+		</td>
+		<td data-label={ c.T("admin.questions.locales") }>
+			<span class="langs">
+				for _, loc := range c.Locales() {
+					<span
+						class={ "lang", templ.KV("is-missing", !q.HasLocale(loc.Code)),
+							templ.KV("is-stale", q.IsPending(loc.Code)) }
+						title={ localeStateLabel(c, q, loc.Code) }
+					>
+						{ strings.ToUpper(loc.Code) }
+					</span>
+				}
+			</span>
+		</td>
+		<td class="hide-md" data-label={ c.T("admin.dash.accuracy") } data-value={ fmt.Sprint(q.Accuracy()) }>
+			if q.Plays == 0 {
+				<span class="faint">{ c.T("admin.dash.noPlays") }</span>
+			} else {
+				@adminMeter(q.Accuracy())
+			}
+		</td>
+		<td class="t-num hide-md" data-label={ c.T("admin.questions.plays") } data-value={ fmt.Sprint(q.Plays) }>
+			{ fmt.Sprint(q.Plays) }
+		</td>
+		<td data-label={ c.T("admin.users.status") }>
+			@questionStateBadge(c, q)
+		</td>
+		<td class="cell-actions">
+			<div class="btn-group">
+				<a
+					class="icon-btn sm"
+					href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }
+					aria-label={ c.T("admin.questions.editOne", q.ID) }
+					title={ c.T("common.edit") }
+				>
+					@adminIcon("i-edit", "")
+				</a>
+				<div class="menu-wrap">
+					<button
+						class="icon-btn sm"
+						type="button"
+						data-menu
+						aria-expanded="false"
+						aria-label={ c.T("admin.questions.moreFor", q.ID) }
+					>
+						@adminIcon("i-more", "")
+					</button>
+					<div class="menu">
+						if q.IsActive {
+							@adminQuestionAction(c, q.ID, "deactivate", "i-archive", c.T("admin.questions.deactivate"), false)
+						} else {
+							@adminQuestionAction(c, q.ID, "activate", "i-restore", c.T("admin.questions.activate"), false)
+						}
+						<hr/>
+						// Deletion cascades into game_answers, so it rewrites
+						// players' history. The server refuses a question with
+						// recorded answers on the first attempt and sends the
+						// admin back here with this row unlocked, so getting
+						// past the warning takes a second, deliberate press.
+						<form
+							method="post"
+							action={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/delete", q.ID)) }
+							data-confirm={ c.T("admin.questions.deleteConfirm", q.ID) }
+						>
+							<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+							if d.forced(q.ID) {
+								<input type="hidden" name="confirm" value="delete"/>
+								<button class="danger" type="submit">
+									@adminIcon("i-trash", "")
+									{ c.T("admin.questions.deleteAnyway") }
+								</button>
+							} else {
+								<button class="danger" type="submit">
+									@adminIcon("i-trash", "")
+									{ c.T("common.delete") }
+								</button>
+							}
+						</form>
+					</div>
+				</div>
+			</div>
+		</td>
+	</tr>
+}
+
+// questionStateBadge is the one word a row's state reduces to.
+//
+// Retired first: a retired question is out of play whatever its translations
+// are doing, and saying "in review" about something no player can meet would
+// be describing work that does not matter yet.
+templ questionStateBadge(c Ctx, q *models.AdminQuestion) {
+	if !q.IsActive {
+		<span class="badge badge-retired">{ c.T("admin.questions.retired") }</span>
+	} else if q.Noted > 0 {
+		<span class="badge badge-draft">{ c.T("admin.questions.changesRequested") }</span>
+	} else if q.PendingReview > 0 {
+		<span class="badge badge-pending">{ c.T("admin.questions.inReview") }</span>
+	} else if q.LocaleCount < models.ShippedLocales {
+		<span class="badge badge-info">{ c.T("admin.questions.partial") }</span>
+	} else {
+		<span class="badge badge-live">{ c.T("admin.questions.live") }</span>
 	}
+}
+
+templ adminQuestionAction(c Ctx, id int, action, icon, label string, danger bool) {
+	<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/%s", id, action)) }>
+		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+		<button class={ templ.KV("danger", danger) } type="submit">
+			@adminIcon(icon, "")
+			{ label }
+		</button>
+	</form>
 }
 
 // adminQuestionsBulkBar is the strip above the table: what is selected, and
@@ -204,15 +514,17 @@ templ AdminQuestions(c Ctx, a AdminChrome, d AdminQuestionsData) {
 // The destructive buttons are what stays hidden until there is a selection, so
 // browsing a list is still not fronted by a row of delete buttons.
 templ adminQuestionsBulkBar(c Ctx, d AdminQuestionsData) {
-	<div class="bulk-bar" data-bulk-bar hidden>
-		<span class="small">
-			<b data-bulk-count>0</b> { c.T("admin.questions.bulk.selected") }
+	<div class="bulkbar" data-bulk-bar hidden>
+		<span>
+			<b data-bulk-count>0</b>
+			{ " " }
+			{ c.T("admin.questions.bulk.selected") }
 		</span>
 		// Ticking the page selects 40 rows; a filter can match many more. This
 		// is the difference between "delete what I can see" and "delete all of
 		// them", and it says which it is rather than leaving it to be guessed.
 		if d.Total > len(d.Questions) {
-			<label class="small row" style="gap:6px;align-items:center">
+			<label class="row" style="gap:var(--s-3);align-items:center">
 				<input class="checkbox" type="checkbox" name="scope" value="filter" data-bulk-scope/>
 				{ c.T("admin.questions.bulk.wholeFilter", d.Total) }
 			</label>
@@ -224,15 +536,15 @@ templ adminQuestionsBulkBar(c Ctx, d AdminQuestionsData) {
 		// or when it is the whole filter, whose makeup this page cannot see.
 		// Starts hidden, and the bar stays hidden until something is ticked,
 		// so the pair is never shown before there is anything to judge.
-		<div class="row" style="gap:6px;margin-inline-start:auto" data-bulk-actions hidden>
-			<button class="btn btn--soft btn--sm" type="submit" name="action" value="activate" data-bulk-activate hidden>
+		<div class="row" style="gap:var(--s-3);margin-inline-start:auto" data-bulk-actions hidden>
+			<button class="btn btn-soft btn-sm" type="submit" name="action" value="activate" data-bulk-activate hidden>
 				{ c.T("admin.questions.activate") }
 			</button>
-			<button class="btn btn--ghost btn--sm" type="submit" name="action" value="deactivate" data-bulk-deactivate hidden>
+			<button class="btn btn-ghost btn-sm" type="submit" name="action" value="deactivate" data-bulk-deactivate hidden>
 				{ c.T("admin.questions.deactivate") }
 			</button>
 			<button
-				class="btn btn--danger btn--sm"
+				class="btn btn-danger btn-sm"
 				type="submit"
 				name="action"
 				value="delete"
@@ -247,13 +559,6 @@ templ adminQuestionsBulkBar(c Ctx, d AdminQuestionsData) {
 			</button>
 		</div>
 	</div>
-}
-
-templ adminQuestionAction(c Ctx, id int, action, variant, label string) {
-	<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/%s", id, action)) }>
-		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-		<button class={ "btn", "btn--sm", variant } type="submit">{ label }</button>
-	</form>
 }
 
 // questionRef prints a question id as a link into the editor, with the
@@ -296,6 +601,18 @@ type QuestionLocaleForm struct {
 	Source      string
 	NeedsReview bool
 }
+// CategoryChosen reports whether the posted category is one the list actually
+// offers. A select whose options are all unselected is a select the browser
+// chooses for you — see the placeholder in the form below.
+func (d AdminQuestionFormData) CategoryChosen() bool {
+	for _, cat := range d.Categories {
+		if cat.ID == d.CategoryID {
+			return true
+		}
+	}
+	return false
+}
+
 type AdminQuestionFormData struct {
 	ID           int
 	CategoryID   int
@@ -321,15 +638,22 @@ type AdminQuestionFormData struct {
 
 templ AdminQuestionForm(c Ctx, a AdminChrome, d AdminQuestionFormData) {
 	@adminShell(c, a, d.Title(c)) {
-		@BackLink(c, "/admin/questions", c.T("admin.nav.questions"))
+		<div class="page-head">
+			<div class="actions">
+				<a class="btn btn-ghost btn-sm" href="/admin/questions">
+					@adminIcon("i-chevron-left", "icon-sm icon-flip")
+					{ c.T("admin.nav.questions") }
+				</a>
+			</div>
+		</div>
 		@FormError(c, d.Error)
 		if len(d.Similar) > 0 {
-			<div id="similar" class="alert alert--warning" role="alert">
+			<div id="similar" class="callout warn" role="alert">
 				<span aria-hidden="true">🔁</span>
 				<div style="flex:1;min-width:0">
-					<div class="bold">{ c.T("admin.question.similarTitle") }</div>
+					<h3>{ c.T("admin.question.similarTitle") }</h3>
 					for _, pair := range d.Similar {
-						<div class="small row row--wrap" style="gap:6px;align-items:baseline">
+						<div class="row row-wrap" style="gap:var(--s-3);align-items:baseline">
 							@questionRef(c, pair.RightID, pair.RightPrompt)
 							{ fmt.Sprintf(" · %d%% · ", pair.Percent()) }
 							<span class="truncate" style="max-width:52ch">{ pair.RightPrompt }</span>
@@ -363,11 +687,23 @@ templ AdminQuestionForm(c Ctx, a AdminChrome, d AdminQuestionFormData) {
 				// Second submission goes through: the warning has been read.
 				<input type="hidden" name="allow_similar" value="1"/>
 			}
-			<section class="card card--pad-lg stack">
-				<div class="grid grid--2">
+			<section class="panel"><div class="panel-body stack">
+				<div class="grid grid-2">
 					<div class="field">
 						<label class="label" for="category_id">{ c.T("game.setup.category") }</label>
 						<select class="select" id="category_id" name="category_id">
+							// The placeholder stands whenever nothing in the list
+							// is selected. Without it a refusal carrying a
+							// category the list no longer offers — one whose
+							// domain was retired while the form was open — would
+							// leave every option unselected, and the browser
+							// would preselect the first category. The next Save
+							// would then file the question under a name nobody
+							// chose, in a subject area nobody chose, and it would
+							// be drawn that way.
+							if !d.CategoryChosen() {
+								<option value="" selected disabled>{ c.T("game.setup.category") }</option>
+							}
 							for _, cat := range d.Categories {
 								<option value={ fmt.Sprint(cat.ID) } selected?={ d.CategoryID == cat.ID }>
 									{ cat.Name }
@@ -396,13 +732,13 @@ templ AdminQuestionForm(c Ctx, a AdminChrome, d AdminQuestionFormData) {
 							max="500"
 							value={ fmt.Sprint(d.Points) }
 						/>
-						<span class="tiny faint">{ c.T("admin.question.pointsHint") }</span>
+						<span class="faint">{ c.T("admin.question.pointsHint") }</span>
 					</div>
 					<div class="field">
 						<span class="label">{ c.T("admin.question.active") }</span>
-						<label class="row" style="gap:8px;align-items:center">
+						<label class="row">
 							<input type="checkbox" name="is_active" value="1" checked?={ d.IsActive }/>
-							<span class="small">{ c.T("admin.question.activeHint") }</span>
+							<span class="help">{ c.T("admin.question.activeHint") }</span>
 						</label>
 					</div>
 				</div>
@@ -427,13 +763,59 @@ templ AdminQuestionForm(c Ctx, a AdminChrome, d AdminQuestionFormData) {
 						}
 					</div>
 				</div>
+				</div>
 			</section>
-			for _, loc := range c.Locales() {
-				@questionLocaleFields(c, d, loc)
-			}
-			<div class="row" style="gap:10px;justify-content:flex-end">
-				<a class="btn btn--ghost" href="/admin/questions">{ c.T("common.cancel") }</a>
-				<button class="btn btn--primary" type="submit">{ c.T("common.save") }</button>
+			// The three languages as tabs over one pane, which is what the
+			// design does and what the shape of the work wants: a question is
+			// written once and then said again twice, so the three are the
+			// same fields rather than three sections to scroll past.
+			//
+			// Every pane is in the document; the tabs only decide which is
+			// shown. With no script they are all shown — the noscript rule
+			// below undoes the hiding — so nothing becomes unreachable.
+			<section class="panel">
+				<div class="tabs" data-tabs role="tablist">
+					for i, loc := range c.Locales() {
+						<button
+							class={ "tab", templ.KV("is-on", i == 0) }
+							type="button"
+							role="tab"
+							aria-selected={ boolAttr(i == 0) }
+							aria-controls={ "locale-" + loc.Code }
+							if i != 0 {
+								tabindex="-1"
+							}
+						>
+							{ loc.Name }
+							if d.Locale(loc.Code).Blank() {
+								<span class="lang is-missing">{ loc.Tag() }</span>
+							} else if d.Locale(loc.Code).NeedsReview {
+								<span class="lang is-stale">{ loc.Tag() }</span>
+							} else {
+								<span class="lang">{ loc.Tag() }</span>
+							}
+						</button>
+					}
+				</div>
+				for i, loc := range c.Locales() {
+					<div
+						class="locale-pane"
+						id={ "locale-" + loc.Code }
+						role="tabpanel"
+						hidden?={ i != 0 }
+					>
+						@questionLocaleFields(c, d, loc)
+					</div>
+				}
+			</section>
+			<noscript>
+				// The tabs are a script; the panes are the form. Without one,
+				// every language is simply shown.
+				<style>.locale-pane[hidden]{display:block}</style>
+			</noscript>
+			<div class="row" style="gap:var(--s-5);justify-content:flex-end">
+				<a class="btn btn-ghost" href="/admin/questions">{ c.T("common.cancel") }</a>
+				<button class="btn btn-primary" type="submit">{ c.T("common.save") }</button>
 			</div>
 		</form>
 	}
@@ -441,22 +823,21 @@ templ AdminQuestionForm(c Ctx, a AdminChrome, d AdminQuestionFormData) {
 
 templ questionLocaleFields(c Ctx, d AdminQuestionFormData, loc i18n.Locale) {
 	{{ form := d.Locale(loc.Code) }}
-	<section class="card card--pad-lg stack-sm">
-		<div class="row row--between row--wrap" style="gap:8px">
-			<span class="card__title">
-				<span aria-hidden="true">{ loc.Flag }</span> { loc.Name }
-			</span>
-			<span class="row" style="gap:6px">
+	<div class="panel-body stack">
+		<div class="row row-wrap">
+			<h3>{ loc.Name }</h3>
+			<span class="spacer"></span>
+			<span class="row row-wrap">
 				if form.NeedsReview {
-					<span class="tag tag--warning">{ c.T("admin.questions.awaiting") }</span>
+					<span class="badge badge-pending">{ c.T("admin.questions.awaiting") }</span>
 				}
 				if form.Source != "" {
-					<span class="tag tiny">{ form.Source }</span>
+					<span class="badge">{ form.Source }</span>
 				}
 			</span>
 		</div>
 		if msg := d.LocaleError(loc.Code); msg != "" {
-			<div class="alert alert--error" role="alert">
+			<div class="callout danger" role="alert">
 				@IconAlert()
 				<span>{ msg }</span>
 			</div>
@@ -474,13 +855,13 @@ templ questionLocaleFields(c Ctx, d AdminQuestionFormData, loc i18n.Locale) {
 				lang={ loc.Code }
 			>{ form.Prompt }</textarea>
 		</div>
-		<div class="grid grid--2">
+		<div class="grid grid-2">
 			for i := 0; i < 4; i++ {
 				<div class="field">
 					<label class="label" for={ fmt.Sprintf("choice_%s_%d", loc.Code, i) }>
 						{ AnswerKey(c.Locale, i) }
 						if d.CorrectIndex == i {
-							<span class="tag tag--success tiny">{ c.T("admin.question.correctMark") }</span>
+							<span class="badge badge-live">{ c.T("admin.question.correctMark") }</span>
 						}
 					</label>
 					<input
@@ -507,5 +888,5 @@ templ questionLocaleFields(c Ctx, d AdminQuestionFormData, loc i18n.Locale) {
 				lang={ loc.Code }
 			>{ form.Explanation }</textarea>
 		</div>
-	</section>
+	</div>
 }

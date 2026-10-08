@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,13 +25,23 @@ func (h *Handlers) Dashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := c.User
 
-	cats, err := h.repo.Categories(ctx, c.Locale)
+	cats, err := h.repo.Categories(ctx, c.Locale, 0)
 	if err != nil {
 		h.serverError(w, r, err)
 		return
 	}
 
 	d := views.HomeData{Categories: cats}
+
+	// The same count the setup screen puts on its chips. Without it the player
+	// chooses a category here knowing nothing about it, and is told one screen
+	// later — including that the one they picked is nearly empty.
+	if available, err := h.repo.AvailableCounts(ctx, c.Locale); err == nil {
+		d.Availability = available
+	} else {
+		h.serverError(w, r, err)
+		return
+	}
 
 	// Only a solo round is offered back. A challenge round does not wait — its
 	// questions expire whether the player is looking at them or not — and the
@@ -86,7 +97,18 @@ func filterMyTurn(list []*models.Challenge, userID uuid.UUID) []*models.Challeng
 // questions each category and difficulty can actually draw. Every screen that
 // renders the form goes through here, so none of them can forget the counts.
 func (h *Handlers) setupData(r *http.Request, locale string, category, difficulty, count int) (views.SetupData, error) {
-	cats, err := h.repo.Categories(r.Context(), locale)
+	return h.setupDataIn(r, locale, category, 0, difficulty, count)
+}
+
+// setupDataIn is setupData with the level above: a round can be drawn from one
+// category or from a whole subject area, and the screen has to be able to show
+// which was chosen when a submission comes back refused.
+func (h *Handlers) setupDataIn(r *http.Request, locale string, category, domain, difficulty, count int) (views.SetupData, error) {
+	cats, err := h.repo.Categories(r.Context(), locale, 0)
+	if err != nil {
+		return views.SetupData{}, err
+	}
+	domains, err := h.repo.Domains(r.Context(), locale)
 	if err != nil {
 		return views.SetupData{}, err
 	}
@@ -95,20 +117,43 @@ func (h *Handlers) setupData(r *http.Request, locale string, category, difficult
 		return views.SetupData{}, err
 	}
 	d := views.SetupData{
-		Categories:    cats,
-		SelectedCat:   category,
-		SelectedDiff:  difficulty,
-		SelectedCount: count,
-		Availability:  available,
+		Categories:     cats,
+		Domains:        domains,
+		SelectedCat:    category,
+		SelectedDomain: domain,
+		SelectedDiff:   difficulty,
+		SelectedCount:  count,
+		Availability:   available,
 	}
 	return d, nil
+}
+
+// pickFrom reads what the player chose to draw from.
+//
+// One field, because a category and a subject area are alternatives and two
+// fields could disagree with no script to keep them in step. The older
+// `category` field is still read: links and bookmarks carry it, the smoke walk
+// posts it, and a round started that way means exactly what it always did.
+func pickFrom(r *http.Request) (categoryID, domainID int) {
+	switch pick := r.FormValue("pick"); {
+	case pick == "all":
+		return 0, 0
+	case strings.HasPrefix(pick, "c:"):
+		id, _ := strconv.Atoi(strings.TrimPrefix(pick, "c:"))
+		return id, 0
+	case strings.HasPrefix(pick, "d:"):
+		id, _ := strconv.Atoi(strings.TrimPrefix(pick, "d:"))
+		return 0, id
+	}
+	return intParam(r, "category", 0), intParam(r, "domain", 0)
 }
 
 // PlaySetup renders the round configuration form.
 func (h *Handlers) PlaySetup(w http.ResponseWriter, r *http.Request) {
 	c := h.viewCtx(w, r)
 
-	d, err := h.setupData(r, c.Locale, queryInt(r, "category", 0), 0, service.DefaultQuestions)
+	d, err := h.setupDataIn(r, c.Locale, queryInt(r, "category", 0),
+		queryInt(r, "domain", 0), 0, service.DefaultQuestions)
 	if err != nil {
 		h.serverError(w, r, err)
 		return
@@ -121,12 +166,13 @@ func (h *Handlers) PlayStart(w http.ResponseWriter, r *http.Request) {
 	c := h.viewCtx(w, r)
 	actor := actorFrom(r)
 
-	category := intParam(r, "category", 0)
+	category, domain := pickFrom(r)
 	difficulty := intParam(r, "difficulty", 0)
 	count := intParam(r, "count", service.DefaultQuestions)
 
 	_, err := h.game.Start(r.Context(), actor.ID, service.StartOptions{
 		CategoryID: nilIfZero(category),
+		DomainID:   nilIfZero(domain),
 		Difficulty: difficulty,
 		Count:      count,
 		Locale:     c.Locale,
@@ -136,7 +182,7 @@ func (h *Handlers) PlayStart(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, service.ErrNotEnoughQuestions) {
 			// Come back on the choices that were made, with the counts, rather
 			// than resetting the form to its defaults and saying no.
-			d, dErr := h.setupData(r, c.Locale, category, difficulty, count)
+			d, dErr := h.setupDataIn(r, c.Locale, category, domain, difficulty, count)
 			if dErr != nil {
 				h.serverError(w, r, dErr)
 				return

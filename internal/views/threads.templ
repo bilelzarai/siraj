@@ -83,7 +83,13 @@ templ roomRow(c Ctx, conv *models.Conversation) {
 			</span>
 		</a>
 		<span class="chat__item-aside">
-			<span class="chat__item-time">{ c.T("threads.members", conv.MemberCount) }</span>
+			// Only where the line above is not already saying it: a room with no
+			// topic falls back to the member count for its preview, and the row
+			// then read "1 members" twice, once under the name and once beside
+			// it.
+			if conv.Topic != "" {
+				<span class="chat__item-time">{ c.T("threads.members", conv.MemberCount) }</span>
+			}
 			if !conv.Joined {
 				<form method="post" action={ templ.SafeURL("/messages/" + conv.ID.String() + "/join") }>
 					<input type="hidden" name="csrf_token" value={ c.CSRF }/>

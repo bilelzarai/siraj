@@ -79,6 +79,10 @@ func NewImporter(repo *repository.Repo) *Importer { return &Importer{repo: repo}
 
 // importRecord is the shape both the JSON and the CSV reader normalise to.
 type importRecord struct {
+	// Domain is what the row claims the category sits in, when it says. Empty
+	// is the normal case and means exactly what it meant before the taxonomy
+	// had two levels.
+	Domain     string
 	Line       int
 	ExternalID int
 	Category   string
@@ -94,6 +98,7 @@ type importRecord struct {
 type jsonQuestion struct {
 	ID         int    `json:"id"`
 	Category   string `json:"category"`
+	Domain     string `json:"domain,omitempty"`
 	Difficulty int    `json:"difficulty"`
 	Points     int    `json:"points"`
 	Correct    int    `json:"correct"`
@@ -184,6 +189,13 @@ var csvColumns = []string{
 	"locale", "prompt", "choice1", "choice2", "choice3", "choice4", "explanation",
 }
 
+// optionalCSVColumns are read when present and never required. A file written
+// before the taxonomy had two levels has to import exactly as it did, so
+// "domain" cannot join the list above — and a file that does name a subject
+// area is asserting which one the category belongs to, which is a check rather
+// than a second way to file a question.
+var optionalCSVColumns = []string{"domain"}
+
 func parseCSV(data []byte) ([]importRecord, []models.ImportRow, error) {
 	reader := csv.NewReader(strings.NewReader(string(data)))
 	reader.TrimLeadingSpace = true
@@ -246,6 +258,7 @@ func parseCSV(data []byte) ([]importRecord, []models.ImportRow, error) {
 			rec = &importRecord{
 				Line: line, ExternalID: id,
 				Category:   get(row, "category"),
+				Domain:     get(row, "domain"),
 				Difficulty: difficulty, Points: points, Correct: correct,
 				Source:  "import",
 				Locales: map[string]models.TranslationDraft{},
@@ -346,13 +359,21 @@ func (im *Importer) Run(ctx context.Context, records []importRecord, rejected []
 		Report:    append([]models.ImportRow{}, rejected...),
 	}
 
-	categories, err := im.repo.Categories(ctx, "en")
+	// The admin list, not the player's: the player's hides categories whose
+	// domain is retired, and an import into a retired subject area is exactly
+	// what retirement is for — filling it before anybody can reach it. Reading
+	// the filtered list rejected those rows as "unknown category", which named
+	// the wrong cause.
+	categories, err := im.repo.AdminCategories(ctx, "en")
 	if err != nil {
 		return nil, err
 	}
 	bySlug := map[string]int{}
+	// Where each category actually sits, for the rows that assert it.
+	domainOf := map[string]string{}
 	for _, c := range categories {
 		bySlug[c.Slug] = c.ID
+		domainOf[c.Slug] = c.DomainSlug
 	}
 
 	// Both of the questions the file asks about the bank — "is this id already
@@ -374,6 +395,24 @@ func (im *Importer) Run(ctx context.Context, records []importRecord, rejected []
 		// reference into a link, and following one for a row that is not in the
 		// bank landed on "Page not found".
 		refExists := rec.ExternalID > 0 && existing[rec.ExternalID]
+
+		// A row that names a subject area is checked against where the category
+		// actually sits. Getting this wrong in a spreadsheet is easy and
+		// silent: the question lands in the bank under a name the author did
+		// not intend, and the first anybody hears of it is a player being
+		// asked about football in a round about fiqh.
+		if rec.Domain != "" {
+			if slug, known := domainOf[rec.Category]; known && !strings.EqualFold(slug, rec.Domain) {
+				run.Rejected++
+				run.Report = append(run.Report, models.ImportRow{
+					Line: rec.Line, Ref: refOf(rec), Outcome: "reject",
+					Reason: fmt.Sprintf("category %q is in %q, not %q",
+						rec.Category, slug, rec.Domain),
+					Prompt: promptOf(rec), RefExists: refExists,
+				})
+				continue
+			}
+		}
 
 		categoryID, ok := bySlug[rec.Category]
 		if !ok {
@@ -570,16 +609,19 @@ func sameFileClashes(records []importRecord) map[int]*models.DuplicatePair {
 func ImportTemplateCSV() string {
 	var b strings.Builder
 	w := csv.NewWriter(&b)
-	_ = w.Write(csvColumns)
+	// The optional column is in the template so an operator can see that it
+	// exists; leaving it out of a file is still accepted, which is what
+	// `optionalCSVColumns` is for.
+	_ = w.Write(append(append([]string{}, csvColumns...), optionalCSVColumns...))
 	_ = w.Write([]string{"9001", "quran", "1", "10", "2", "en",
 		"How many surahs are in the Qur'an?", "110", "112", "114", "116",
-		"The Qur'an contains 114 surahs."})
+		"The Qur'an contains 114 surahs.", "islamic"})
 	_ = w.Write([]string{"9001", "quran", "1", "10", "2", "fr",
 		"Combien de sourates compte le Coran ?", "110", "112", "114", "116",
-		"Le Coran compte 114 sourates."})
+		"Le Coran compte 114 sourates.", "islamic"})
 	_ = w.Write([]string{"9001", "quran", "1", "10", "2", "ar",
 		"كم عدد سور القرآن الكريم؟", "110", "112", "114", "116",
-		"القرآن الكريم يتكوّن من 114 سورة."})
+		"القرآن الكريم يتكوّن من 114 سورة.", "islamic"})
 	w.Flush()
 	return b.String()
 }

@@ -3,34 +3,30 @@ package views
 import "fmt"
 
 templ Landing(c Ctx, questionCount, categoryCount, playerCount int) {
-	@Base(c, c.T("app.name")) {
+	@Base(c, c.T("app.tagline")) {
 		<section class="hero">
 			<div class="shell shell--flush">
 				<div class="hero__inner">
-					<span class="eyebrow">
-						<span aria-hidden="true">🌙</span> { c.T("app.name") }
-					</span>
 					<h1 class="hero__title">
 						{ c.T("app.tagline") }
 					</h1>
 					<p class="hero__lead">{ c.T("app.description") }</p>
+					// One primary action. The guest path is kept — it is the
+					// reason somebody tries this at all — but it no longer
+					// out-shouts the path that keeps them, and what it makes is
+					// temporary, which the line underneath says before anybody
+					// finds out the hard way. Signing in lives in the header,
+					// so the hero does not offer it a third time.
 					<div class="hero__cta">
-						// No account, no form, no email: one press and the
-						// questions start. What it makes is temporary and the
-						// line underneath says so, rather than letting somebody
-						// find out when it goes.
+						<a class="btn btn--primary btn--lg" href="/register">
+							{ c.T("landing.cta.primary") }
+						</a>
 						<form method="post" action="/guest">
 							<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-							<button class="btn btn--primary btn--lg" type="submit">
+							<button class="btn btn--ghost btn--lg" type="submit">
 								{ c.T("landing.cta.guest") }
 							</button>
 						</form>
-						<a class="btn btn--soft btn--lg" href="/register">
-							{ c.T("landing.cta.primary") }
-						</a>
-						<a class="btn btn--ghost btn--lg" href="/login">
-							{ c.T("landing.cta.secondary") }
-						</a>
 					</div>
 					<p class="hero__note tiny muted">{ c.T("landing.cta.guestNote") }</p>
 					<div class="hero__stats">
@@ -78,7 +74,7 @@ templ Landing(c Ctx, questionCount, categoryCount, playerCount int) {
 templ featureCard(icon, title, body string) {
 	<article class="feature">
 		<div class="feature__icon" aria-hidden="true">{ icon }</div>
-		<h3>{ title }</h3>
+		<h2>{ title }</h2>
 		<p>{ body }</p>
 	</article>
 }

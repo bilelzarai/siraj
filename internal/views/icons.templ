@@ -95,6 +95,22 @@ templ IconMonitor() {
 }
 
 // IconGlobe is the language switcher.
+templ IconSearch() {
+	<svg
+		class="icon"
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke="currentColor"
+		stroke-width="1.8"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		aria-hidden="true"
+	>
+		<circle cx="11" cy="11" r="7"></circle>
+		<path d="m20 20-3.5-3.5"></path>
+	</svg>
+}
+
 templ IconGlobe() {
 	<svg
 		class="icon"
@@ -126,18 +142,6 @@ templ IconAlert() {
 		<circle cx="12" cy="12" r="9"></circle>
 		<path d="M12 7.5v5M12 16.2v.1"></path>
 	</svg>
-}
-
-// ThemeIcon renders the icon for one appearance setting.
-templ ThemeIcon(theme string) {
-	switch theme {
-		case "light":
-			@IconSun()
-		case "dark":
-			@IconMoon()
-		default:
-			@IconMonitor()
-	}
 }
 
 // The composer's four controls. They were emoji — 📎 🎙️ 😊 ➤ — which is
@@ -216,16 +220,10 @@ templ IconSend() {
 	</svg>
 }
 
-// IconPlay and IconPause drive the voice-note player.
+// IconPlay drives the voice-note player. The paused state is a class the
+// script toggles, not a second glyph.
 templ IconPlay() {
 	<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 		<path d="M8 5.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8a.8.8 0 0 0-1.2.7Z"></path>
-	</svg>
-}
-
-templ IconPause() {
-	<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-		<rect x="6.5" y="4.5" width="4" height="15" rx="1.3"></rect>
-		<rect x="13.5" y="4.5" width="4" height="15" rx="1.3"></rect>
 	</svg>
 }

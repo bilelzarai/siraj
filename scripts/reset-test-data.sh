@@ -13,9 +13,9 @@
 #    reserves for exactly this and which no real address can ever match.
 set -euo pipefail
 
-CONTAINER=${DB_CONTAINER:-islamic-game-db}
-DB_USER=${DB_USER:-islamic}
-DB_NAME=${DB_NAME:-islamic_game}
+CONTAINER=${DB_CONTAINER:-siraj-game-db}
+DB_USER=${DB_USER:-siraj}
+DB_NAME=${DB_NAME:-siraj-db}
 
 docker exec -i "$CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 <<'SQL'
 BEGIN;

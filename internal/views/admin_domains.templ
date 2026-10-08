@@ -1,0 +1,340 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/i18n"
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// The level above a category: the list of subject areas and the form that
+// writes one. It mirrors admin_categories.templ deliberately — they are the
+// same shape of thing one level apart, and an editor who has used one should
+// not have to learn the other.
+//
+// What differs is the consequence. Retiring a category takes its own questions
+// out of the draw; retiring a domain takes every category under it off the
+// setup screen as well, so the screen says so where the category screen does
+// not need to.
+
+// ---------------------------------------------------------------- domains --
+
+type AdminDomainsData struct {
+	Domains []*models.AdminDomain
+	// Categories is every category in the taxonomy, so each card can list the
+	// ones filed under it. Loaded once and grouped here rather than queried per
+	// card: the whole list is a dozen rows.
+	Categories []*models.Category
+	// PlaysToday is rounds finished per domain in the last day, keyed by id.
+	PlaysToday map[int]int
+}
+
+// In lists the categories filed under one domain, in the order players see.
+func (d AdminDomainsData) In(domainID int) []*models.Category {
+	var out []*models.Category
+	for _, cat := range d.Categories {
+		if cat.DomainID == domainID {
+			out = append(out, cat)
+		}
+	}
+	return out
+}
+
+// Retired counts the domains currently switched off, which is what the summary
+// line above the table reports alongside the total.
+func (d AdminDomainsData) Retired() int {
+	n := 0
+	for _, dom := range d.Domains {
+		if !dom.IsActive {
+			n++
+		}
+	}
+	return n
+}
+
+templ AdminDomains(c Ctx, a AdminChrome, d AdminDomainsData) {
+	@adminShell(c, a, c.T("admin.nav.domains")) {
+		@adminPageHead(c, c.T("admin.nav.domains"), c.T("admin.domains.help")) {
+			<a class="btn btn-primary" href="/admin/domains/new">
+				@adminIcon("i-plus", "")
+				{ c.T("admin.domain.new") }
+			</a>
+		}
+		if len(d.Domains) == 0 {
+			@adminEmpty(c, "i-globe", c.T("admin.domains.empty"), c.T("admin.domains.emptySub")) {
+				<a class="btn btn-sm btn-primary" href="/admin/domains/new">{ c.T("admin.domain.new") }</a>
+			}
+		} else {
+			// Cards rather than a table. A domain is a handful of rows with a
+			// lot to say about each — what is filed under it, in which
+			// languages, and whether it reaches players at all — which is an
+			// awkward shape for a table and a natural one for a card.
+			<div class="grid grid-3">
+				for _, dom := range d.Domains {
+					@domainCard(c, dom, d.In(dom.ID), d.PlaysToday[dom.ID])
+				}
+				// The way to start another one, in the place the eye arrives
+				// after the last card rather than only at the top of the page.
+				<a class="domain-new" href="/admin/domains/new">
+					<span class="domain-new__plus">
+						@adminIcon("i-plus", "")
+					</span>
+					<b>{ c.T("admin.domain.new") }</b>
+					<span class="muted">{ c.T("admin.domains.newHint") }</span>
+				</a>
+			</div>
+		}
+	}
+}
+
+templ domainCard(c Ctx, dom *models.AdminDomain, cats []*models.Category, plays int) {
+	<article class={ "panel", "domain-card", templ.KV("is-retired", !dom.IsActive) }>
+		<div class="row">
+			// The colour is the one a player will see on the subject-area
+			// card, so it is shown here as itself rather than as hex.
+			<span class="cat-tile lg" style={ catColour(dom.Color) } aria-hidden="true">{ dom.Icon }</span>
+			<div class="grow" style="flex:1;min-width:0">
+				<h3 class="truncate">{ dom.Name }</h3>
+				if dom.Description != "" {
+					<p class="muted truncate" style="font-size:13px">{ dom.Description }</p>
+				}
+			</div>
+			<div class="menu-wrap">
+				<button
+					class="icon-btn sm"
+					type="button"
+					data-menu
+					aria-expanded="false"
+					aria-label={ c.T("admin.domains.moreFor", dom.Name) }
+				>
+					@adminIcon("i-more", "")
+				</button>
+				<div class="menu">
+					<a href={ templ.SafeURL(fmt.Sprintf("/admin/domains/%d/edit", dom.ID)) }>
+						@adminIcon("i-edit", "")
+						{ c.T("common.edit") }
+					</a>
+					<a href={ templ.SafeURL(fmt.Sprintf("/admin/questions?domain=%d", dom.ID)) }>
+						@adminIcon("i-layers", "")
+						{ c.T("admin.domains.browseQuestions") }
+					</a>
+					<hr/>
+					@domainActionButton(c, dom)
+				</div>
+			</div>
+		</div>
+		<div class="row">
+			if !dom.IsActive {
+				<span class="badge badge-retired">{ c.T("admin.domain.state.retired") }</span>
+			} else if len(cats) == 0 {
+				// Live in the database and unreachable in practice: a player
+				// picks a subject area and then a category under it, so an
+				// area holding none is a dead end. The card says draft.
+				<span class="badge badge-draft">{ c.T("admin.domain.state.draft") }</span>
+			} else {
+				<span class="badge badge-live">{ c.T("admin.domain.state.live") }</span>
+			}
+			<span class="langs">
+				for _, loc := range c.Locales() {
+					<span
+						class={ "lang", templ.KV("is-missing", !hasLocale(dom.PresentLocales, loc.Code)) }
+						title={ localeNameState(c, dom.PresentLocales, loc) }
+					>
+						{ loc.Tag() }
+					</span>
+				}
+			</span>
+			<span class="spacer"></span>
+			<span class="slug">{ dom.Slug }</span>
+		</div>
+		<div class="stats">
+			<div>
+				<b>{ fmt.Sprint(dom.Categories) }</b>
+				<span>{ c.T("admin.domains.col.categories") }</span>
+			</div>
+			// Everything filed below against what is actually drawable from
+			// it: "forty questions" and "forty questions, two of them
+			// retired" are different answers to whether a subject area is
+			// ready for players. The retired share is said in the title
+			// rather than taking a column of its own.
+			<div>
+				<b>{ fmt.Sprint(dom.ActiveQuestions) }</b>
+				<span title={ c.T("admin.domains.retiredOf", dom.Questions-dom.ActiveQuestions) }>
+					{ c.T("admin.domains.col.questions") }
+				</span>
+			</div>
+			<div>
+				<b>{ fmt.Sprint(plays) }</b>
+				<span>{ c.T("admin.dash.playsToday") }</span>
+			</div>
+		</div>
+		// What is actually in it. A subject area with nothing under it reaches
+		// no player at all, so the card says that outright and offers the one
+		// thing that fixes it rather than showing three zeros and stopping.
+		if len(cats) == 0 {
+			<p class="muted" style="font-size:13px">{ c.T("admin.domains.noCategories") }</p>
+			<a class="btn btn-soft btn-sm" href={ templ.SafeURL(fmt.Sprintf("/admin/categories/new?domain=%d", dom.ID)) }>
+				@adminIcon("i-plus", "icon-sm")
+				{ c.T("admin.category.new") }
+			</a>
+		} else {
+			<div class="cats">
+				for _, cat := range cats {
+					<a class="tag" href={ templ.SafeURL(fmt.Sprintf("/admin/categories?domain=%d", dom.ID)) }>
+						<span aria-hidden="true">{ cat.Icon }</span>
+						{ cat.Name }
+					</a>
+				}
+			</div>
+		}
+	</article>
+}
+
+// domainActionButton is the destructive control on a domain, and which one it
+// is depends on what the domain holds. A domain with categories under it
+// cannot be deleted — the key is RESTRICT and the cascade would reach every
+// question filed below — so what it offers is retirement, which is reversible.
+templ domainActionButton(c Ctx, dom *models.AdminDomain) {
+	if !dom.IsActive {
+		<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/domains/%d/restore", dom.ID)) }>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<button type="submit">
+				@adminIcon("i-restore", "")
+				{ c.T("admin.domain.restore") }
+			</button>
+		</form>
+	} else {
+		<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/domains/%d/retire", dom.ID)) }>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<button class="danger" type="submit">
+				@adminIcon("i-archive", "")
+				{ c.T("admin.domain.retire") }
+			</button>
+		</form>
+	}
+	if dom.Categories == 0 {
+		<form
+			method="post"
+			action={ templ.SafeURL(fmt.Sprintf("/admin/domains/%d/delete", dom.ID)) }
+			data-confirm={ c.T("admin.domain.confirmDelete", dom.Name) }
+		>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<button class="danger" type="submit">
+				@adminIcon("i-trash", "")
+				{ c.T("common.delete") }
+			</button>
+		</form>
+	}
+}
+
+// ------------------------------------------------------------------- form --
+
+type AdminDomainFormData struct {
+	ID        int
+	Slug      string
+	Icon      string
+	Color     string
+	SortOrder int
+	IsActive  bool
+	Locales   map[string]LocaleForm
+	// Error is what is wrong with the domain; Errors is what is wrong with one
+	// field or one language, keyed by field name or locale code.
+	Error  string
+	Errors map[string]string
+}
+
+func (d AdminDomainFormData) Locale(code string) LocaleForm { return d.Locales[code] }
+func (d AdminDomainFormData) Err(field string) string       { return d.Errors[field] }
+
+templ AdminDomainForm(c Ctx, a AdminChrome, d AdminDomainFormData) {
+	{{ title := c.T("admin.domain.new") }}
+	if d.ID > 0 {
+		{{ title = c.T("admin.domain.edit") }}
+	}
+	@adminShell(c, a, title) {
+		@FormError(c, d.Error)
+		<form method="post" action="/admin/domains/save" class="stack" novalidate>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			if d.ID > 0 {
+				<input type="hidden" name="id" value={ fmt.Sprint(d.ID) }/>
+			}
+			<section class="panel"><div class="panel-body stack">
+				// What a player will see when they pick a subject area.
+				@taxonomyPreview(c, d.Icon, d.Color, d.Locale(i18n.DefaultLocale).Name,
+					d.Locale(i18n.DefaultLocale).Description,
+					c.T("admin.domain.previewName"), c.T("admin.domain.previewDesc"))
+				@taxonomyAppearance(c, d.Icon, d.Color,
+					c.T("admin.domain.iconHint"), c.T("admin.category.colorHint"))
+				<div class="form-section">
+					<h3>{ c.T("admin.taxonomy.identity") }</h3>
+					@taxonomySlug(c, d.ID, d.Slug, "sport",
+						c.T("admin.domain.slugHint"), d.Err("slug"))
+					@taxonomyOrder(c, d.SortOrder, c.T("admin.domain.orderHint"))
+				</div>
+				<div class="field">
+					<span class="label">{ c.T("admin.domain.state") }</span>
+					<label class="row">
+						<input type="checkbox" name="is_active" value="1" checked?={ d.IsActive }/>
+						<span class="help">{ c.T("admin.domain.activeHint") }</span>
+					</label>
+				</div>
+				</div>
+			</section>
+			for _, loc := range c.Locales() {
+				@domainLocaleFields(c, d, loc)
+			}
+			<div class="row" style="gap:var(--s-5);justify-content:flex-end">
+				<a class="btn btn-ghost" href="/admin/domains">{ c.T("common.cancel") }</a>
+				<button class="btn btn-primary" type="submit">{ c.T("common.save") }</button>
+			</div>
+		</form>
+	}
+}
+
+templ domainLocaleFields(c Ctx, d AdminDomainFormData, loc i18n.Locale) {
+	{{ form := d.Locale(loc.Code) }}
+	<section class="panel"><div class="panel-body stack">
+		<div class="row row-wrap">
+			<h3>{ loc.Name }</h3>
+			<span class="spacer"></span>
+			<span class="row row-wrap">
+				if loc.Code == i18n.DefaultLocale {
+					<span class="badge badge-pending">{ c.T("admin.domain.required") }</span>
+				}
+				if form.NeedsReview {
+					<span class="badge badge-pending">{ c.T("admin.questions.awaiting") }</span>
+				}
+				if form.Source != "" {
+					<span class="badge">{ form.Source }</span>
+				}
+			</span>
+		</div>
+		if msg := d.Err(loc.Code); msg != "" {
+			<div class="callout danger" role="alert">
+				@IconAlert()
+				<span>{ msg }</span>
+			</div>
+		}
+		// Each language keeps its own direction, so an Arabic name is not
+		// reflowed by an English interface while it is being written.
+		@TextField(c, TextFieldOpts{
+			ID:        "name_" + loc.Code,
+			Name:      "name_" + loc.Code,
+			Label:     c.T("admin.domain.name"),
+			Value:     form.Name,
+			Dir:       loc.Dir,
+			MaxLength: 80,
+		})
+		@TextField(c, TextFieldOpts{
+			ID:        "description_" + loc.Code,
+			Name:      "description_" + loc.Code,
+			Label:     c.T("admin.domain.description"),
+			Value:     form.Description,
+			Dir:       loc.Dir,
+			MaxLength: 160,
+			Optional:  true,
+			Hint:      c.T("admin.domain.descriptionHint"),
+		})
+		</div>
+	</section>
+}

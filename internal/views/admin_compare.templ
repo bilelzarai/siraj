@@ -39,21 +39,21 @@ type CompareChrome struct {
 templ comparePanel(c Ctx, cmp *models.QuestionCompare, chrome CompareChrome) {
 	<section class="cmp" id={ chrome.Anchor }>
 		<div class="cmp__head">
-			<span class="card__title">{ chrome.Title }</span>
+			<b>{ chrome.Title }</b>
 			if cmp.Identical {
-				<span class="tag tag--danger">{ c.T("admin.compare.identical") }</span>
+				<span class="badge badge-danger">{ c.T("admin.compare.identical") }</span>
 			} else {
-				<span class="tag tag--warning">{ c.T("admin.compare.differs", cmp.Differences) }</span>
+				<span class="badge badge-pending">{ c.T("admin.compare.differs", cmp.Differences) }</span>
 			}
 			// The percentage that raised the pair, kept for continuity with the
 			// list above — but second to what the panel itself found, which is
 			// the answer the number could only gesture at.
-			<span class="tag tiny">{ c.T("admin.compare.score", cmp.Percent) }</span>
-			<a class="btn btn--ghost btn--sm" href={ templ.SafeURL(chrome.CloseHref) }>
+			<span class="badge">{ c.T("admin.compare.score", cmp.Percent) }</span>
+			<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(chrome.CloseHref) }>
 				{ c.T("admin.compare.close") }
 			</a>
 		</div>
-		<p class="tiny muted">{ c.T("admin.compare.hint") }</p>
+		<p class="muted">{ c.T("admin.compare.hint") }</p>
 		<div class="cmp__row cmp__row--head">
 			<span class="cmp__label"></span>
 			@compareHead(c, chrome.LeftLabel, cmp.LeftID)
@@ -73,13 +73,12 @@ templ comparePanel(c Ctx, cmp *models.QuestionCompare, chrome CompareChrome) {
 		for _, loc := range cmp.Locales {
 			<div class="cmp__locale">
 				<div class="cmp__locale-head">
-					<span aria-hidden="true">{ loc.Flag }</span>
-					<span class="bold">{ loc.Name }</span>
+					<b>{ loc.Name }</b>
 					if !loc.InLeft {
-						<span class="tag tag--warning tiny">{ c.T("admin.compare.onlyRight") }</span>
+						<span class="badge badge-pending">{ c.T("admin.compare.onlyRight") }</span>
 					}
 					if !loc.InRight {
-						<span class="tag tag--success tiny">{ c.T("admin.compare.onlyLeft") }</span>
+						<span class="badge badge-live">{ c.T("admin.compare.onlyLeft") }</span>
 					}
 				</div>
 				@compareRow(c, c.T("admin.questions.prompt"), loc.Prompt, loc.Dir, loc.Code)

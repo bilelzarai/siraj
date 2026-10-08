@@ -1,0 +1,75 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// The admin top bar's search results, rendered into the drop-down under the
+// field rather than as a page of their own.
+
+type AdminSearchData struct {
+	Query     string
+	Users     []*models.AdminSearchHit
+	Questions []*models.AdminSearchHit
+	Tickets   []*models.AdminSearchHit
+}
+
+// Empty reports whether nothing matched in any area.
+func (d AdminSearchData) Empty() bool {
+	return len(d.Users) == 0 && len(d.Questions) == 0 && len(d.Tickets) == 0
+}
+
+// AdminSearchResults is the fragment the search field swaps in. It renders the
+// list and nothing around it: the field, the panel and the keyboard handling
+// all belong to the page that is already open.
+templ AdminSearchResults(c Ctx, d AdminSearchData) {
+	if d.Query == "" {
+		<p class="search-hint">{ c.T("admin.search.hint") }</p>
+	} else if d.Empty() {
+		<p class="search-hint">{ c.T("admin.search.none", d.Query) }</p>
+	} else {
+		<div class="search-groups" role="listbox" aria-label={ c.T("admin.search.label") }>
+			@adminSearchGroup(c, c.T("admin.search.users"), "i-users", d.Users)
+			@adminSearchGroup(c, c.T("admin.search.questions"), "i-question", d.Questions)
+			@adminSearchGroup(c, c.T("admin.search.tickets"), "i-support", d.Tickets)
+		</div>
+	}
+}
+
+templ adminSearchGroup(c Ctx, label, icon string, hits []*models.AdminSearchHit) {
+	if len(hits) > 0 {
+		<div class="search-group">
+			<div class="search-label">
+				@adminIcon(icon, "icon-sm")
+				{ label }
+			</div>
+			for _, hit := range hits {
+				<a class="search-hit" role="option" href={ templ.SafeURL(hit.Href) }>
+					<span class="search-hit__text">
+						<span class="t truncate">{ adminHitTitle(c, hit) }</span>
+						if hit.Subtitle != "" {
+							<span class="s truncate">{ hit.Subtitle }</span>
+						}
+					</span>
+					if hit.Badge != "" {
+						<span class="tag">{ hit.Badge }</span>
+					}
+				</a>
+			}
+		</div>
+	}
+}
+
+// adminHitTitle prefixes a question with the id the rest of the admin refers to
+// it by, so a result is recognisable as the row somebody was sent.
+func adminHitTitle(c Ctx, hit *models.AdminSearchHit) string {
+	if hit.Kind == "question" {
+		return fmt.Sprintf("#%s · %s", hit.ID, hit.Title)
+	}
+	if hit.Title == "" {
+		return c.T("admin.search.untitled")
+	}
+	return hit.Title
+}

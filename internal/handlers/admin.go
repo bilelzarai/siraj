@@ -41,10 +41,41 @@ func (h *Handlers) audit(r *http.Request, action, kind, id string, detail map[st
 	}
 }
 
+// auditChange records a privileged action together with what it changed.
+//
+// The trail has carried a jsonb detail column since 0003 and every writer put
+// loose keys in it, so the audit screen could say that a category was retired
+// but never what it was retired from — which is the question somebody reading
+// the log a week later is actually asking. This writes the pair under the two
+// names the screen reads, beside a label so the row can name its target
+// instead of printing a bare id.
+//
+// before and after hold the fields that moved and nothing else. A full
+// snapshot of the row would bury the one line that changed, and the trail is
+// read by people, not diffed by machines.
+func (h *Handlers) auditChange(r *http.Request, action, kind, id, label string,
+	before, after map[string]any) {
+
+	detail := map[string]any{}
+	if label != "" {
+		detail["label"] = label
+	}
+	if len(before) > 0 {
+		detail["before"] = before
+	}
+	if len(after) > 0 {
+		detail["after"] = after
+	}
+	h.audit(r, action, kind, id, detail)
+}
+
 // adminCtx adds the admin-only badge counts to the normal view context.
 func (h *Handlers) adminCtx(w http.ResponseWriter, r *http.Request) (views.Ctx, views.AdminChrome) {
 	c := h.viewCtx(w, r)
-	chrome := views.AdminChrome{Path: r.URL.Path}
+	// The admin area answers 404 rather than 403 so it does not advertise what
+	// it is withholding — and a navigation entry that 404s on click hands that
+	// back. The three admin-only destinations are offered to admins only.
+	chrome := views.AdminChrome{Path: r.URL.Path, IsAdmin: c.User != nil && c.User.IsAdmin()}
 	if n, err := h.repo.PendingReviewCount(r.Context()); err == nil {
 		chrome.PendingReview = n
 	}

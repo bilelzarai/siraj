@@ -1,0 +1,939 @@
+/* =========================================================================
+   admin-app.css — the pieces this application needs that the design kit
+   does not ship.
+
+   admin.css is the design system as delivered and is replaced wholesale when
+   a new kit arrives, so nothing is edited there. Anything the real admin needs
+   on top of it lives here and is written against the kit's own tokens, so a
+   token change still reaches it.
+
+   Loaded after admin.css, admin-only, never on the player-facing site.
+   ========================================================================= */
+
+/* ---------- Top-bar search results ---------------------------------------
+   The kit draws the search field but not what drops out of it: in the design
+   the field is decorative. Here it answers across users, questions and
+   tickets, so it needs a panel, groups and rows. */
+
+.top-search {
+  position: relative;
+}
+
+.search-panel {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-3);
+}
+
+/* Closed is the default, so a page that loads with script disabled does not
+   hang an empty panel under the field. */
+.search-panel[hidden] {
+  display: none;
+}
+
+.search-hint {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.search-groups {
+  display: flex;
+  flex-direction: column;
+}
+
+.search-group + .search-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line-strong);
+}
+
+.search-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px 4px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.search-hit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--r);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.search-hit:hover,
+.search-hit:focus-visible {
+  background: var(--surface-2);
+}
+
+/* The text column must be allowed to shrink, or a long Arabic prompt pushes
+   the badge out of the panel instead of being truncated. */
+.search-hit__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.search-hit__text .t {
+  font-size: 13.5px;
+  font-weight: 550;
+}
+
+.search-hit__text .s {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+/* ---------- Reorder -------------------------------------------------------
+   The kit's category table has a drag handle and no mechanism. These are the
+   two states the reorder control needs: the row being carried, and the form
+   that only appears once something has actually moved. */
+
+.is-dragging {
+  opacity: .5;
+}
+
+.reorder-bar[hidden] {
+  display: none;
+}
+
+/* ---------- Review note ---------------------------------------------------
+   "Changes requested" is a verdict the kit's review card does not draw, so
+   the note and the box that asks for it are styled here. */
+
+.review-note {
+  display: flex;
+  gap: 9px;
+  padding: 10px 12px;
+  background: var(--lamp-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.review-note .icon {
+  color: var(--lamp-ink);
+}
+
+.review-note__who {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+/* ---------- Utilities the kit does not ship -------------------------------
+   app.css defines .truncate and .skip-link already and is linked first, so
+   only the names neither sheet has are here. .faint is app.css's and is
+   redeclared against a kit token: inside the console it has to be the kit's
+   dim ink, or a hint sits at the player palette's contrast against the kit's
+   surface. */
+
+.faint {
+  color: var(--ink-3);
+}
+
+/* ---------- Pager ---------------------------------------------------------
+   Every admin list is paged server-side, and the kit's tables stop at the
+   rows. Built from the kit's own buttons and tokens so it reads as part of
+   the same table rather than as a control bolted under it. */
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--gutter, 14px);
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.pager__count {
+  margin-inline-end: auto;
+}
+
+.pager__sizes,
+.pager__pages {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pager__size {
+  min-width: 26px;
+  padding: 3px 7px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  text-decoration: none;
+}
+
+.pager__size:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.pager__size.is-on {
+  background: var(--brand-soft);
+  color: var(--brand-soft-ink);
+  font-weight: 650;
+}
+
+.pager__at {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Forms inside a row menu ---------------------------------------
+   The kit's menu holds buttons. Two of the user actions need a word typed
+   before they are safe to take — a suspension's reason, and the username that
+   confirms a delete — so the menu holds a form, and the input has to sit above
+   the button rather than beside it in a 180px dropdown. */
+
+.menu-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+}
+
+.menu-form .input {
+  width: 100%;
+}
+
+/* ---------- Segmented control, as radios ---------------------------------
+   The kit's segmented control is a row of buttons driven by its script, which
+   filters the rows already on screen. The admin's lists are paged, so their
+   tabs have to be part of a GET form and travel with it — a radio does that
+   with no script at all. These rules give a radio the kit's segmented look. */
+
+.seg-radio {
+  position: relative;
+  display: inline-flex;
+}
+
+.seg-radio input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.seg-radio > span {
+  padding: 6px 12px;
+  border-radius: calc(var(--r-sm) - 1px);
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.seg-radio.is-on > span {
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+  color: var(--ink);
+}
+
+/* The ring has to be on something visible, and the input itself is not. */
+.seg-radio input:focus-visible + span {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ---------- Reorder handle ------------------------------------------------
+   The kit draws a grip icon; this is the column it sits in and the states the
+   drag needs. touch-action is what stops a drag on a phone scrolling the page
+   out from under the row being carried. */
+
+.t-grip {
+  width: 1%;
+  padding-inline-end: 0;
+}
+
+.grip {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  cursor: grab;
+  touch-action: none;
+}
+
+.grip:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.grip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+tr.is-dragging {
+  background: var(--surface-2);
+  box-shadow: var(--sh-2);
+  cursor: grabbing;
+  opacity: .75;
+}
+
+.reorder-bar {
+  border-bottom: 1px solid var(--line);
+  background: var(--lamp-soft);
+}
+
+/* ---------- Hidden comment ------------------------------------------------
+   The kit has .comment.is-flagged for "somebody reported this", which is a
+   state nothing in this application can produce — no player can report a
+   remark. Hidden is the state that does exist: the row stays readable, because
+   a moderator has to be able to read what they hid in order to put it back. */
+
+.comment.is-hidden .text,
+.comment.is-hidden .head b {
+  opacity: .55;
+}
+
+.comment.is-hidden {
+  background: var(--surface-2);
+}
+
+/* ---------- Segmented control, as links ----------------------------------
+   The duplicate sweep switches language by navigating — the list is computed
+   per language on the server — so that control is a row of links rather than
+   buttons or radios. Same look, different element. */
+
+.seg-link {
+  padding: 6px 12px;
+  border-radius: calc(var(--r-sm) - 1px);
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.seg-link:hover {
+  color: var(--ink);
+}
+
+.seg-link.is-on {
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+  color: var(--ink);
+}
+
+/* ---------- Chip row, as links -------------------------------------------
+   The kit's chip row styles its buttons, which it filters the page with. The
+   support topics carry server counts and choosing one navigates, so they are
+   links; this gives a link in that row the same face, with aria-current as the
+   pressed state. */
+
+.chip-row a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.chip-row a:hover {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+
+.chip-row a[aria-current="page"] {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  color: var(--brand-soft-ink);
+}
+
+.chip-row a[aria-current="page"] .n {
+  color: inherit;
+}
+
+/* =========================================================================
+   Components the kit does not ship, drawn with its tokens.
+
+   Each of these exists in this application and not in the design: the
+   duplicate comparison is a grid of three columns rather than the kit's
+   two-column table, because it compares every language both questions have
+   and the kit's compare shows one; the role picker is a radio group the kit
+   has no equivalent for. Rewriting them into kit components would mean
+   rewriting their three call sites — the import preview, content health and
+   the question form all render the same comparison — so they are restyled
+   instead, against the kit's surfaces so they read as part of it.
+   ========================================================================= */
+
+/* ---------- Duplicate comparison ----------------------------------------- */
+
+.cmp {
+  margin-top: 14px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+
+.cmp__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-weight: 650;
+}
+
+.cmp__head .btn {
+  margin-inline-start: auto;
+}
+
+/* The label column is fixed so the two sides line up down the whole panel;
+   the sides share what is left equally, and both may shrink — a long Arabic
+   prompt must wrap inside its column rather than widen it. */
+.cmp__row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.cmp__row--head {
+  border-top: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* The row where the two sides disagree is the one being hunted for, so it is
+   the only one that is marked. */
+.cmp__row--diff {
+  background: var(--lamp-soft);
+}
+
+.cmp__label {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cmp__side {
+  min-width: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.cmp__none {
+  color: var(--ink-3);
+}
+
+.cmp__correct {
+  margin-inline-end: 5px;
+  color: var(--brand);
+  font-weight: 700;
+}
+
+.cmp__locale {
+  margin-top: 12px;
+}
+
+.cmp__locale-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+/* The words one side has and the other does not. A mark rather than a colour
+   alone, so the difference survives being printed or read without colour. */
+.cmp__diff {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--warn-soft);
+  color: var(--warn-ink);
+}
+
+/* ---------- Duplicate decisions ------------------------------------------
+   The pair on the content-health screen uses the kit's own dup-card /
+   dup-head / dup-q — the component the kit drew for exactly this. These four
+   are what is left over: the verdict form, which is a form and so cannot be
+   the kit's button, and the three-way the import preview asks per flagged row,
+   which the kit has no equivalent of because its compare view decides nothing. */
+
+.dup-pair__verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dup-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line-strong);
+}
+
+.dup-choice__opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+/* The way into the comparison, pushed to the end of the row so the three
+   choices read as a group and this does not read as a fourth. */
+.dup-choice__open {
+  margin-inline-start: auto;
+  color: var(--brand-soft-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ---------- Role picker --------------------------------------------------- */
+
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.chip-radio {
+  position: relative;
+  display: block;
+}
+
+.chip-radio input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.chip-radio__face {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chip-radio input:checked + .chip-radio__face {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand-soft-ink);
+}
+
+.chip-radio input:focus-visible + .chip-radio__face {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ---------- Odds and ends ------------------------------------------------- */
+
+/* A bare checkbox outside the kit's .check label wrapper. */
+.checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand);
+}
+
+/* A question referred to by its number, which is how every admin screen names
+   one. Monospaced so a column of them lines up. */
+.qref {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--brand-soft-ink);
+  text-decoration: none;
+}
+
+.qref:hover {
+  text-decoration: underline;
+}
+
+.qref--plain {
+  color: var(--ink-3);
+}
+
+/* The colour a category is being given, shown as itself beside the field that
+   sets it. */
+.color-well {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: none;
+  cursor: pointer;
+}
+
+/* A, B, C, D beside a choice. */
+.answer__key {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 6px;
+  background: var(--surface-sunk);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+/* ---------- Disclosure: a menu that can hold a form ----------------------
+   The kit's menu is opened by its script adding .is-open, and its global click
+   handler closes every open menu on any click that is not on a menu trigger —
+   which is correct for a menu of buttons and wrong for one holding a field.
+   Clicking into a suspend reason or a review note closed the menu under the
+   cursor, and a <details> wrapped around the kit's markup never opened at all
+   because nothing added the class.
+
+   So the controls that need something typed use a native <details>. It opens
+   with no script, a click inside it is just a click, and it keeps the kit's
+   menu face. admin-console.js adds the two behaviours native details lacks:
+   closing on Escape and on a click elsewhere. */
+
+details.disclosure > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.disclosure > summary::-webkit-details-marker,
+details.disclosure > summary::marker {
+  display: none;
+  content: "";
+}
+
+details.disclosure[open] > .menu {
+  display: block;
+  animation: pop .14s ease-out;
+}
+
+/* Wider than a menu of labels: these hold a field and a button under it. */
+details.disclosure > .menu {
+  min-width: 232px;
+}
+
+/* =========================================================================
+   The shared form components, read as console components.
+
+   The text field, the password field and the field-problem list are shared
+   with the player site, so they cannot be changed: they are the same controls
+   on both, and APPLY_DESIGN.md is explicit that the public site stays as it
+   is. Their markup already carries .field, .label and .input, which the kit
+   styles — these rules cover the handful of utility names underneath, scoped
+   to the console shell so the player site never sees them.
+   ========================================================================= */
+
+/* A field's hint and its error, which the components write as .tiny.faint and
+   .field__error. The kit calls the same two things .help and .error-text. */
+.app .tiny.faint,
+.app .field .tiny {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.app .field__error {
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+/* The password field's reveal button sits inside the input, so the input needs
+   room for it. The kit's inputs are 38px tall where the player's are 44, so
+   the button has to be resized with them or it overhangs the field. */
+.app .field__control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.app .input--with-action {
+  padding-inline-end: 42px;
+}
+
+.app .field__reveal {
+  position: absolute;
+  inset-inline-end: 3px;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.app .field__reveal:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+/* .bold and .center are plain utilities the components use; the console's own
+   markup uses the kit's weights, so these only have to exist. */
+.app .bold {
+  font-weight: 650;
+}
+
+.app .center {
+  text-align: center;
+}
+
+/* The theme button's three icons: one is shown, the other two carry the hidden
+   attribute. A display of their own is needed so the shown one centres; the
+   [hidden] rule has to come with it or the display would override the
+   attribute and all three would stack. */
+.theme-icon {
+  display: grid;
+  place-items: center;
+}
+
+.theme-icon[hidden] {
+  display: none;
+}
+
+/* The password field's eye, which swaps the same way. */
+.app .reveal-icon {
+  display: grid;
+  place-items: center;
+}
+
+.app .reveal-icon[hidden] {
+  display: none;
+}
+
+/* ---------- Coverage cell -------------------------------------------------
+   How many questions exist for one category at one difficulty, against the
+   target. The kit has no equivalent — its tables report what is there, and
+   this reports the distance to where the bank should be — so it is drawn here
+   against the kit's tokens. */
+
+.cov {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.cov__count {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cov__count b {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.cov__target {
+  font-size: 11px;
+}
+
+.cov__bar {
+  display: block;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunk);
+  overflow: hidden;
+}
+
+.cov__fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--brand);
+}
+
+.cov:hover .cov__fill {
+  background: var(--brand-hover);
+}
+
+/* The one state an admin can act on directly: a cell holding nothing at all.
+   Every other cell is a degree of progress and is left plain, because a table
+   where everything is an alarm is a table nobody reads. */
+.cov--empty .cov__count b {
+  color: var(--danger);
+}
+
+.cov--empty .cov__bar {
+  background: var(--danger-soft);
+}
+
+/* ---------- New-domain card ----------------------------------------------
+   The dashed placeholder that closes the row of domain cards. A link, not a
+   button: it goes to the form the "New domain" action in the page head goes
+   to, and offering it twice in two shapes is deliberate — this is the one the
+   eye reaches after reading the last card. */
+
+.domain-new {
+  display: flex;
+  min-height: 180px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-lg);
+  color: var(--ink-2);
+  text-align: center;
+  text-decoration: none;
+}
+
+.domain-new:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand-soft-ink);
+}
+
+.domain-new__plus {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 4px;
+  border-radius: var(--r);
+  background: var(--surface-2);
+  color: var(--ink-3);
+}
+
+.domain-new:hover .domain-new__plus {
+  background: var(--surface);
+  color: var(--brand);
+}
+
+.domain-new .muted {
+  font-size: 12.5px;
+}
+
+/* ---------- Sortable header ----------------------------------------------
+   On the paged lists the header is a link, because the sort is done by the
+   server and belongs in the address. The hint arrow on the unsorted columns is
+   dim until the row is hovered: a header that looks inert until you touch it
+   is a header nobody presses, and one with six bright arrows is a header
+   nobody reads. */
+
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.t-num .th-sort {
+  flex-direction: row-reverse;
+}
+
+.th-sort:hover {
+  color: var(--ink);
+}
+
+.th-sort.is-on {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.th-sort__hint {
+  opacity: 0;
+  transition: opacity .12s;
+}
+
+.th-sort:hover .th-sort__hint,
+thead:hover .th-sort__hint {
+  opacity: .45;
+}
+
+/* Ascending is the same chevron, turned over. */
+.th-sort__up {
+  transform: rotate(180deg);
+}
+
+.th-sort:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
+/* A sorted table is not in its running order, so the drag handles are put
+   away: dropping a row while the table is sorted by name would save the sorted
+   sequence as the order players see, which is not what the drag meant. */
+.is-sorted .grip {
+  opacity: .25;
+  cursor: not-allowed;
+}
+
+/* A language pane in the question editor. The tabs decide which is shown; the
+   panes are the form, so with no script every one of them is simply visible. */
+.locale-pane {
+  border-top: 1px solid var(--line);
+}
+
+/* The automatic checks beside a question under review. Three readings, three
+   colours: a failure is something not to approve past, a warning something to
+   look at, and a pass is said quietly — a list where every line shouts is a
+   list nobody reads. */
+.check-pass { color: var(--brand); }
+.check-warn { color: var(--warn-ink); }
+.check-fail { color: var(--danger); }
+
+/* A remark that has been dealt with. Dimmed rather than removed: it reported a
+   real fault, it stands on the question, and the queue has simply stopped
+   asking about it. */
+.comment.is-done .text {
+  opacity: .7;
+}

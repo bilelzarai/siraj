@@ -202,7 +202,7 @@ templ seatStanding(c Ctx, rows []SeatScore) {
 			<p class="eyebrow">{ c.T("hotseat.standing") }</p>
 			for _, row := range rows {
 				<div class={ "side", templ.KV("is-winner", row.Turn) }>
-					<span class="row" style="gap:8px;min-width:0">
+					<span class="row" style="gap:var(--s-4);min-width:0">
 						<span class="avatar avatar--xs" style={ AvatarStyle(row.Player.ID.String()) }>
 							{ Initial(row.Player.DisplayName) }
 						</span>

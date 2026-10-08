@@ -635,7 +635,7 @@ func challengeActions(c Ctx, ch *models.Challenge) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, " <div class=\"row\" style=\"gap:8px\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, " <div class=\"row gap-4\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1267,7 +1267,7 @@ func Friends(c Ctx, d FriendsData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			case "search":
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 100, "<div class=\"stack\"><form method=\"get\" action=\"/friends\" class=\"row\" style=\"gap:8px\"><input type=\"hidden\" name=\"tab\" value=\"search\"> <input class=\"input\" name=\"q\" type=\"search\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 100, "<div class=\"stack\"><form method=\"get\" action=\"/friends\" class=\"row gap-4\"><input type=\"hidden\" name=\"tab\" value=\"search\"> <input class=\"input\" name=\"q\" type=\"search\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

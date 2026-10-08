@@ -63,11 +63,7 @@ func TestTheClientSubscribesToEveryEvent(t *testing.T) {
 		}
 	})
 
-	script, err := os.ReadFile(filepath.Join(root, "static/js/app.js"))
-	if err != nil {
-		t.Fatalf("read app.js: %v", err)
-	}
-	listening := string(script)
+	listening := clientSources(t)
 
 	for event := range published {
 		if !strings.Contains(listening, `"`+event+`"`) {

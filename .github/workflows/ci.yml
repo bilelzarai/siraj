@@ -19,14 +19,14 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: islamic
-          POSTGRES_PASSWORD: islamic
-          POSTGRES_DB: islamic_game
+          POSTGRES_USER: siraj
+          POSTGRES_PASSWORD: siraj
+          POSTGRES_DB: siraj-db
         ports: ['5432:5432']
         # The suite connects as soon as the step starts, so the job waits for
         # the server to actually answer rather than for the container to exist.
         options: >-
-          --health-cmd "pg_isready -U islamic"
+          --health-cmd "pg_isready -U siraj"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -34,7 +34,7 @@ jobs:
     env:
       # Each test package creates and drops its own database through this
       # connection, so nothing here is shared state between jobs.
-      TEST_DATABASE_URL: postgres://islamic:islamic@localhost:5432/islamic_game?sslmode=disable
+      TEST_DATABASE_URL: postgres://siraj:siraj@localhost:5432/siraj-db?sslmode=disable
 
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +43,21 @@ jobs:
         with:
           go-version: '1.26'
           cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Before every Go step, because the asset tree is embedded at compile
+      # time: a build that runs after `go build` proves nothing about the
+      # binary that was produced.
+      - name: Assets
+        run: |
+          npm ci
+          npm run build
+          test -f static/dist/.vite/manifest.json \
+            || { echo "the build produced no manifest; the page would link nothing"; exit 1; }
 
       - name: Templates are current
         # The generated files are committed, so a .templ edited without
@@ -70,4 +85,55 @@ jobs:
         run: go test ./... -count=1
 
       - name: Script syntax
-        run: node --check static/js/app.js
+        # Every client source, not one file: the client is a tree now, and a
+        # check that reads one entry of it passes while the rest goes unparsed.
+        run: |
+          found=0
+          while IFS= read -r f; do
+            node --check "$f"
+            found=$((found + 1))
+          done < <(find web/src -name '*.js')
+          test "$found" -gt 0 || { echo "no client sources found under web/src"; exit 1; }
+
+  # The requirement most likely to rot, and the only one no unit test covers:
+  # somebody clones this repository, runs one command, and gets a working
+  # application. Nothing is configured here on purpose — no .env, no secret.
+  clean-clone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: One command
+        run: docker compose -f deploy/compose.yaml up -d --build
+
+      - name: It answers
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/healthz >/dev/null; then
+              echo "probe answered after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/healthz > /dev/null
+          curl -fsS http://localhost:8080/ > landing.html
+
+      - name: It serves the assets it links
+        # A page that answers while linking assets nobody built is the failure
+        # this job exists to catch, and it looks identical to success in a log.
+        run: |
+          grep -oE '/static/dist/[^"]+' landing.html | sort -u | while read -r url; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080${url}")
+            echo "${code}  ${url}"
+            test "$code" = "200" || exit 1
+          done
+          grep -q '/static/dist/' landing.html \
+            || { echo "the page links no built asset at all"; exit 1; }
+
+      - name: Why it failed
+        if: failure()
+        run: docker compose -f deploy/compose.yaml logs --no-color | tail -50
+
+      - name: Stop
+        if: always()
+        run: docker compose -f deploy/compose.yaml down -v

@@ -99,14 +99,14 @@ func SharedDevice(c Ctx, d SeatData) templ.Component {
 		}
 		ctx = templ.ClearChildren(ctx)
 		if d.Host != nil {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"card stack-sm seats\" data-seats><div class=\"row row--between row--wrap\" style=\"gap:8px\"><h2 class=\"section-title\" style=\"margin:0\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<section class=\"card stack-sm seats\" data-seats><div class=\"row row--between row--wrap gap-4\"><h2 class=\"section-title flush\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var2 string
 			templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(c.T("players.title"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/players.templ`, Line: 76, Col: 69}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/players.templ`, Line: 76, Col: 58}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 			if templ_7745c5c3_Err != nil {
@@ -144,7 +144,7 @@ func SharedDevice(c Ctx, d SeatData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if !d.Full() && !d.Playing {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<form class=\"row\" style=\"gap:8px\" method=\"post\" action=\"/players\"><input type=\"hidden\" name=\"csrf_token\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<form class=\"row gap-4\" method=\"post\" action=\"/players\"><input type=\"hidden\" name=\"csrf_token\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

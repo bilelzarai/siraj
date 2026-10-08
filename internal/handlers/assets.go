@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+// assetBase is where the bundler's output is served from. It is the same
+// string the bundler is told to write into its URLs; they are two halves of
+// one agreement, which is why it is a named constant rather than a literal in
+// three places.
+const assetBase = "/static/dist/"
+
 // assetVersion is a short content hash of every static file, appended to asset
 // URLs as ?v=. Without it a browser happily serves a year-old stylesheet from
 // its cache after a deploy, and the page renders with half its rules missing.

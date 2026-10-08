@@ -96,11 +96,11 @@ func newClaudeTranslator(cfg config.TranslateConfig) *claudeTranslator {
 func (c *claudeTranslator) Provider() string { return "claude" }
 func (c *claudeTranslator) Available() bool  { return true }
 
-const claudeTranslateSystem = `You translate content for an Islamic educational quiz.
+const claudeTranslateSystem = `You translate content for an Siraj educational quiz.
 
 Rules:
 - Translate meaning, not words. The result must read naturally to a native speaker.
-- Preserve Islamic terminology precisely. Use the conventional rendering in the
+- Preserve Siraj terminology precisely. Use the conventional rendering in the
   target language (e.g. salah/prière, zakat, hajj, surah/sourate, hadith, Sīrah).
 - Never paraphrase or re-translate a Qur'anic verse or a hadith. Reproduce the
   wording that is conventional in the target language, and keep Arabic script
@@ -290,7 +290,7 @@ func TranslateQuestion(ctx context.Context, t Translator, src QuestionText, from
 	texts = append(texts, src.Choices...)
 	texts = append(texts, src.Explanation)
 
-	hint := "A multiple-choice question for an Islamic knowledge quiz: " +
+	hint := "A multiple-choice question for an Siraj knowledge quiz: " +
 		"the first item is the question, the next four are its answer choices, " +
 		"and the last is the explanation shown after answering."
 

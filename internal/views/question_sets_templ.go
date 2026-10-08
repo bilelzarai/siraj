@@ -77,7 +77,7 @@ func editQuestionForm(c Ctx, d QuestionSetsData, questionID int) templ.Component
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</p><div class=\"row\" style=\"gap:8px\"><form method=\"post\" action=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</p><div class=\"row gap-4\"><form method=\"post\" action=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -181,7 +181,7 @@ func editQuestionForm(c Ctx, d QuestionSetsData, questionID int) templ.Component
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</div><div class=\"row\" style=\"gap:8px;justify-content:flex-end\"><a class=\"btn btn--ghost btn--sm\" href=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</div><div class=\"row\" style=\"gap:var(--s-4);justify-content:flex-end\"><a class=\"btn btn--ghost btn--sm\" href=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -521,7 +521,7 @@ func QuestionSets(c Ctx, d QuestionSetsData) templ.Component {
 						}
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "</div><div class=\"row\" style=\"gap:8px;justify-content:space-between\"><button class=\"btn btn--ghost btn--sm\" type=\"button\" data-authored-add>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "</div><div class=\"row\" style=\"gap:var(--s-4);justify-content:space-between\"><button class=\"btn btn--ghost btn--sm\" type=\"button\" data-authored-add>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -552,7 +552,7 @@ func QuestionSets(c Ctx, d QuestionSetsData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "<div class=\"card stack-sm\"><div class=\"row row--between row--wrap\" style=\"gap:8px\"><span class=\"card__title\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "<div class=\"card stack-sm\"><div class=\"row row--between row--wrap gap-4\"><span class=\"card__title\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -565,7 +565,7 @@ func QuestionSets(c Ctx, d QuestionSetsData) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</span> <span class=\"row\" style=\"gap:8px\"><span class=\"tiny muted\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</span> <span class=\"row gap-4\"><span class=\"tiny muted\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -659,7 +659,7 @@ func QuestionSets(c Ctx, d QuestionSetsData) templ.Component {
 								return templ_7745c5c3_Err
 							}
 						} else {
-							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "<li class=\"panel row row--between row--wrap\" style=\"gap:10px\"><div style=\"flex:1;min-width:220px\"><div class=\"small bold\">")
+							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "<li class=\"panel row row--between row--wrap gap-5\"><div style=\"flex:1;min-width:220px\"><div class=\"small bold\">")
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
@@ -687,7 +687,7 @@ func QuestionSets(c Ctx, d QuestionSetsData) templ.Component {
 									return templ_7745c5c3_Err
 								}
 							}
-							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "</div></div><span class=\"row\" style=\"gap:6px\"><a class=\"btn btn--soft btn--sm\" href=\"")
+							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "</div></div><span class=\"row gap-3\"><a class=\"btn btn--soft btn--sm\" href=\"")
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
@@ -827,7 +827,7 @@ func QuestionSets(c Ctx, d QuestionSetsData) templ.Component {
 						}
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, "</div><div class=\"row\" style=\"gap:8px;justify-content:space-between\"><button class=\"btn btn--ghost btn--sm\" type=\"button\" data-authored-add>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, "</div><div class=\"row\" style=\"gap:var(--s-4);justify-content:space-between\"><button class=\"btn btn--ghost btn--sm\" type=\"button\" data-authored-add>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

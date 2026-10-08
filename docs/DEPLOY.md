@@ -7,7 +7,7 @@ that is the whole of it.
 
 | | Database | `APP_ENV` | Who reaches it |
 |---|---|---|---|
-| **dev** | `docker compose up db`, port 5434 | `development` | you, on your machine |
+| **dev** | `docker compose -f deploy/compose.yaml up db`, port 5434 | `development` | you, on your machine |
 | **test** | its own database on the staging server | `production` | the team, behind a password or a private network |
 | **prod** | its own database, backed up | `production` | players |
 
@@ -86,7 +86,7 @@ database, so it never touches your development data.
 Without `make` installed, the targets are thin enough to run by hand:
 
 ```bash
-docker compose up -d db
+docker compose -f deploy/compose.yaml up -d db
 go run github.com/a-h/templ/cmd/templ@latest generate
 STATIC_DIR=./static go run ./cmd/server
 go vet ./... && go test ./... -count=1
@@ -102,18 +102,19 @@ A single host is enough. Postgres and the app, both from compose:
 git clone https://github.com/bilelzarai/siraj.git && cd siraj
 
 # compose substitutes these from .env, and the app service refuses to start
-# without them — both are marked required in docker-compose.yml on purpose.
+# without them — both are marked required in deploy/compose.prod.yaml on purpose.
 cat > .env <<EOF
 SESSION_SECRET=$(openssl rand -hex 32)
 BASE_URL=https://test.example
 EOF
 
-# --profile full is not optional: the app service is behind that profile, so
-# a plain `docker compose up` starts the database and nothing else.
-docker compose --profile full up -d --build
+# The base file alone brings up a working stack; the overlay is what makes it a
+# deployment — it demands the secret and the origin, turns secure cookies on,
+# and unpublishes the application port because the terminator owns it.
+docker compose -f deploy/compose.yaml -f deploy/compose.prod.yaml up -d --build
 
 # once the app has booted and migrated, put the question bank in
-docker compose exec app /app/sirajctl seed
+docker compose -f deploy/compose.yaml exec app /app/sirajctl seed
 ```
 
 The `app` service already sets `APP_ENV=production`, `SECURE_COOKIES=true` and
@@ -122,7 +123,7 @@ it**. Put one there. With nothing forwarding, the hop count is wrong and the
 login and password-reset limiters end up keyed on an address the caller chose
 for themselves; with two proxies, raise it to `2`.
 
-`docker compose up db` alone is the dev database on `:5434` — the `app` service
+`docker compose -f deploy/compose.yaml up db` alone is the dev database on `:5434` — the `app` service
 is the deployable one, and it keeps uploads on a named `uploads` volume so
 attachments survive `up --build`. That volume is the one thing in this stack
 worth backing up besides the database.
@@ -215,7 +216,7 @@ What you are accepting on this route:
 A small always-free virtual machine is the only free option that meets all four
 requirements at once, because it is just a machine: real block storage for
 uploads, no spin-down, Postgres alongside the app, and a shell for `sirajctl`.
-It is then exactly the *Test server* recipe above — `docker compose --profile
+It is then exactly the *Test server* recipe above — `docker compose -f deploy/compose.yaml --profile
 full up -d --build` — with a TLS terminator in front, which Caddy will do with
 an automatic certificate.
 
@@ -285,6 +286,45 @@ refuses to demote the last admin.
 
 ---
 
+## The assets
+
+The page links files the bundler wrote, by the hashed names it gave them. That
+build happens inside the image, in a stage *before* the compiler, because the
+asset tree is embedded at compile time — an asset stage beside the compile
+stage produces an image with an empty asset directory and a page that links
+nothing.
+
+Nothing at runtime needs Node. A deployment that builds the image needs it; one
+that pulls the image does not.
+
+```bash
+npm ci && npm run build     # only when building outside the image
+make build                  # the Makefile does both, and skips the build if npm is absent
+```
+
+If a page ever arrives unstyled, the first question is whether the manifest is
+there: the server says which one it matched at boot, and says so loudly when it
+found none.
+
+## The public endpoint's credential
+
+The one credential here that is not a browser session. It is minted from the
+command line and never through the web, because nothing reachable over HTTP
+should be able to create something that answers without a session.
+
+```bash
+docker compose -f deploy/compose.yaml exec app /app/sirajctl apikey new "the mobile app"
+docker compose -f deploy/compose.yaml exec app /app/sirajctl apikey list
+docker compose -f deploy/compose.yaml exec app /app/sirajctl apikey revoke 3
+```
+
+Only the hash is stored: a key is shown once, at mint, and neither the tool nor
+a database read can hand it back. Losing one means minting another, and the old
+one should be revoked rather than left live. Revoking keeps the row, because
+which key was used and when it was withdrawn is the trail you need afterwards.
+
+The contract consumers read is [api.md](api.md).
+
 ## Scaling past one instance
 
 Two things are process-local today and would need addressing first:
@@ -310,3 +350,6 @@ Neither matters at one instance, and both are noted where they live.
 - [ ] `UPLOAD_DIR` on a volume that survives the deploy
 - [ ] An admin account exists
 - [ ] `sirajctl seed` has been run, so there are questions to play
+- [ ] The image carries built assets — the boot log names the manifest it matched, and warns when it found none
+- [ ] `SMTP_HOST` and `SMTP_FROM_EMAIL` set, or password reset silently goes nowhere
+- [ ] Every API key that should still answer does, and every one that should not has been revoked

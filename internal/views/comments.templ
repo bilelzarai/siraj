@@ -60,7 +60,7 @@ templ QuestionComments(c Ctx, d QuestionCommentsData) {
 
 templ questionComment(c Ctx, cm *models.QuestionComment) {
 	<article class="card stack-sm">
-		<div class="row row--between" style="gap:8px">
+		<div class="row row--between gap-4">
 			<span class="tiny bold">
 				if cm.Anonymous() {
 					{ c.T("comments.deletedAuthor") }

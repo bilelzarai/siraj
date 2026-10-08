@@ -1,0 +1,216 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// The user panel: who this account is, how they play, and what may be done
+// about them, over the directory rather than instead of it.
+//
+// Fetched rather than rendered with the list. A drawer per row would be fifty
+// copies of this in every page of the directory, most of them never opened —
+// and the strongest-categories figures underneath are an aggregate per player,
+// so rendering them all would be fifty aggregates to draw one.
+
+type AdminUserPanelData struct {
+	User *models.AdminUser
+	// Strongest is the categories this player answers best. Empty when they
+	// have not answered enough of anything for the figure to mean something.
+	Strongest []models.CategoryStrength
+	// Recent is what the console has done to this account, which is the
+	// moderation history the panel ends with.
+	Recent []*models.AuditEntry
+}
+
+templ AdminUserPanel(c Ctx, d AdminUserPanelData) {
+	<div class="drawer-head">
+		<div class="profile-head">
+			<span
+				class={ "avatar", "lg", templ.KV("avatar--photo", HasAvatarPhoto(d.User.AvatarSeed)) }
+				style={ AvatarStyle(AvatarSeedFor(d.User.ID, d.User.AvatarSeed, d.User.Username)) }
+				aria-hidden="true"
+			>
+				if !HasAvatarPhoto(d.User.AvatarSeed) {
+					{ Initial(d.User.DisplayName) }
+				}
+			</span>
+			<div style="min-width:0">
+				<h2 id="user-drawer-title" class="truncate">{ d.User.DisplayName }</h2>
+				<p class="truncate" dir="ltr">
+					{ "@" + d.User.Username }
+					{ " · " }
+					{ c.T("admin.users.joinedOn", c.Tr.Date(d.User.CreatedAt)) }
+				</p>
+			</div>
+		</div>
+		<button class="icon-btn" type="button" data-close aria-label={ c.T("common.close") }>
+			@adminIcon("i-x", "")
+		</button>
+	</div>
+	<div class="drawer-body">
+		// How they play. Three figures rather than a paragraph: this is the
+		// first thing anybody opening an account wants, and it is three numbers.
+		<div class="grid grid-3" style="gap:10px;margin-bottom:22px">
+			@panelStat(c, c.T("admin.stat.rounds"), fmt.Sprint(d.User.GamesPlayed), "")
+			if d.User.Answered > 0 {
+				@panelStat(c, c.T("admin.dash.accuracy"), fmt.Sprintf("%d%%", d.User.Accuracy()),
+					c.T("admin.users.overAnswers", d.User.Answered))
+			} else {
+				@panelStat(c, c.T("admin.dash.accuracy"), "—", c.T("admin.dash.noPlays"))
+			}
+			@panelStat(c, c.T("admin.users.streak"), fmt.Sprint(d.User.BestStreak), "")
+		</div>
+		<div class="form-section">
+			<h3>{ c.T("admin.users.account") }</h3>
+			<dl class="side-facts">
+				<dt>{ c.T("auth.field.email") }</dt>
+				<dd dir="ltr">
+					if d.User.Email != "" {
+						{ d.User.Email }
+					} else {
+						<span class="faint">{ c.T("admin.users.noEmail") }</span>
+					}
+				</dd>
+				<dt>{ c.T("settings.language") }</dt>
+				<dd>{ localeName(c, d.User.Locale) }</dd>
+				<dt>{ c.T("profile.field.country") }</dt>
+				<dd>
+					if d.User.Country != "" {
+						{ d.User.Country }
+					} else {
+						<span class="faint">—</span>
+					}
+				</dd>
+				<dt>{ c.T("admin.users.lastSeen") }</dt>
+				<dd>{ c.Tr.RelativeTime(d.User.LastSeenAt) }</dd>
+				<dt>{ c.T("admin.users.status") }</dt>
+				<dd>
+					if d.User.IsSuspended() {
+						<span class="badge badge-danger">{ c.T("admin.users.suspended") }</span>
+						if d.User.SuspendedReason != "" {
+							<div class="s">{ d.User.SuspendedReason }</div>
+						}
+					} else {
+						<span class="badge badge-live">{ c.T("admin.users.active") }</span>
+					}
+				</dd>
+			</dl>
+		</div>
+		// The role, changed from here as well as from the row: this is the
+		// screen somebody is on when they are deciding about a person.
+		<div class="form-section">
+			<h3>{ c.T("admin.users.role") }</h3>
+			<form method="post" action={ templ.SafeURL("/admin/users/" + d.User.ID.String() + "/role") }>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<div class="field">
+					<label class="label" for="panel-role">{ c.T("admin.users.role") }</label>
+					<select class="select" id="panel-role" name="role">
+						for _, role := range models.AssignableRoles {
+							<option value={ role } selected?={ d.User.Role == role }>
+								{ c.T(models.RoleLabelKey(role)) }
+							</option>
+						}
+					</select>
+					<span class="help">{ c.T("admin.users.roleHelp") }</span>
+				</div>
+				<button class="btn btn-sm btn-primary" type="submit">{ c.T("common.save") }</button>
+			</form>
+		</div>
+		// What they are good at. Thin evidence is left out rather than ranked:
+		// two right answers out of two is a hundred per cent and says nothing,
+		// and it would outrank a category they have genuinely learned.
+		<div class="form-section">
+			<h3>{ c.T("admin.users.strongest") }</h3>
+			if len(d.Strongest) == 0 {
+				<p class="help">{ c.T("admin.users.notEnoughPlay") }</p>
+			} else {
+				for _, cat := range d.Strongest {
+					<div class="field">
+						<div class="row">
+							<span class="cat-tile" aria-hidden="true">{ cat.CategoryIcon }</span>
+							<span class="truncate" style="flex:1">{ cat.CategoryName }</span>
+							<span class="s">{ c.T("admin.users.overAnswers", cat.Answered) }</span>
+						</div>
+						@adminMeter(cat.Accuracy())
+					</div>
+				}
+			}
+		</div>
+		<div class="form-section">
+			<h3>{ c.T("admin.users.history") }</h3>
+			if len(d.Recent) == 0 {
+				<p class="help">{ c.T("admin.users.noHistory") }</p>
+			} else {
+				<ul class="timeline">
+					for _, e := range d.Recent {
+						<li>
+							<span class={ "tl-dot", auditTone(e) }>
+								@adminIcon(auditIcon(e), "")
+							</span>
+							<div>
+								<div class="t">
+									<b>{ e.ActorUsername }</b>
+									{ " " }
+									{ auditPhrase(c, e) }
+								</div>
+								<div class="s">{ c.Tr.RelativeTime(e.CreatedAt) }</div>
+							</div>
+						</li>
+					}
+				</ul>
+			}
+		</div>
+	</div>
+	<div class="drawer-foot">
+		// The destructive half, at the far end of the panel rather than beside
+		// the save button: nothing here should be a neighbouring press to
+		// changing somebody's language.
+		if d.User.IsSuspended() {
+			<form method="post" action={ templ.SafeURL("/admin/users/" + d.User.ID.String() + "/reinstate") }>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<button class="btn btn-soft" type="submit">
+					@adminIcon("i-restore", "icon-sm")
+					{ c.T("admin.users.reinstate") }
+				</button>
+			</form>
+		} else {
+			<form
+				class="row"
+				method="post"
+				action={ templ.SafeURL("/admin/users/" + d.User.ID.String() + "/suspend") }
+				data-confirm={ c.T("admin.users.confirmSuspend", d.User.DisplayName) }
+			>
+				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+				<input
+					class="input input-sm"
+					type="text"
+					name="reason"
+					maxlength="200"
+					placeholder={ c.T("admin.users.reason") }
+					aria-label={ c.T("admin.users.reasonFor", d.User.DisplayName) }
+				/>
+				<button class="btn btn-danger-ghost" type="submit">
+					@adminIcon("i-clock", "icon-sm")
+					{ c.T("admin.users.suspend") }
+				</button>
+			</form>
+		}
+		<span class="spacer"></span>
+		<a class="btn btn-ghost" href={ templ.SafeURL("/u/" + d.User.Username) }>
+			@adminIcon("i-external", "icon-sm")
+			{ c.T("admin.users.openProfile") }
+		</a>
+	</div>
+}
+
+templ panelStat(c Ctx, label, value, meta string) {
+	<div class="kpi" style="padding:12px 14px">
+		<div class="kpi-label">{ label }</div>
+		<div class="kpi-value" style="font-size:22px">{ value }</div>
+		if meta != "" {
+			<div class="kpi-meta">{ meta }</div>
+		}
+	</div>
+}

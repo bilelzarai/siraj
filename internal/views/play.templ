@@ -11,8 +11,14 @@ import (
 )
 
 type SetupData struct {
-	Categories  []*models.Category
-	SelectedCat int
+	Categories []*models.Category
+	// Domains is the level above. Empty or one-of means the screen asks
+	// exactly what it asked before: a subject area nobody can choose between
+	// is not a choice, and a row with one option in it reads as a decision
+	// somebody has to take.
+	Domains        []*models.Domain
+	SelectedDomain int
+	SelectedCat    int
 	// SelectedDiff and SelectedCount are echoed back so a rejected submission
 	// re-opens on the choices that were made, not on the defaults.
 	SelectedDiff  int
@@ -254,23 +260,103 @@ func chosenCount(available, requested int) int {
 	return best
 }
 
+// LengthUnavailable is whether the round length has nothing left to choose
+// from: the selection cannot fill even the shortest round, so every option in
+// the menu is disabled. A menu whose options are all disabled draws as an
+// empty box and submits no length at all — which is how a thin bank reached
+// the player as a blank field above a button that could only be refused.
+//
+// Only when the bank is what the round would be drawn from. A set carries its
+// own questions, so the menu stays live for it however thin the bank is.
+func (d SetupData) LengthUnavailable() bool {
+	if d.Source != "" && d.Source != "bank" {
+		return false
+	}
+	return chosenCount(d.Availability.Count(d.SelectedCat, d.SelectedDiff), d.SelectedCount) == 0
+}
+
+// SetupNote is the line under the difficulty chips: why the longer rounds are
+// not offered. The script writes the same sentence on every change, but it was
+// the only thing writing it, so the first paint — and a page with no script at
+// all — showed a menu with options missing and nothing to say why.
+func (d SetupData) SetupNote(c Ctx) string {
+	if d.Source != "" && d.Source != "bank" {
+		return ""
+	}
+	available := d.Availability.Count(d.SelectedCat, d.SelectedDiff)
+	if available < service.MinQuestions {
+		return c.T("game.setup.tooFew")
+	}
+	if available < countOptions[len(countOptions)-1] {
+		return c.T("game.setup.capped")
+	}
+	return ""
+}
+
 // availabilityJSON hands the whole count table to the client as data, so the
 // difficulty chips and the length menu can react to a category change without
 // a round trip. The server still decides; this only stops the dead ends being
 // presented as live options.
+// Grouped reports whether the choice list shows subject areas at all. One
+// subject area is not a decision; several is.
+func (d SetupData) Grouped() bool { return len(d.Domains) > 1 }
+
+// InDomain is the categories filed under one subject area, in the order the
+// repository returned them.
+func (d SetupData) InDomain(domainID int) []*models.Category {
+	out := make([]*models.Category, 0, len(d.Categories))
+	for _, cat := range d.Categories {
+		if cat.DomainID == domainID {
+			out = append(out, cat)
+		}
+	}
+	return out
+}
+
+// AvailableAt is how many questions this difficulty could draw given what the
+// player has already picked — a category, a whole subject area, or everything.
+func (d SetupData) AvailableAt(difficulty int) int {
+	switch {
+	case d.SelectedCat > 0:
+		return d.Availability.Count(d.SelectedCat, difficulty)
+	case d.SelectedDomain > 0:
+		return d.Availability.InDomain(d.SelectedDomain, difficulty)
+	default:
+		return d.Availability.Count(0, difficulty)
+	}
+}
+
 func availabilityJSON(a repository.Availability) string {
 	type entry struct {
-		Category   int `json:"category"`
-		Difficulty int `json:"difficulty"`
-		Count      int `json:"count"`
+		// Pick is the value of the radio this count belongs to — "all", "c:12"
+		// or "d:7" — so the script matches on what was chosen rather than
+		// reconstructing which level the number came from.
+		Pick       string `json:"pick"`
+		Category   int    `json:"category"`
+		Difficulty int    `json:"difficulty"`
+		Count      int    `json:"count"`
 	}
-	out := make([]entry, 0, len(a.ByCategory)*4+4)
+	out := make([]entry, 0, (len(a.ByCategory)+len(a.ByDomain))*4+4)
 	for difficulty, n := range a.Any {
-		out = append(out, entry{Category: 0, Difficulty: difficulty, Count: n})
+		out = append(out, entry{Pick: "all", Category: 0, Difficulty: difficulty, Count: n})
 	}
 	for categoryID, byDiff := range a.ByCategory {
 		for difficulty, n := range byDiff {
-			out = append(out, entry{Category: categoryID, Difficulty: difficulty, Count: n})
+			out = append(out, entry{
+				Pick:       fmt.Sprintf("c:%d", categoryID),
+				Category:   categoryID,
+				Difficulty: difficulty,
+				Count:      n,
+			})
+		}
+	}
+	for domainID, byDiff := range a.ByDomain {
+		for difficulty, n := range byDiff {
+			out = append(out, entry{
+				Pick:       fmt.Sprintf("d:%d", domainID),
+				Difficulty: difficulty,
+				Count:      n,
+			})
 		}
 	}
 	// Stable order keeps the rendered attribute from churning between requests.
@@ -292,8 +378,18 @@ func availabilityJSON(a repository.Availability) string {
 	return string(encoded)
 }
 
+// setupTitle names the screen for the tab and the history entry. The same
+// template serves a solo round and a challenge, and naming both "Set up your
+// round" left two tasks with one name everywhere a title is read.
+func setupTitle(c Ctx, d SetupData) string {
+	if d.Opponent != nil || d.Match {
+		return c.T("challenge.new")
+	}
+	return c.T("game.setup.title")
+}
+
 templ Setup(c Ctx, d SetupData) {
-	@Base(c, c.T("game.setup.title")) {
+	@Base(c, setupTitle(c, d)) {
 		<div class="shell shell--narrow stack">
 			if d.Opponent != nil {
 				@BackLink(c, "/challenges", c.T("challenge.title"))
@@ -301,7 +397,7 @@ templ Setup(c Ctx, d SetupData) {
 				@BackLink(c, "/app", c.T("nav.home"))
 			}
 			if d.Opponent != nil {
-				<div class="card row" style="gap:14px">
+				<div class="card row" style="gap:var(--s-7)">
 					@Avatar(d.Opponent, "md")
 					<div>
 						<div class="eyebrow">{ c.T("challenge.new") }</div>
@@ -339,6 +435,7 @@ templ Setup(c Ctx, d SetupData) {
 					class="stack"
 					data-setup
 					data-availability={ availabilityJSON(d.Availability) }
+					x-data="sourcePick"
 				>
 					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
 					if d.RematchOf != "" {
@@ -433,6 +530,11 @@ templ Setup(c Ctx, d SetupData) {
 							// number in it — so the option is disabled until a
 							// third person is ticked, with the reason beside
 							// it rather than a refusal after the fact.
+							// The component wraps the picker and the panel it
+							// shows: the policy-safe build has no expressions,
+							// so the panel asks a named getter on a parent
+							// rather than re-reading the radio itself.
+							<div x-data="matchFormat" x-on:change="choose">
 							<div class="choice-grid" data-format-pick>
 								<label class="chip-radio">
 									<input type="radio" name="format" value="duel" checked?={ d.Format != models.FormatTeam }/>
@@ -452,7 +554,7 @@ templ Setup(c Ctx, d SetupData) {
 							<p class="tiny muted" data-format-locked hidden>
 								{ c.T("challenge.teamsLocked", models.MinTeamPlayers) }
 							</p>
-							<div class="teams" data-team-pane hidden?={ d.Format != models.FormatTeam }>
+							<div class="teams" data-team-pane x-show="teams" hidden?={ d.Format != models.FormatTeam }>
 								<p class="tiny muted">{ c.T("challenge.teamsHint") }</p>
 								<label class="field field--inline">
 									<span class="label">{ c.T("challenge.yourSide") }</span>
@@ -479,6 +581,7 @@ templ Setup(c Ctx, d SetupData) {
 								// finished.
 								<p class="tiny" data-team-split hidden>{ c.T("challenge.sideTooSmall", models.MinPerSide) }</p>
 							</div>
+							</div>
 						</div>
 					} else if d.Opponent != nil {
 						<input type="hidden" name="opponent" value={ d.Opponent.Username }/>
@@ -494,7 +597,7 @@ templ Setup(c Ctx, d SetupData) {
 								{ c.T("challenge.source") }
 								<span class="tiny faint">{ c.T("challenge.sourceHint") }</span>
 							</span>
-							<div class="choice-grid" data-source-pick>
+							<div class="choice-grid" data-source-pick x-on:change="choose">
 								<label class="chip-radio">
 									<input type="radio" name="source" value="bank" checked/>
 									<span class="chip-radio__face">
@@ -521,7 +624,7 @@ templ Setup(c Ctx, d SetupData) {
 					}
 					// Questions you have already written, kept from before.
 					if len(d.Sets) > 0 {
-						<div class="field" data-source-pane="set" hidden?={ d.Source != "set" }>
+						<div class="field" data-source-pane="set" x-data="sourcePane" x-show="shown" hidden?={ d.Source != "set" }>
 							<span class="label">{ c.T("sets.useSet") }</span>
 							<div class="choice-grid">
 								<label class="chip-radio">
@@ -559,46 +662,91 @@ templ Setup(c Ctx, d SetupData) {
 					// anybody's solo round and never reach the bank: the people
 					// who see them are the friends you invited.
 					if len(d.Friends) > 0 {
-						<div class="authored" data-source-pane="write" hidden?={ d.Source != "write" }>
+						<div class="authored" data-source-pane="write" x-data="sourcePane" x-show="shown" hidden?={ d.Source != "write" }>
+							<div x-data="authoredQuestions">
 							<div class="authored__summary">
 								{ c.T("challenge.writeOwn") }
 								<span class="tiny faint">{ c.T("challenge.writeOwnAtLeast", models.MinSetQuestions) }</span>
 							</div>
-							<div class="authored__rows" data-authored>
+							<div class="authored__rows" data-authored x-ref="rows">
 								@authoredRow(c, 0, DraftRow{})
 							</div>
-							<button class="btn btn--ghost btn--sm" type="button" data-authored-add>
+							<button
+								class="btn btn--ghost btn--sm"
+								type="button"
+								data-authored-add
+								x-on:click="add"
+								x-bind:disabled="full"
+							>
 								{ c.T("challenge.addQuestion") }
 							</button>
+							</div>
 						</div>
 					}
-					<div class="field" data-source-pane="bank" hidden?={ d.Source != "" && d.Source != "bank" }>
-						<span class="label">{ c.T("game.setup.category") }</span>
-						<div class="choice-grid choice-grid--tight">
-							@catRadio(c, 0, "🎲", c.T("game.setup.category.all"), d.SelectedCat == 0, d.Availability.Count(0, 0))
-							for _, cat := range d.Categories {
-								@catRadio(c, cat.ID, cat.Icon, cat.Name, d.SelectedCat == cat.ID, d.Availability.Count(cat.ID, 0))
+					<div class="field" data-source-pane="bank" x-data="sourcePane" x-show="shown" hidden?={ d.Source != "" && d.Source != "bank" }>
+						if d.Grouped() {
+							<span class="label">{ c.T("game.setup.subject") }</span>
+						} else {
+							<span class="label">{ c.T("game.setup.category") }</span>
+						}
+						// One list, one choice. A subject area and a category are
+						// alternatives — picking a category has already picked
+						// the area above it — so asking twice would let the two
+						// answers disagree, and with no script there would be
+						// nothing to keep them in step.
+						<div class="choice-grid choice-grid--tight choice-grid--names">
+							@pickRadio(c, "all", "🎲", c.T("game.setup.category.all"), d.SelectedCat == 0 && d.SelectedDomain == 0, d.Availability.Count(0, 0))
+							if d.Grouped() {
+								for _, dom := range d.Domains {
+									@pickRadio(c, fmt.Sprintf("d:%d", dom.ID), dom.Icon,
+										c.T("game.setup.domain.all", dom.Name),
+										d.SelectedDomain == dom.ID,
+										d.Availability.InDomain(dom.ID, 0))
+									for _, cat := range d.InDomain(dom.ID) {
+										@pickRadio(c, fmt.Sprintf("c:%d", cat.ID), cat.Icon, cat.Name,
+											d.SelectedCat == cat.ID, d.Availability.Count(cat.ID, 0))
+									}
+								}
+							} else {
+								for _, cat := range d.Categories {
+									@pickRadio(c, fmt.Sprintf("c:%d", cat.ID), cat.Icon, cat.Name,
+										d.SelectedCat == cat.ID, d.Availability.Count(cat.ID, 0))
+								}
 							}
 						</div>
 					</div>
-					<div class="field" data-source-pane="bank" hidden?={ d.Source != "" && d.Source != "bank" }>
+					<div class="field" data-source-pane="bank" x-data="sourcePane" x-show="shown" hidden?={ d.Source != "" && d.Source != "bank" }>
 						<span class="label">{ c.T("game.setup.difficulty") }</span>
 						// Difficulties the chosen category cannot fill are disabled, not
 						// hidden: a thin bank should be visible here rather than
 						// discovered by pressing Start and being refused.
 						<div class="choice-grid choice-grid--tight">
 							for _, level := range difficultyChoices {
-								@diffRadio(c, level.Level, level.Icon, d.SelectedDiff == level.Level, d.Availability.Count(d.SelectedCat, level.Level))
+								@diffRadio(c, level.Level, level.Icon, d.SelectedDiff == level.Level, d.AvailableAt(level.Level))
 							}
 						</div>
-						<span class="tiny muted" data-setup-note role="status"></span>
+						<span class="tiny muted" data-setup-note role="status">{ d.SetupNote(c) }</span>
 					</div>
 					// How long the round is applies to anything drawn. Questions
 					// written here and now are the round, so there is nothing to
 					// choose.
-					<div class="field" data-source-pane="bank set" hidden?={ d.Source == "write" }>
+					<div class="field" data-source-pane="bank set" x-data="sourcePane" x-show="shown" hidden?={ d.Source == "write" }>
 						<label class="label" for="count">{ c.T("game.setup.length") }</label>
-						<select class="select" id="count" name="count" data-setup-count>
+						<select
+							class="select"
+							id="count"
+							name="count"
+							data-setup-count
+							disabled?={ d.LengthUnavailable() }
+						>
+							// What the closed menu shows when no length is
+							// reachable. A select with every option disabled
+							// and none selected draws as an empty box, which
+							// is a field the player cannot fill and cannot
+							// see is dead. Hidden and disabled, so it is never
+							// in the list and never chosen: the moment one
+							// real length is reachable it is what shows.
+							<option value="" data-placeholder disabled hidden selected?={ d.LengthUnavailable() }>—</option>
 							for _, option := range countOptions {
 								<option
 									value={ fmt.Sprint(option) }
@@ -650,7 +798,12 @@ templ Setup(c Ctx, d SetupData) {
 							hidden?={ d.Picked() >= models.MinChallengePlayers }
 						>{ c.T("challenge.needTwoHint") }</p>
 					} else {
-						<button class="btn btn--primary btn--block btn--lg" type="submit">
+						<button
+							class="btn btn--primary btn--block btn--lg"
+							type="submit"
+							data-setup-submit
+							disabled?={ d.LengthUnavailable() }
+						>
 							{ c.T("game.setup.startPlay") }
 						</button>
 					}
@@ -673,12 +826,19 @@ var difficultyChoices = []struct {
 	{3, "💎"},
 }
 
-templ catRadio(c Ctx, id int, icon, name string, checked bool, available int) {
+// pickRadio is one entry in the single what-to-draw-from list. Its value says
+// which level of the taxonomy it names — "all", "d:7" or "c:12" — because the
+// form posts one field and the server has to know whether it was handed a
+// subject area or a category.
+//
+// The old field is still accepted by the handler, so a link carrying
+// ?category=3 keeps working.
+templ pickRadio(c Ctx, value, icon, name string, checked bool, available int) {
 	<label class={ "chip-radio", templ.KV("is-empty", available < service.MinQuestions) }>
 		<input
 			type="radio"
-			name="category"
-			value={ fmt.Sprint(id) }
+			name="pick"
+			value={ value }
 			checked?={ checked }
 			disabled?={ available < service.MinQuestions }
 			data-setup-category
@@ -878,7 +1038,7 @@ templ Round(c Ctx, d RoundData) {
 				// it is a judgement about a question you have just answered, not a
 				// vote you cast before reading it. A number where the note is
 				// prose — nobody has to read it for a bad question to surface.
-				<div class="q-rate" data-rate hidden>
+				<div class="q-rate" data-rate x-data="questionRating" hidden>
 					<span class="tiny muted">{ c.T("rating.prompt") }</span>
 					<div class="stars" role="radiogroup" aria-label={ c.T("rating.prompt") }>
 						for i := 1; i <= models.MaxStars; i++ {
@@ -890,28 +1050,36 @@ templ Round(c Ctx, d RoundData) {
 								data-star={ fmt.Sprint(i) }
 								aria-label={ c.T("rating.stars", i) }
 								title={ c.T("rating.stars", i) }
+								x-data="ratingStar"
+								x-bind:class="litClass"
+								x-bind:aria-checked="checked"
+								x-on:mouseenter="preview"
+								x-on:mouseleave="clear"
+								x-on:focus="preview"
+								x-on:click="choose"
 							>★</button>
 						}
 					</div>
-					<span class="tiny muted" data-rate-status role="status"></span>
+					<span class="tiny muted" data-rate-status role="status" x-text="status"></span>
 				</div>
-				<details class="q-note" data-note hidden>
+				<details class="q-note" data-note x-data="questionNote" hidden>
 					<summary>{ c.T("comments.inRound") }</summary>
 					<textarea
 						class="textarea"
 						data-note-body
+						x-ref="body"
 						rows="3"
 						maxlength="2000"
 						placeholder={ c.T("comments.placeholder") }
 					></textarea>
-					<div class="row" style="justify-content:flex-end;gap:8px">
-						<span class="tiny muted" data-note-status role="status"></span>
-						<button class="btn btn--soft btn--sm" type="button" data-note-save>
+					<div class="row" style="justify-content:flex-end;gap:var(--s-4)">
+						<span class="tiny muted" data-note-status role="status" x-text="status"></span>
+						<button class="btn btn--soft btn--sm" type="button" data-note-save x-ref="save" x-on:click="save">
 							{ c.T("comments.post") }
 						</button>
 					</div>
 				</details>
-				<div class="row" style="margin-block-start:20px;justify-content:flex-end;gap:10px">
+				<div class="row" style="margin-block-start:20px;justify-content:flex-end;gap:var(--s-5)">
 					// Picking an answer only selects it. The clock keeps running until
 					// this button is pressed, so the player can change their mind.
 					<button class="btn btn--primary btn--lg" type="button" data-confirm-answer disabled>
@@ -1047,7 +1215,7 @@ templ Result(c Ctx, d ResultData) {
 					<span>{ c.T("guest.keepProgress") }</span>
 				</div>
 			}
-			<section class="row row--wrap" style="gap:10px">
+			<section class="row row--wrap gap-5">
 				<a class="btn btn--primary" href="/play">{ c.T("result.playAgain") }</a>
 				<a class="btn btn--ghost" href={ templ.SafeURL("/history/" + d.Session.ID.String()) }>
 					{ c.T("result.review") }
@@ -1208,4 +1376,3 @@ templ playerPick(c Ctx, friend *models.UserCard, on bool) {
 		</span>
 	</label>
 }
-

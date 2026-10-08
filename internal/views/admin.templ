@@ -8,9 +8,38 @@ import (
 )
 
 // The admin shell: navigation, chrome, and the pieces every admin screen uses.
+
+// adminSprite is where the admin icon set is served from. One file referenced
+// by <use> rather than seventy inline templs: the admin draws the same handful
+// of shapes on every screen, and a sprite the browser caches once is the
+// difference between a page of markup and a page of icons.
+//
+// Unversioned on purpose. Every <use> in the document resolves against this
+// URL, and a query string on it would make the sprite a separate fetch per
+// page build rather than one cached file — the asset hash moves whenever the
+// sprite does, and the pages that reference it are never cached.
+const adminSprite = "/static/admin/icons.svg"
+
+// adminIcon renders one symbol from the sprite.
+//
+// Always aria-hidden: an icon in this interface sits beside the label it
+// illustrates or inside a control that carries its own aria-label, so a screen
+// reader announcing it would read everything twice.
+templ adminIcon(name, class string) {
+	<svg class={ "icon", class } aria-hidden="true">
+		<use href={ adminSprite + "#" + name }></use>
+	</svg>
+}
+
+// The admin shell: navigation, chrome, and the pieces every admin screen uses.
 // AdminChrome is the admin-only navigation state.
 type AdminChrome struct {
-	Path            string
+	Path string
+	// IsAdmin decides which navigation entries are offered. A moderator
+	// reaches the content half of this area; the three destinations behind
+	// RequireAdmin answer 404 for them, and a link that 404s is a link that
+	// tells them the route exists.
+	IsAdmin         bool
 	PendingReview   int
 	AwaitingSupport int
 	// PoorlyRated is how many questions players have marked down far enough to
@@ -27,53 +56,576 @@ func (a AdminChrome) On(prefix string) bool {
 	return strings.HasPrefix(a.Path, prefix)
 }
 
-// adminShell wraps every admin screen with its own sidebar navigation.
+// adminNav is the console's navigation, in the order the sidebar shows it.
+//
+// One list, read five times: the sidebar draws from it, the breadcrumb takes
+// the current entry's group and label from it, the document's data-page comes
+// from its Page, and the active state is decided by matching against it. Those
+// were four separate pieces of knowledge about the same eleven screens, which
+// is four places for a renamed route to be half-updated.
+type adminNavGroup struct {
+	LabelKey string
+	Items    []adminNavItem
+}
+
+type adminNavItem struct {
+	Href     string
+	Icon     string
+	LabelKey string
+	// Page is the document's data-page value. The kit's script keys its
+	// review-queue shortcuts off it.
+	Page string
+	// AdminOnly keeps an entry off a moderator's sidebar. The route answers
+	// 404 for them, and an entry that 404s on click is an entry that tells
+	// them the route is there.
+	AdminOnly bool
+	// Badge names which count in the chrome this entry carries, and Hot
+	// whether that count is urgent enough to be gold rather than grey.
+	Badge func(AdminChrome) int
+	Hot   bool
+}
+
+func adminNavigation() []adminNavGroup {
+	return []adminNavGroup{
+		{LabelKey: "admin.nav.group.overview", Items: []adminNavItem{
+			{Href: "/admin", Icon: "i-dashboard", LabelKey: "admin.nav.dashboard", Page: "dashboard"},
+		}},
+		{LabelKey: "admin.nav.group.people", Items: []adminNavItem{
+			{Href: "/admin/users", Icon: "i-users", LabelKey: "admin.nav.users", Page: "users", AdminOnly: true},
+			{Href: "/admin/support", Icon: "i-support", LabelKey: "admin.nav.support", Page: "support",
+				Badge: func(a AdminChrome) int { return a.AwaitingSupport }, Hot: true},
+		}},
+		{LabelKey: "admin.nav.group.content", Items: []adminNavItem{
+			{Href: "/admin/domains", Icon: "i-globe", LabelKey: "admin.nav.domains", Page: "domains", AdminOnly: true},
+			{Href: "/admin/categories", Icon: "i-layers", LabelKey: "admin.nav.categories", Page: "categories"},
+			{Href: "/admin/questions", Icon: "i-question", LabelKey: "admin.nav.questions", Page: "questions"},
+		}},
+		{LabelKey: "admin.nav.group.moderation", Items: []adminNavItem{
+			{Href: "/admin/review", Icon: "i-review", LabelKey: "admin.nav.review", Page: "review",
+				Badge: func(a AdminChrome) int { return a.PendingReview }, Hot: true},
+			{Href: "/admin/comments", Icon: "i-comment", LabelKey: "admin.nav.comments", Page: "comments"},
+			{Href: "/admin/rated", Icon: "i-thumbs-down", LabelKey: "admin.nav.rated", Page: "rated",
+				Badge: func(a AdminChrome) int { return a.PoorlyRated }},
+		}},
+		{LabelKey: "admin.nav.group.system", Items: []adminNavItem{
+			{Href: "/admin/integrity", Icon: "i-shield-check", LabelKey: "admin.nav.integrity", Page: "integrity"},
+			{Href: "/admin/audit", Icon: "i-history", LabelKey: "admin.nav.audit", Page: "audit", AdminOnly: true},
+		}},
+	}
+}
+
+// current is the entry the path is on, and the group it sits in.
+//
+// The longest matching Href wins, so /admin/questions/new is the questions
+// screen rather than the dashboard — which is what matching "/admin" as a
+// prefix would make everything.
+func (a AdminChrome) current() (adminNavGroup, adminNavItem, bool) {
+	var bestGroup adminNavGroup
+	var best adminNavItem
+	found := false
+	for _, group := range adminNavigation() {
+		for _, item := range group.Items {
+			if !a.On(item.Href) {
+				continue
+			}
+			if !found || len(item.Href) > len(best.Href) {
+				bestGroup, best, found = group, item, true
+			}
+		}
+	}
+	return bestGroup, best, found
+}
+
+// Page is the document's data-page value, empty on a screen that is not a nav
+// destination of its own.
+func (a AdminChrome) Page() string {
+	_, item, ok := a.current()
+	if !ok {
+		return ""
+	}
+	return item.Page
+}
+
+// Visible reports whether this entry belongs on the sidebar for this reader.
+func (a AdminChrome) Visible(item adminNavItem) bool { return a.IsAdmin || !item.AdminOnly }
+
+// Count is the badge this entry carries, zero when it carries none. A zero is
+// hidden rather than drawn: "0 waiting" is not news.
+func (a AdminChrome) Count(item adminNavItem) int {
+	if item.Badge == nil {
+		return 0
+	}
+	return item.Badge(a)
+}
+
+// ------------------------------------------------------------------ shell --
+
+// adminBase is the console's own document.
+//
+// Not the player's Base. The admin had been rendering inside it, which put the
+// player's top navigation — Home, Play, Challenges — above every admin screen
+// and the player's tab bar below it on a phone: two different navigations for
+// two different jobs, stacked. This document carries the console's stylesheet,
+// its icon sprite and its script, and nothing of the player's chrome except
+// the way back, which is the "Open Sirāj" link in the top bar.
+templ adminBase(c Ctx, a AdminChrome, title string) {
+	<!DOCTYPE html>
+	<html lang={ c.Locale } dir={ c.Dir } data-theme={ c.Theme }>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="color-scheme" content="light dark"/>
+			<title>{ title } · { c.T("admin.title") } · { c.T("app.name") }</title>
+			// The console's sheets, and deliberately not the player's.
+			//
+			// The two share thirty-nine class names — .nav, .brand, .btn,
+			// .table, .panel, .field, .page-head, .avatar and the rest — and
+			// loading both cannot be made safe by ordering. A later rule only
+			// wins the properties it declares: the kit's .nav sets flex,
+			// overflow and padding, so app.css's .nav kept supplying position,
+			// background, backdrop-filter and `height: var(--nav-h)` — which
+			// clamped the whole sidebar navigation to the height of the
+			// player's top bar and clipped every item below the first.
+			//
+			// Whatever the shared form components need from app.css is ported
+			// into admin-app.css instead, scoped to this shell.
+			<link rel="stylesheet" href={ c.Asset("/static/admin/admin.css") }/>
+			<link rel="stylesheet" href={ c.Asset("/static/admin/admin-app.css") }/>
+			<link rel="icon" href={ c.Asset("/static/img/favicon.svg") } type="image/svg+xml"/>
+			// The kit asks for its fonts from a Google stylesheet. This policy
+			// is script-src/font-src 'self' with no third-party origin, and the
+			// player's own sheet names Inter the same way without fetching it —
+			// so the stack in admin.css falls through to the system font rather
+			// than the page quietly failing two blocked requests.
+			@themeBoot(c)
+		</head>
+		<body data-page={ a.Page() }>
+			<a class="skip-link" href="#main">{ c.T("common.skipToContent") }</a>
+			{ children... }
+			// The kit creates both of these on demand if they are absent;
+			// writing them means the first toast does not reflow the page.
+			<div class="scrim"></div>
+			<div class="toasts" aria-live="polite"></div>
+			// The kit's behaviours, and the application's.
+			//
+			// Both, because the admin screens are built from both. The kit
+			// draws the drawers, menus, tabs and sorting; the application owns
+			// the destructive-action confirmations, the bulk selection on the
+			// question bank, the live refresh on the support inbox, and every
+			// Alpine component the admin forms are made of — the colour field,
+			// the canned replies, the source picker. Loading only the kit's
+			// script silently took all of those away, including the
+			// confirmation in front of a cascade delete.
+			//
+			// They no longer collide: the one handler both scripts bound, the
+			// theme toggle, has been taken out of the kit's copy.
+			<script src={ c.Asset("/static/admin/admin.js") } defer></script>
+			// The behaviours the kit draws controls for and leaves inert:
+			// the category reorder, the domain narrowing, and the top bar's
+			// search. Its own file so the kit's stays replaceable.
+			<script src={ c.Asset("/static/admin/admin-console.js") } defer></script>
+			@script(c)
+		</body>
+	</html>
+}
+
+// adminShell wraps every admin screen in the console: sidebar, top bar,
+// breadcrumb, and the page itself.
 templ adminShell(c Ctx, a AdminChrome, title string) {
-	@Base(c, title) {
-		<div class="shell shell--wide">
-			@BackLink(c, "/app", c.T("nav.home"))
-			<div class="admin">
-				<nav class="admin__nav" aria-label={ c.T("admin.title") }>
-					@adminNavLink(c, a, "/admin", "📊", c.T("admin.nav.dashboard"), 0)
-					@adminNavLink(c, a, "/admin/users", "👥", c.T("admin.nav.users"), 0)
-					@adminNavLink(c, a, "/admin/support", "🎧", c.T("admin.nav.support"), a.AwaitingSupport)
-					@adminNavLink(c, a, "/admin/questions", "❓", c.T("admin.nav.questions"), 0)
-					@adminNavLink(c, a, "/admin/review", "🔍", c.T("admin.nav.review"), a.PendingReview)
-					@adminNavLink(c, a, "/admin/comments", "💬", c.T("admin.nav.comments"), 0)
-					@adminNavLink(c, a, "/admin/rated", "⭐", c.T("admin.nav.rated"), a.PoorlyRated)
-					@adminNavLink(c, a, "/admin/integrity", "🧹", c.T("admin.nav.integrity"), 0)
-					@adminNavLink(c, a, "/admin/audit", "📋", c.T("admin.nav.audit"), 0)
-				</nav>
-				<div class="admin__body stack">
-					<h1 style="font-size:1.5rem">{ title }</h1>
+	@adminBase(c, a, title) {
+		<div class="app">
+			@adminSidebar(c, a)
+			<div class="main">
+				@adminTopbar(c, a, title)
+				<main class="page" id="main">
+					if c.Flash != nil {
+						// Rendered rather than toasted: a flash arrives on a
+						// fresh document after a redirect, and a toast that
+						// fades is the wrong shape for "this is why the thing
+						// you pressed did not happen".
+						<div class={ "callout", adminFlashClass(c.Flash.Kind) } role="status">
+							@adminIcon(adminFlashIcon(c.Flash.Kind), "")
+							<div><p>{ c.Flash.Text }</p></div>
+						</div>
+					}
 					{ children... }
-				</div>
+				</main>
 			</div>
 		</div>
 	}
 }
 
-templ adminNavLink(c Ctx, a AdminChrome, href, icon, label string, badge int) {
+templ adminSidebar(c Ctx, a AdminChrome) {
+	<aside class="sidebar" aria-label={ c.T("admin.title") }>
+		<a class="brand" href="/admin">
+			<span class="brand-mark">@adminBrandMark()</span>
+			<span>
+				<span class="brand-name">{ c.T("app.name") }</span>
+				<span class="brand-sub">{ c.T("admin.title") }</span>
+			</span>
+		</a>
+		<nav class="nav">
+			for _, group := range adminNavigation() {
+				if a.groupVisible(group) {
+					<div class="nav-group">
+						<div class="nav-label">{ c.T(group.LabelKey) }</div>
+						for _, item := range group.Items {
+							if a.Visible(item) {
+								@adminNavLink(c, a, item)
+							}
+						}
+					</div>
+				}
+			}
+		</nav>
+		if c.User != nil {
+			<div class="side-foot">
+				<span class="avatar" aria-hidden="true">{ adminInitials(c.User) }</span>
+				<span class="who">
+					<b class="truncate">{ c.User.DisplayName }</b>
+					<span>{ c.T(models.RoleLabelKey(c.User.Role)) }</span>
+				</span>
+				<form method="post" action="/logout">
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<button
+						class="icon-btn sm"
+						type="submit"
+						aria-label={ c.T("nav.logout") }
+						title={ c.T("nav.logout") }
+					>
+						@adminIcon("i-logout", "icon-sm")
+					</button>
+				</form>
+			</div>
+		}
+	</aside>
+}
+
+// groupVisible hides a whole section when every entry in it is admin-only and
+// the reader is a moderator — otherwise the sidebar carries a heading with
+// nothing under it.
+func (a AdminChrome) groupVisible(group adminNavGroup) bool {
+	for _, item := range group.Items {
+		if a.Visible(item) {
+			return true
+		}
+	}
+	return false
+}
+
+templ adminNavLink(c Ctx, a AdminChrome, item adminNavItem) {
 	<a
-		class={ "admin__nav-link", templ.KV("is-active", a.On(href)) }
-		href={ templ.SafeURL(href) }
+		class={ "nav-item", templ.KV("is-active", a.On(item.Href)) }
+		href={ templ.SafeURL(item.Href) }
+		if a.On(item.Href) {
+			aria-current="page"
+		}
 	>
-		<span aria-hidden="true">{ icon }</span>
-		<span class="truncate">{ label }</span>
-		if badge > 0 {
-			<span class="count-dot">{ fmt.Sprint(badge) }</span>
+		@adminIcon(item.Icon, "")
+		<span>{ c.T(item.LabelKey) }</span>
+		if n := a.Count(item); n > 0 {
+			<span class={ "nav-count", templ.KV("is-hot", item.Hot) }>{ fmt.Sprint(n) }</span>
 		}
 	</a>
 }
 
-// coverageCell colours the count against the 100-per-difficulty target, so
-// the thin spots are obvious at a glance.
-templ coverageCell(n int) {
-	<td>
-		<span class={ "tag", coverageClass(n) }>
-			<span class="num">{ fmt.Sprint(n) }</span>
-		</span>
+templ adminTopbar(c Ctx, a AdminChrome, title string) {
+	<header class="topbar">
+		<button class="icon-btn menu-btn" type="button" data-nav-toggle aria-label={ c.T("admin.nav.open") }>
+			@adminIcon("i-menu", "")
+		</button>
+		<nav class="crumbs" aria-label={ c.T("common.breadcrumb") }>
+			<a href="/admin">{ c.T("admin.title") }</a>
+			if group, _, ok := a.current(); ok {
+				@adminIcon("i-chevron-right", "icon-flip")
+				<span>{ c.T(group.LabelKey) }</span>
+			}
+			@adminIcon("i-chevron-right", "icon-flip")
+			<b>{ title }</b>
+		</nav>
+		@adminTopSearch(c)
+		<div class="top-actions">
+			<a class="btn btn-ghost btn-sm open-app" href="/app">
+				@adminIcon("i-external", "icon-sm")
+				{ c.T("admin.openApp") }
+			</a>
+			// The application's own theme control, not the kit's: one owner
+			// for the whole application, and three states rather than two —
+			// "follow the system" is a choice the kit's switch could not
+			// express. app.js swaps the visible icon and the label; rendering
+			// the hidden ones server-side keeps all three from flashing before
+			// the script arrives.
+			<button
+				class="icon-btn"
+				type="button"
+				data-theme-toggle
+				aria-label={ ThemeLabel(c, c.CurrentTheme()) }
+				title={ ThemeLabel(c, c.CurrentTheme()) }
+				data-label-system={ ThemeLabel(c, "system") }
+				data-label-light={ ThemeLabel(c, "light") }
+				data-label-dark={ ThemeLabel(c, "dark") }
+			>
+				<span class="theme-icon" data-theme-slot="system" hidden?={ c.CurrentTheme() != "system" }>
+					@adminIcon("i-monitor", "")
+				</span>
+				<span class="theme-icon" data-theme-slot="light" hidden?={ c.CurrentTheme() != "light" }>
+					@adminIcon("i-sun", "")
+				</span>
+				<span class="theme-icon" data-theme-slot="dark" hidden?={ c.CurrentTheme() != "dark" }>
+					@adminIcon("i-moon", "")
+				</span>
+			</button>
+			<a
+				class={ "icon-btn", templ.KV("dot-badge", c.Notifications > 0) }
+				href="/notifications"
+				aria-label={ c.T("nav.notifications") }
+			>
+				@adminIcon("i-bell", "")
+			</a>
+		</div>
+	</header>
+}
+
+// adminTopSearch is the one field that crosses the areas.
+//
+// The results are fetched rather than filtered in the page: what it searches
+// is the whole bank, every account and every ticket, and none of those are on
+// the page it is being typed into. With no script it is a plain form that
+// submits to the question browser, which is the single most likely thing
+// somebody is looking for.
+templ adminTopSearch(c Ctx) {
+	<form class="top-search" method="get" action="/admin/questions" role="search">
+		<label class="sr-only" for="admin-q">{ c.T("admin.search.label") }</label>
+		@adminIcon("i-search", "icon-sm")
+		<input
+			id="admin-q"
+			type="search"
+			name="q"
+			placeholder={ c.T("admin.search.placeholder") }
+			autocomplete="off"
+			data-admin-search="/admin/search"
+		/>
+		<span class="kbd">Ctrl K</span>
+		<div class="search-panel" id="admin-search-panel" hidden></div>
+	</form>
+}
+
+// adminBrandMark is the lamp, which is what Sirāj means. Inline rather than in
+// the sprite: it is the one piece of artwork here that carries its own colours
+// instead of following the text.
+templ adminBrandMark() {
+	<svg viewBox="0 0 24 24" aria-hidden="true">
+		<circle cx="19.6" cy="6.4" r="4.2" fill="#ffd885" opacity=".22"></circle>
+		<path d="M19.7 2.4c1.5 1.8 1.9 3.2 1.3 4.5-.4.8-1.2 1.1-1.9.8-.9-.4-1-1.5-.3-2.6.5-.7.8-1.5.9-2.7z" fill="#ffd885"></path>
+		<path d="M2 12.6h13.1c1.5 0 2.5-.5 3.4-1.4l1.9-1.8c.3-.3.8 0 .6.4-.9 2.4-2.9 6.1-8.3 6.1H7.6c-2.9 0-4.9-1.3-5.6-3.3z" fill="#e8b65a"></path>
+		<path d="M2.1 12.6c-.6-1.4.1-2.8 1.5-3.1" fill="none" stroke="#e8b65a" stroke-width="1.5" stroke-linecap="round"></path>
+		<path d="M8.6 15.9 7.5 19.6h7.2l-1.1-3.7z" fill="#c48f2f"></path>
+		<path d="M6.5 20.4h9.2" stroke="#e8b65a" stroke-width="1.5" stroke-linecap="round"></path>
+	</svg>
+}
+
+// adminInitials is the one or two letters the avatar carries.
+//
+// Two words give two initials, one gives one. Taken from runes rather than
+// bytes: an Arabic display name is the common case here, and the first byte of
+// one is half a letter.
+func adminInitials(u *models.User) string {
+	name := strings.TrimSpace(u.DisplayName)
+	if name == "" {
+		name = u.Username
+	}
+	parts := strings.Fields(name)
+	if len(parts) == 0 {
+		return "?"
+	}
+	out := string([]rune(parts[0])[:1])
+	if len(parts) > 1 {
+		out += string([]rune(parts[len(parts)-1])[:1])
+	}
+	return strings.ToUpper(out)
+}
+
+// adminFlashClass and adminFlashIcon map the four flash kinds onto the kit's
+// callout, which has three. A warning and an error are the same shape to a
+// reader — something did not happen — and the text says which.
+func adminFlashClass(kind string) string {
+	switch kind {
+	case "success":
+		return "success"
+	case "error", "warning":
+		return "danger"
+	default:
+		// No modifier: the kit's plain callout *is* the informational one, and
+		// a name invented for it here would style nothing.
+		return ""
+	}
+}
+
+func adminFlashIcon(kind string) string {
+	switch kind {
+	case "success":
+		return "i-check-circle"
+	case "error", "warning":
+		return "i-alert"
+	default:
+		return "i-info"
+	}
+}
+
+// adminPager is the console's list navigation.
+//
+// The same Pager the player's lists use — one description of "where you are in
+// how many rows" for the whole application — drawn with the kit's buttons and
+// tokens, because the admin document does not link the sheet the player's
+// pager is styled by.
+templ adminPager(c Ctx, p Pager) {
+	if p.Total > 0 {
+		<div class="pager">
+			<span class="pager__count">{ c.T("common.showing", p.First, p.Last, p.Total) }</span>
+			<div class="pager__sizes" role="group" aria-label={ c.T("common.rowsPerPage") }>
+				<span>{ c.T("common.rowsPerPage") }</span>
+				for _, size := range p.Sizes {
+					if size == p.Size {
+						<span class="pager__size is-on" aria-current="true">{ fmt.Sprint(size) }</span>
+					} else {
+						<a class="pager__size" href={ templ.SafeURL(p.SizeHref(size)) }>{ fmt.Sprint(size) }</a>
+					}
+				}
+			</div>
+			if p.Pages > 1 {
+				<div class="pager__pages">
+					if p.Page > 1 {
+						<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(p.PageHref(p.Page - 1)) }>
+							@adminIcon("i-chevron-left", "icon-sm icon-flip")
+							{ c.T("common.back") }
+						</a>
+					}
+					<span class="pager__at">{ fmt.Sprintf("%d / %d", p.Page, p.Pages) }</span>
+					if p.Page < p.Pages {
+						<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(p.PageHref(p.Page + 1)) }>
+							{ c.T("game.next") }
+							@adminIcon("i-chevron-right", "icon-sm icon-flip")
+						</a>
+					}
+				</div>
+			}
+		</div>
+	}
+}
+
+// adminEmpty is the kit's empty state: what is not here and, where there is
+// one, the thing to press about it.
+templ adminEmpty(c Ctx, icon, title, detail string) {
+	<div class="empty">
+		<div class="empty-icon">@adminIcon(icon, "icon-lg")</div>
+		<h3>{ title }</h3>
+		if detail != "" {
+			<p>{ detail }</p>
+		}
+		{ children... }
+	</div>
+}
+
+// sortHeader is a column header you can sort by, on a list the server orders.
+//
+// A link, not a button: the sort is part of the address, so it survives a
+// reload, can be shared, and comes back when the browser is sent forward and
+// back. It carries every other parameter with it, because a sort that drops
+// the filter sorts a different list than the one being read.
+//
+// descFirst is what the first press asks for. A name reads A to Z; a count, a
+// date and a score read largest and newest first, because that is the end of
+// them anybody is looking for.
+templ sortHeader(c Ctx, s SortState, h SortCol) {
+	<th
+		scope="col"
+		class={ h.Class, templ.KV("t-num", h.Numeric) }
+		if dir := s.Sort.Direction(h.Column); dir != "" {
+			aria-sort={ dir }
+		}
+	>
+		<a
+			class={ "th-sort", templ.KV("is-on", s.Sort.On(h.Column)) }
+			href={ templ.SafeURL(s.SortHref(h.Column, h.DescFirst)) }
+		>
+			{ h.Label }
+			@sortArrow(s, h.Column)
+		</a>
+	</th>
+}
+
+// sortArrow says which way the column is sorted, and on the columns that are
+// not sorted says only that they can be — a header that looks inert until it
+// is hovered is a header nobody presses.
+templ sortArrow(s SortState, column string) {
+	if !s.Sort.On(column) {
+		@adminIcon("i-sort", "icon-sm th-sort__hint")
+	} else if s.Sort.Desc {
+		@adminIcon("i-chevron-down", "icon-sm")
+	} else {
+		@adminIcon("i-chevron-down", "icon-sm th-sort__up")
+	}
+}
+
+// adminPageHead is the title block every screen opens with: what this screen
+// is, one line about it, and its own actions.
+templ adminPageHead(c Ctx, title, sub string) {
+	<div class="page-head">
+		<div>
+			<h1>{ title }</h1>
+			if sub != "" {
+				<p class="sub">{ sub }</p>
+			}
+		</div>
+		<div class="actions">
+			{ children... }
+		</div>
+	</div>
+}
+
+// coverageTarget is the per-category, per-difficulty goal the table measures
+// against. Named here because the cell draws it as well as compares to it.
+const coverageTarget = 100
+
+// coverageCell is one category at one difficulty: what it holds, against the
+// target, and a way into the list filtered to exactly that.
+//
+// It was a red pill with a bare number in it. With a target of 100 and a bank
+// in single digits every cell in the table was red, and a table where
+// everything is an alarm is a table nobody reads. The bar carries the
+// proportion, the number carries the fact, and the only colour left is for a
+// cell holding nothing at all — the one state an admin can act on directly.
+templ coverageCell(c Ctx, categoryID, difficulty, n int) {
+	// Labelled, because the coverage table collapses into cards on a phone and
+	// three unlabelled numbers in a column say nothing about which difficulty
+	// each one counts.
+	<td data-label={ c.T(DifficultyKey(difficulty)) }>
+		<a
+			class={ "cov", templ.KV("cov--empty", n == 0) }
+			href={ templ.SafeURL(fmt.Sprintf("/admin/questions?category=%d&difficulty=%d", categoryID, difficulty)) }
+			title={ c.T("admin.coverage.help") }
+		>
+			<span class="cov__count">
+				<b class="num">{ fmt.Sprint(n) }</b>
+				<span class="cov__target faint">{ fmt.Sprintf("/ %d", coverageTarget) }</span>
+			</span>
+			<span class="cov__bar" aria-hidden="true">
+				<span class="cov__fill" style={ fmt.Sprintf("width:%d%%", coveragePct(n)) }></span>
+			</span>
+		</a>
 	</td>
+}
+
+// coveragePct is the bar's fill, capped so a category past the target does not
+// overflow its own row.
+func coveragePct(n int) int {
+	if n >= coverageTarget {
+		return 100
+	}
+	if n <= 0 {
+		return 0
+	}
+	return n * 100 / coverageTarget
 }
 
 func (d AdminNewUserData) Err(field string) string {
@@ -153,12 +705,12 @@ templ translateAction(c Ctx, id int, locale string) {
 		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
 		<input type="hidden" name="locale" value={ locale }/>
 		<button
-			class="btn btn--soft btn--sm"
+			class="btn btn-soft btn-sm"
 			type="submit"
 			title={ c.T("admin.review.translateTo", locale) }
 		>
-			<span aria-hidden="true">🌐</span>
-			<span class="num">{ locale }</span>
+			@adminIcon("i-languages", "icon-sm")
+			{ strings.ToUpper(locale) }
 		</button>
 	</form>
 }
@@ -166,21 +718,63 @@ templ translateAction(c Ctx, id int, locale string) {
 // reviewAction is the pair of decisions a reviewer can take on one locale.
 // Approving clears the flag and lets players see it; rejecting deletes the
 // translation, which is why it asks first.
+// reviewAction is the three verdicts on one language of one question.
+//
+// Approve publishes, reject deletes, and "changes" sends it back with a note.
+// The third one is why this is a details rather than a button: the note is
+// required — a change requested with nothing written is indistinguishable from
+// leaving the row alone — so it needs somewhere to be typed, and that
+// somewhere must not be open on every row of the queue at once.
 templ reviewAction(c Ctx, id int, locale string) {
-	<div class="row" style="gap:4px;align-items:center">
-		<span class="tag num">{ locale }</span>
+	<div class="btn-group">
+		<span class="lang">{ strings.ToUpper(locale) }</span>
 		<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/review/%d/approve", id)) }>
 			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
 			<input type="hidden" name="locale" value={ locale }/>
 			<button
-				class="btn btn--soft btn--sm"
+				class="icon-btn sm"
 				type="submit"
+				data-key-approve
 				aria-label={ c.T("admin.review.approve", locale) }
 				title={ c.T("admin.review.approve", locale) }
 			>
-				<span aria-hidden="true">✓</span>
+				@adminIcon("i-check", "")
 			</button>
 		</form>
+		// A disclosure, not the kit's menu: the kit closes every open menu on
+		// any click that is not on a menu trigger, which would shut this one
+		// the moment the note field took focus.
+		<details class="menu-wrap disclosure">
+			<summary
+				class="icon-btn sm"
+				title={ c.T("admin.review.changes", locale) }
+				aria-label={ c.T("admin.review.changes", locale) }
+			>
+				@adminIcon("i-reply", "")
+			</summary>
+			<div class="menu">
+				<form
+					class="menu-form"
+					method="post"
+					action={ templ.SafeURL(fmt.Sprintf("/admin/review/%d/changes", id)) }
+				>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<input type="hidden" name="locale" value={ locale }/>
+					<textarea
+						class="textarea"
+						name="note"
+						rows="3"
+						maxlength="2000"
+						required
+						placeholder={ c.T("admin.review.notePlaceholder") }
+						aria-label={ c.T("admin.review.changes", locale) }
+					></textarea>
+					<button class="btn btn-sm btn-primary" type="submit">
+						{ c.T("admin.review.sendBack") }
+					</button>
+				</form>
+			</div>
+		</details>
 		<form
 			method="post"
 			action={ templ.SafeURL(fmt.Sprintf("/admin/review/%d/reject", id)) }
@@ -189,12 +783,13 @@ templ reviewAction(c Ctx, id int, locale string) {
 			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
 			<input type="hidden" name="locale" value={ locale }/>
 			<button
-				class="btn btn--ghost btn--sm"
+				class="icon-btn sm"
 				type="submit"
+				data-key-reject
 				aria-label={ c.T("admin.review.reject", locale) }
 				title={ c.T("admin.review.reject", locale) }
 			>
-				<span aria-hidden="true">✕</span>
+				@adminIcon("i-x", "")
 			</button>
 		</form>
 	</div>
@@ -229,6 +824,7 @@ func (d AdminIntegrityData) Comparable(leftID, rightID int) bool {
 
 // coverageRow flattens the per-difficulty counts into one row per category.
 type coverageRow struct {
+	ID                 int
 	Name, Icon         string
 	Easy, Medium, Hard int
 }
@@ -240,7 +836,7 @@ func coverageByCategory(rows []models.CoverageRow) []coverageRow {
 	for _, r := range rows {
 		row, ok := byID[r.CategoryID]
 		if !ok {
-			row = &coverageRow{Name: r.CategoryName, Icon: r.CategoryIcon}
+			row = &coverageRow{ID: r.CategoryID, Name: r.CategoryName, Icon: r.CategoryIcon}
 			byID[r.CategoryID] = row
 			order = append(order, r.CategoryID)
 		}
@@ -261,18 +857,6 @@ func coverageByCategory(rows []models.CoverageRow) []coverageRow {
 	return out
 }
 
-// coverageClass grades a count against the 100-per-difficulty target.
-func coverageClass(n int) string {
-	switch {
-	case n >= 100:
-		return "tag--success"
-	case n >= 50:
-		return "tag--warning"
-	default:
-		return "tag--danger"
-	}
-}
-
 func localeTagClass(n int) string {
 	if n >= 3 {
 		return "tag--success"
@@ -280,26 +864,20 @@ func localeTagClass(n int) string {
 	return "tag--warning"
 }
 
+// outcomeClass colours one row of the import report. The kit's badges, because
+// the report is drawn in the console: an added row is live, a rejected one is
+// a refusal, and skip and duplicate are the two the admin has to decide about.
 func outcomeClass(outcome string) string {
 	switch outcome {
 	case "add":
-		return "tag--success"
-	case "update":
-		return "tag--info"
+		return "badge-live"
+	case "update", "pending":
+		return "badge-info"
 	case "skip", "duplicate":
-		return "tag--warning"
-	case "pending":
-		return "tag--info"
+		return "badge-pending"
 	default:
-		return "tag--danger"
+		return "badge-danger"
 	}
-}
-
-func translatorAlertClass(available bool) string {
-	if available {
-		return "alert--success"
-	}
-	return "alert--warning"
 }
 
 func roleIcon(role string) string {

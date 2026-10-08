@@ -121,16 +121,30 @@ func readable(raw string) string {
 	return out.String()
 }
 
-// waitFor polls until one message matching want has arrived, because the
+// waitFor polls until one message matching every want has arrived, because the
 // application sends asynchronously — it will not hold a request open on a mail
 // server.
-func (s *fakeSMTP) waitFor(t *testing.T, want string) string {
+//
+// Every want, not the first match on one: a ticket is mailed to each member of
+// staff separately, and the suite shares one database, so "the message with
+// this subject" is however many privileged accounts other tests happened to
+// leave behind. The recipient is passed as a want too, and the assertion is
+// about the message that went to the person it names.
+func (s *fakeSMTP) waitFor(t *testing.T, wants ...string) string {
 	t.Helper()
+	matches := func(decoded string) bool {
+		for _, want := range wants {
+			if !strings.Contains(decoded, want) {
+				return false
+			}
+		}
+		return true
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		s.mu.Lock()
 		for _, m := range s.received {
-			if decoded := readable(m); strings.Contains(decoded, want) {
+			if decoded := readable(m); matches(decoded) {
 				s.mu.Unlock()
 				return decoded
 			}
@@ -140,7 +154,7 @@ func (s *fakeSMTP) waitFor(t *testing.T, want string) string {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t.Fatalf("no mail containing %q arrived; %d message(s) did", want, len(s.received))
+	t.Fatalf("no mail containing %q arrived; %d message(s) did", wants, len(s.received))
 	return ""
 }
 
@@ -167,7 +181,7 @@ func TestSupportSendsMailBothWays(t *testing.T) {
 	}
 	ticketID := strings.TrimPrefix(loc, "/support/")
 
-	got := smtp.waitFor(t, "Why is my streak wrong?")
+	got := smtp.waitFor(t, "Why is my streak wrong?", "mailstaff@example.com")
 	if !strings.Contains(got, "mailstaff@example.com") {
 		t.Errorf("the new-ticket mail did not go to staff:\n%s", firstLines(got, 12))
 	}

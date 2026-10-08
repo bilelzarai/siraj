@@ -318,7 +318,7 @@ func (r *Repo) ShareRoom(ctx context.Context, a, b uuid.UUID) (bool, error) {
 }
 
 // RoomPeersShown is how many of a room's members a picker renders with the
-// page. Past this the dialog searches instead, which is what /api/people is
+// page. Past this the dialog searches instead, which is what /ui/people is
 // for — a room of three hundred is a room, not a list.
 const RoomPeersShown = 50
 

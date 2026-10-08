@@ -1,5 +1,7 @@
 # Project Working Rules
-
+{dont move the staged file to changes 
+dont create a commit, or push it.}
+ In this role we need permission direct from me .
 ## Principles
 - No fake, placeholder, or hardcoded data. Everything must be dynamic (config, env vars, database, API).
 - If context is missing or ambiguous, say so and ask. Never invent it.

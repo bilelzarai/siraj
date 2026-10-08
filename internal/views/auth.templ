@@ -72,7 +72,7 @@ templ Login(c Ctx, form AuthForm) {
 				</form>
 				<p class="center small muted">
 					{ c.T("auth.switch.toRegister") }
-					<a href="/register" class="bold" style="color:var(--accent)">
+					<a href="/register" class="bold accent">
 						{ c.T("nav.register") }
 					</a>
 				</p>
@@ -152,7 +152,7 @@ templ Register(c Ctx, form AuthForm) {
 				</form>
 				<p class="center small muted">
 					{ c.T("auth.switch.toLogin") }
-					<a href="/login" class="bold" style="color:var(--accent)">
+					<a href="/login" class="bold accent">
 						{ c.T("nav.login") }
 					</a>
 				</p>

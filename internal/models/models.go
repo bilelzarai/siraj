@@ -2,6 +2,8 @@ package models
 
 import (
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,6 +63,14 @@ const (
 	StatusUserActive    = "active"
 	StatusUserSuspended = "suspended"
 )
+
+// AssignableRoles is every role an admin may set, least privileged first.
+//
+// Named once because four screens offer the same choice — the directory's
+// filter, the role select on each row, the new-account form and the API's own
+// validator — and a role added to the constants above but to only three of
+// those lists is a role half the application does not know about.
+var AssignableRoles = []string{RolePlayer, RoleModerator, RoleAdmin}
 
 // IsAdmin reports full administrative rights.
 func (u *User) IsAdmin() bool { return u.Role == RoleAdmin }
@@ -160,13 +170,55 @@ type Session struct {
 // ------------------------------------------------------------ game content --
 
 type Category struct {
-	ID          int
-	Slug        string
-	Icon        string
-	Color       string
-	SortOrder   int
+	ID        int
+	Slug      string
+	Icon      string
+	Color     string
+	SortOrder int
+	// IsActive is whether the category is offered at all. An inactive one is
+	// out of the picker and its questions are not drawn — it is how a category
+	// is retired without destroying what is filed under it.
+	IsActive    bool
 	Name        string // resolved for the active locale
 	Description string
+	// DomainID is the subject area this category sits in — exactly one, and
+	// never null since migration 0034. DomainName is resolved for the active
+	// locale the same way Name is, so a screen can group without a second read.
+	DomainID   int
+	DomainSlug string
+	DomainName string
+}
+
+// What a category looks like before anybody has chosen otherwise. They mirror
+// the column defaults, so a category created from the admin form and one
+// created by an INSERT that names neither come out the same.
+const (
+	DefaultCategoryIcon = "\U0001F4D6"
+	// The defaults a new domain starts from, and the same values migration
+	// 0034 writes into the column defaults — two halves of one agreement, so
+	// a domain created through the form and one created by a migration look
+	// the same to a player.
+	DefaultDomainIcon    = "\U0001F5C2\uFE0F"
+	DefaultDomainColor   = "#0ea5a4"
+	DefaultCategoryColor = "#0ea5a4"
+)
+
+// ValidHexColor reports whether s is a six-digit hex colour. The category
+// colour is written straight into a style attribute on the player's screen, so
+// what it may contain is decided here rather than by whatever was typed.
+func ValidHexColor(s string) bool {
+	if len(s) != 7 || s[0] != '#' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 type Question struct {
@@ -237,13 +289,20 @@ const (
 )
 
 type GameSession struct {
-	ID             uuid.UUID
-	UserID         uuid.UUID
-	Mode           string
-	Status         string
-	CategoryID     *int
-	CategoryName   string
-	CategoryIcon   string
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	Mode         string
+	Status       string
+	CategoryID   *int
+	CategoryName string
+	CategoryIcon string
+	// DomainID is set when the round was drawn from a whole subject area
+	// rather than one category. The two are alternatives, not a hierarchy to
+	// walk: a round drawn from one category records that category and no
+	// domain, exactly as it always did.
+	DomainID       *int
+	DomainName     string
+	DomainIcon     string
 	Difficulty     int
 	Locale         string
 	QuestionIDs    []int
@@ -1098,6 +1157,157 @@ type AuditEntry struct {
 	CreatedAt     time.Time
 }
 
+// Label is what the trail should call this entry's target: the name recorded
+// with the action, falling back to the raw id. An id is the only thing that
+// stays true after the row is deleted, so it is what is stored; the label is
+// what somebody reading the log a week later can recognise.
+func (e *AuditEntry) Label() string {
+	if label, ok := e.Detail["label"].(string); ok && label != "" {
+		return label
+	}
+	return e.TargetID
+}
+
+// Changes pairs up what the action moved, in a stable order so the same
+// action always reads the same way down the page.
+//
+// Fields present on only one side still appear: a delete has a before and no
+// after, and a field that was set from nothing has an after and no before.
+func (e *AuditEntry) Changes() []AuditChange {
+	before, _ := e.Detail["before"].(map[string]any)
+	after, _ := e.Detail["after"].(map[string]any)
+	if len(before) == 0 && len(after) == 0 {
+		return nil
+	}
+
+	fields := make([]string, 0, len(before)+len(after))
+	for field := range before {
+		fields = append(fields, field)
+	}
+	for field := range after {
+		if _, seen := before[field]; !seen {
+			fields = append(fields, field)
+		}
+	}
+	sort.Strings(fields)
+
+	out := make([]AuditChange, 0, len(fields))
+	for _, field := range fields {
+		out = append(out, AuditChange{
+			Field: field,
+			From:  auditValue(before[field]),
+			To:    auditValue(after[field]),
+		})
+	}
+	return out
+}
+
+// AuditChange is one field an action moved.
+type AuditChange struct {
+	Field string
+	From  string
+	To    string
+}
+
+// auditValue renders one jsonb value as the trail shows it. Every number comes
+// back out of jsonb as a float64, and "7 days" must not read as "7.000000".
+func auditValue(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case float64:
+		if t == math.Trunc(t) {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	default:
+		return fmt.Sprint(t)
+	}
+}
+
+// AuditArea groups an entry for the audit screen's area filter. It is derived
+// from the target kind rather than stored, so an action added later is grouped
+// by the thing it acts on without a second field to keep in step.
+func (e *AuditEntry) Area() string {
+	if strings.HasPrefix(e.Action, "translation.") || strings.HasPrefix(e.Action, "duplicate.") {
+		return AuditAreaReview
+	}
+	switch e.TargetKind {
+	case "user":
+		return AuditAreaUsers
+	case "ticket":
+		return AuditAreaSupport
+	case "category", "domain":
+		return AuditAreaTaxonomy
+	case "question", "import":
+		return AuditAreaQuestions
+	case "comment":
+		return AuditAreaComments
+	default:
+		return AuditAreaOther
+	}
+}
+
+// The areas the audit screen filters by. Named constants because the filter
+// has to send the same strings the rows are grouped under.
+const (
+	AuditAreaUsers     = "users"
+	AuditAreaSupport   = "support"
+	AuditAreaTaxonomy  = "taxonomy"
+	AuditAreaQuestions = "questions"
+	AuditAreaReview    = "review"
+	AuditAreaComments  = "comments"
+	AuditAreaOther     = "other"
+)
+
+// AuditAreas is every area in the order the filter offers them.
+var AuditAreas = []string{
+	AuditAreaUsers, AuditAreaSupport, AuditAreaTaxonomy,
+	AuditAreaQuestions, AuditAreaReview, AuditAreaComments, AuditAreaOther,
+}
+
+// APIQuestion is one question as the public endpoint serves it. Its own type
+// rather than the one the game uses: a published shape is a contract, and a
+// field added to an internal struct must not appear on the surface by
+// accident.
+type APIQuestion struct {
+	ID           int         `json:"id"`
+	Category     TaxonomyRef `json:"category"`
+	Domain       TaxonomyRef `json:"domain"`
+	Difficulty   int         `json:"difficulty"`
+	Points       int         `json:"points"`
+	Prompt       string      `json:"prompt"`
+	Choices      []string    `json:"choices"`
+	CorrectIndex int         `json:"correct_index"`
+	Explanation  string      `json:"explanation"`
+	Locale       string      `json:"locale"`
+}
+
+// TaxonomyRef names one level of the taxonomy on the public surface.
+type TaxonomyRef struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+	Icon string `json:"icon"`
+}
+
+// APIKey is the one credential in this project that is not a browser session.
+// The key itself is never part of it: only what it hashed to is stored, so
+// this type can be read, listed and logged without handing anything out.
+type APIKey struct {
+	ID         int
+	Label      string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+}
+
+// Live reports whether the key may still answer.
+func (k APIKey) Live() bool { return k.RevokedAt == nil }
+
 // AdminUser is the projection the admin directory lists.
 type AdminUser struct {
 	ID              uuid.UUID
@@ -1112,11 +1322,56 @@ type AdminUser struct {
 	Locale          string
 	XP              int
 	GamesPlayed     int
-	CreatedAt       time.Time
-	LastSeenAt      time.Time
+	// BestStreak is the longest run of right answers this player has put
+	// together. users.best_streak has carried it since 0001 and no admin screen
+	// read it, so the one number that says whether an account is a player or a
+	// passer-by was not on the account.
+	BestStreak int
+	// Answered is how many questions this player has been asked and Correct
+	// how many they got right. The pair travels together because the share
+	// alone is not a fact about a player: 100% over two answers and over two
+	// thousand are different people.
+	Answered   int
+	Correct    int
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+	// Strongest is the categories this player answers best, strongest first,
+	// hydrated only for the single-user view. A listing does not pay for it.
+	Strongest []CategoryStrength
 }
 
+// CategoryStrength is one category a player is measurably good or bad at.
+type CategoryStrength struct {
+	CategoryID   int
+	CategoryName string
+	CategoryIcon string
+	Answered     int
+	Correct      int
+}
+
+// Accuracy is the share right, as a percentage.
+func (c CategoryStrength) Accuracy() int {
+	if c.Answered <= 0 {
+		return 0
+	}
+	return c.Correct * 100 / c.Answered
+}
+
+// UserCounts is how the directory splits between players and staff, for the
+// numbers beside its tabs.
+type UserCounts struct{ Total, Players, Staff int }
+
 func (u *AdminUser) IsSuspended() bool { return u.Status == StatusUserSuspended }
+
+// Accuracy is the share of answers that were right, as a percentage. A player
+// who has answered nothing reports zero; callers that need to tell that from
+// "got everything wrong" read Answered.
+func (u *AdminUser) Accuracy() int {
+	if u.Answered <= 0 {
+		return 0
+	}
+	return u.Correct * 100 / u.Answered
+}
 
 func (u *AdminUser) Initials() string {
 	name := u.DisplayName
@@ -1128,6 +1383,22 @@ func (u *AdminUser) Initials() string {
 		return "?"
 	}
 	return string(runes[0])
+}
+
+// AdminSearchHit is one match from the admin's single search field, in the
+// shape the drop-down renders. One type for all three areas: the list shows
+// them together, and a match the reader cannot act on is a match that should
+// not be shown — so every hit carries the link that opens it.
+type AdminSearchHit struct {
+	Kind     string // user | question | ticket
+	ID       string
+	Title    string
+	Subtitle string
+	// Badge is the one piece of state worth seeing before opening the row: a
+	// role, a ticket status, or "retired". Empty when there is nothing
+	// remarkable about it.
+	Badge string
+	Href  string
 }
 
 // AdminQuestion is one row of the admin question browser.
@@ -1150,13 +1421,157 @@ type AdminQuestion struct {
 	// PendingLocales names the locales actually awaiting review, so the queue
 	// offers approve and reject for those and not for every shipped language.
 	PendingLocales []string
-	CreatedAt      time.Time
+	// Plays is how many times this question has been answered and Correct how
+	// many of those were right. A question nobody has met yet is not a question
+	// anybody can judge, which is why the pair travels together: an accuracy of
+	// 0% over three answers and over three thousand are different facts.
+	Plays   int
+	Correct int
+	// Noted is how many of its translations have changes requested — the state
+	// between approved and rejected, which is a question the author still owes
+	// work on rather than one the queue is waiting on.
+	Noted     int
+	CreatedAt time.Time
+}
+
+// HasLocale reports whether this question has been written in one language at
+// all, and IsPending whether that writing is still awaiting review. The two
+// together are the three states a language can be in, which is what the
+// coverage chips on the question browser draw.
+func (q AdminQuestion) HasLocale(locale string) bool {
+	return slices.Contains(q.PresentLocales, locale)
+}
+
+func (q AdminQuestion) IsPending(locale string) bool {
+	return slices.Contains(q.PendingLocales, locale)
+}
+
+// Accuracy is the share of answers that were right, as a percentage. Zero
+// plays reports zero rather than dividing by nothing; callers that need to
+// tell "nobody has tried it" from "everybody got it wrong" read Plays.
+func (q AdminQuestion) Accuracy() int {
+	if q.Plays <= 0 {
+		return 0
+	}
+	return q.Correct * 100 / q.Plays
 }
 
 // ShippedLocales is how many languages a question needs to be complete. It
 // mirrors len(i18n.Supported); models stays free of that import so it can
 // remain the one package that depends on nothing.
 const ShippedLocales = 3
+
+// AdminCategory is a category as the admin list shows it: the row plus what is
+// filed under it. Those two numbers are what the decisions on that screen turn
+// on — deleting a category cascades into its questions and into every answer
+// anybody ever gave them, so one holding questions is not deletable and one
+// holding none is.
+type AdminCategory struct {
+	Category
+	Questions       int
+	ActiveQuestions int
+	// DomainActive is the state of the domain above it, which the player's
+	// list cannot show: a category can be active inside a retired domain, and
+	// from a player's side that is indistinguishable from being retired
+	// itself. The editor has to be able to tell the two apart.
+	DomainActive bool
+	// PresentLocales is every language the name has been written in, so a
+	// category that would fall back to Arabic for two thirds of the players
+	// shows as unfinished instead of looking done.
+	PresentLocales []string
+}
+
+// Complete reports whether the name exists in every shipped language.
+func (a AdminCategory) Complete() bool { return len(a.PresentLocales) >= ShippedLocales }
+
+// NameDraft is one locale of a taxonomy node — a domain or a category — as the
+// admin form edits it. One type for both levels: they are the same fields, and
+// a second copy is a second place to forget the provenance columns.
+type NameDraft struct {
+	Name        string
+	Description string
+	Source      string // seed | human | machine | import
+	NeedsReview bool
+}
+
+// Blank reports whether this language was left out of the submission, which is
+// how a category gets named one language at a time.
+func (d NameDraft) Blank() bool {
+	return strings.TrimSpace(d.Name) == "" && strings.TrimSpace(d.Description) == ""
+}
+
+// Domain is the subject area a category belongs to: Islamic, and whatever an
+// admin adds beside it. One level, no parent, and nothing in Go knows any of
+// them by name — they are rows, which is what lets a second subject area
+// arrive without a deploy.
+type Domain struct {
+	ID        int
+	Slug      string
+	Icon      string
+	Color     string
+	SortOrder int
+	// IsActive is whether the domain is offered at all. Retiring one reaches
+	// further than retiring a category: every category under it leaves the
+	// picker, and every question under those leaves the draw and the
+	// availability count together.
+	IsActive    bool
+	Name        string // resolved for the active locale
+	Description string
+}
+
+// AdminDomain is a domain with what hangs below it — the two numbers that
+// decide whether it can be deleted and whether retiring it empties the game.
+type AdminDomain struct {
+	Domain
+	Categories int
+	// Questions is everything filed below, ActiveQuestions what is actually
+	// drawable from it. The category screen shows the same pair, because
+	// "forty questions" and "forty questions, two of them retired" are
+	// different answers to whether a subject area is ready for players.
+	Questions       int
+	ActiveQuestions int
+	// PresentLocales is every language the name has been written in, so a
+	// domain that would fall back to Arabic for two thirds of the players
+	// shows as unfinished instead of looking done.
+	PresentLocales []string
+}
+
+// Complete reports whether the name exists in every shipped language.
+func (a AdminDomain) Complete() bool { return len(a.PresentLocales) >= ShippedLocales }
+
+// DomainDraft is a domain and all its names as the admin form edits it. It
+// mirrors CategoryDraft one level up, including covering create and update
+// both.
+type DomainDraft struct {
+	ID        int
+	Slug      string
+	Icon      string
+	Color     string
+	SortOrder int
+	IsActive  bool
+	// CreatedBy is who added it, kept because adding a subject area is a
+	// structural decision and the trail should name a person. Zero on an edit.
+	CreatedBy uuid.UUID
+	Names     map[string]NameDraft
+}
+
+// CategoryDraft is a category plus whichever locales are being written. Like
+// QuestionDraft it covers create and update both, so one validation path and
+// one transaction serve the form in either mode.
+type CategoryDraft struct {
+	ID int
+	// DomainID is the subject area the form named. Required since the form
+	// carries the field: the column lost its default in migration 0035, so a
+	// category that names no domain is refused rather than filed under
+	// whichever one happened to be first.
+	DomainID  int
+	Slug      string
+	Icon      string
+	Color     string
+	SortOrder int
+	IsActive  bool
+	Names     map[string]NameDraft
+}
 
 // TranslationDraft is one locale of a question as the admin form edits it.
 type TranslationDraft struct {
@@ -1165,6 +1580,25 @@ type TranslationDraft struct {
 	Explanation string
 	Source      string // human | machine | import
 	NeedsReview bool
+	// ReviewNote is what a reviewer asked to be changed, empty when nothing
+	// was. It is read into the editor so the person fixing the text can see
+	// the request beside it, and it is never written from the editor — only
+	// the review queue sets it, and approving clears it.
+	ReviewNote string
+}
+
+// ReviewNote is one translation a reviewer has sent back, as the queue lists
+// it. Its own type rather than a flag on AdminQuestion: the row is about one
+// language of one question, and what the author needs to read is the note.
+type ReviewNote struct {
+	QuestionID   int
+	Locale       string
+	Note         string
+	NotedBy      string
+	NotedAt      *time.Time
+	Prompt       string
+	CategoryName string
+	CategoryIcon string
 }
 
 // QuestionDraft is a question plus whichever locales are being written. The
@@ -1191,6 +1625,110 @@ type PlatformStats struct {
 	RoundsPlayed, AnswersRecorded        int
 	Duels, Messages, Friendships         int
 	Coverage                             []CoverageRow
+}
+
+// DashboardInsight is everything the overview screen reports that a single
+// count cannot answer: how play moved over time, which categories are carrying
+// it, and which languages the players are in.
+//
+// Separate from PlatformStats because the two are read differently. PlatformStats
+// is a row of totals, cheap and always wanted; this one aggregates answers and
+// finished rounds over a window and is only worth computing for the screen that
+// draws it.
+type DashboardInsight struct {
+	// Days is the play history, oldest first, one entry per calendar day with
+	// no gaps — a day nobody played is a zero in the series rather than a
+	// missing bar, or the chart would compress its quiet days out of existence.
+	Days []DayGames
+	// GamesToday and GamesYesterday, ActivePlayers and ActivePlayersPrior are
+	// each a figure and the figure it is compared against, so the delta is a
+	// subtraction here rather than a second query at the view.
+	GamesToday          int
+	GamesYesterday      int
+	ActivePlayers       int
+	ActivePlayersPrior  int
+	AnswersThisWeek     int
+	CorrectThisWeek     int
+	AnswersPriorWeek    int
+	CorrectPriorWeek    int
+	Categories          []CategoryPerformance
+	Languages           []LanguageShare
+	OldestPendingReview *time.Time
+}
+
+// Accuracy is this week's share of right answers, as a percentage.
+func (d DashboardInsight) Accuracy() int {
+	if d.AnswersThisWeek <= 0 {
+		return 0
+	}
+	return d.CorrectThisWeek * 100 / d.AnswersThisWeek
+}
+
+// PriorAccuracy is the week before's, for the comparison beside it.
+func (d DashboardInsight) PriorAccuracy() int {
+	if d.AnswersPriorWeek <= 0 {
+		return 0
+	}
+	return d.CorrectPriorWeek * 100 / d.AnswersPriorWeek
+}
+
+// PeakGames is the tallest bar in the series, which is what every other bar is
+// drawn as a fraction of. One rather than zero when nothing was played, so a
+// quiet window divides safely.
+func (d DashboardInsight) PeakGames() int {
+	peak := 1
+	for _, day := range d.Days {
+		if day.Games > peak {
+			peak = day.Games
+		}
+	}
+	return peak
+}
+
+// DayGames is one day of the play history.
+type DayGames struct {
+	Day   time.Time
+	Games int
+}
+
+// Height is this day as a percentage of the tallest day, for the bar.
+func (d DayGames) Height(peak int) int {
+	if peak <= 0 {
+		return 0
+	}
+	return d.Games * 100 / peak
+}
+
+// CategoryPerformance is one category as the dashboard ranks it: how much it is
+// being played, how well, and what players think of it.
+type CategoryPerformance struct {
+	CategoryID    int
+	CategoryName  string
+	CategoryIcon  string
+	CategoryColor string
+	Plays         int
+	Answered      int
+	Correct       int
+	// Rating is the mean star rating across the category's questions and
+	// RatingVotes how many ratings that mean rests on. Zero votes means no
+	// rating to show, which is not the same as a bad one.
+	Rating      float64
+	RatingVotes int
+}
+
+// Accuracy is the share of answers in this category that were right.
+func (c CategoryPerformance) Accuracy() int {
+	if c.Answered <= 0 {
+		return 0
+	}
+	return c.Correct * 100 / c.Answered
+}
+
+// LanguageShare is how many players have chosen one interface language.
+type LanguageShare struct {
+	Locale  string
+	Players int
+	Percent int
 }
 
 // CoverageRow is how many questions exist for one category and difficulty —
@@ -1341,7 +1879,7 @@ func (c QuestionCompare) CorrectSame() bool { return c.LeftCorrect == c.RightCor
 // battles in Arabic, and a decision taken from the one language that raised the
 // flag is a decision taken on a third of the evidence.
 type CompareLocale struct {
-	Code, Name, Dir, Flag string
+	Code, Name, Dir string
 
 	// InLeft and InRight say which side carries this language at all. A file
 	// that only has English is not proposing to blank the Arabic, and the panel
@@ -1505,6 +2043,12 @@ type Ticket struct {
 	CategoryID *int
 	QuestionID *int
 	PagePath   string
+	// UserAgent is the browser the ticket was opened from, copied off that one
+	// request. "It does not work on my phone" is the commonest thing a bug
+	// report says and the one thing staff could not see; the string was already
+	// arriving and being dropped. Copied rather than joined from sessions,
+	// which is deleted at sign-out while the ticket outlives it.
+	UserAgent string
 	// ReportedUserID is who a report of abuse is about. Nil for every other
 	// kind, because every other kind is about the sender's own experience.
 	ReportedUserID *uuid.UUID
@@ -1613,8 +2157,131 @@ type QuestionComment struct {
 	AuthorUsername string
 	AuthorSeed     string
 	Hidden         bool
+	// ResolvedAt is when a moderator marked the remark dealt with. Hiding was
+	// the wrong tool for a remark that was right — it was useful, it was acted
+	// on, and hiding pretends it never arrived — so this is the third state:
+	// the remark stands and the queue stops asking about it.
+	ResolvedAt   *time.Time
+	ResolvedBy   string
+	CategoryName string
+	CategoryIcon string
 }
+
+// CommentCounts is how the moderation queue splits, for the numbers beside
+// its tabs.
+type CommentCounts struct{ Total, Open, Resolved, Hidden int }
+
+// Resolved reports whether the remark has been dealt with.
+func (c *QuestionComment) Resolved() bool { return c.ResolvedAt != nil }
+
+// Open reports whether it is still waiting on somebody, which is what the
+// queue's first tab holds.
+func (c *QuestionComment) Open() bool { return c.ResolvedAt == nil && !c.Hidden }
 
 // Anonymous reports whether the author's account is gone. The row survives so
 // the conversation stays readable, but there is nobody to attribute it to.
 func (c *QuestionComment) Anonymous() bool { return c.AuthorUsername == "" }
+
+// ---------------------------------------------------------- review checks --
+
+// ReviewCheck is one automatic check on a question awaiting review.
+//
+// The design's review pane lists these beside the text: a reviewer reading a
+// translation should not also have to count the languages, notice that the
+// explanation is a third the length of the English one, or check that a source
+// was cited. None of it decides anything — every verdict is still a person's —
+// but it says where to look first.
+type ReviewCheck struct {
+	// Level is "pass", "warn" or "fail". A fail is something a reviewer should
+	// not approve past; a warning is something to look at.
+	Level string
+	// Label is the sentence the row shows.
+	Label string
+}
+
+const (
+	CheckPass = "pass"
+	CheckWarn = "warn"
+	CheckFail = "fail"
+)
+
+// CheckQuestion runs the checks that can be made without asking anybody.
+//
+// Computed rather than stored: they are a reading of the draft as it is right
+// now, and a stored verdict would go stale the moment somebody edited the text
+// it was about.
+func CheckQuestion(d *QuestionDraft, shipped int) []ReviewCheck {
+	var out []ReviewCheck
+
+	// Every language present. A question short of one is skipped for those
+	// players entirely, which is the single most consequential gap.
+	written := len(d.Translations)
+	switch {
+	case written >= shipped:
+		out = append(out, ReviewCheck{CheckPass, "review.check.allLanguages"})
+	default:
+		out = append(out, ReviewCheck{CheckFail, "review.check.missingLanguages"})
+	}
+
+	// Four distinct choices in every language. Two identical options are not a
+	// question, they are a typo that makes one answer impossible to choose.
+	duplicates := false
+	empty := false
+	for _, t := range d.Translations {
+		seen := map[string]bool{}
+		for _, choice := range t.Choices {
+			trimmed := strings.TrimSpace(choice)
+			if trimmed == "" {
+				empty = true
+				continue
+			}
+			if seen[trimmed] {
+				duplicates = true
+			}
+			seen[trimmed] = true
+		}
+		if strings.TrimSpace(t.Prompt) == "" {
+			empty = true
+		}
+	}
+	switch {
+	case empty:
+		out = append(out, ReviewCheck{CheckFail, "review.check.emptyFields"})
+	case duplicates:
+		out = append(out, ReviewCheck{CheckFail, "review.check.duplicateChoices"})
+	default:
+		out = append(out, ReviewCheck{CheckPass, "review.check.distinctChoices"})
+	}
+
+	// A source. The bank is scripture and history; an unattributed claim in it
+	// is the thing review exists to catch.
+	if strings.TrimSpace(d.Source) != "" {
+		out = append(out, ReviewCheck{CheckPass, "review.check.sourceCited"})
+	} else {
+		out = append(out, ReviewCheck{CheckWarn, "review.check.noSource"})
+	}
+
+	// An explanation far shorter than the longest is usually a translation
+	// that lost half its sentence.
+	longest := 0
+	shortest := -1
+	for _, t := range d.Translations {
+		n := len([]rune(strings.TrimSpace(t.Explanation)))
+		if n > longest {
+			longest = n
+		}
+		if shortest < 0 || n < shortest {
+			shortest = n
+		}
+	}
+	switch {
+	case longest == 0:
+		out = append(out, ReviewCheck{CheckWarn, "review.check.noExplanation"})
+	case shortest*2 < longest:
+		out = append(out, ReviewCheck{CheckWarn, "review.check.shortExplanation"})
+	default:
+		out = append(out, ReviewCheck{CheckPass, "review.check.explanationsMatch"})
+	}
+
+	return out
+}

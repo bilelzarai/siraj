@@ -1,0 +1,98 @@
+# What a clean clone runs: database and application, no guards, no profile.
+# Production is a separate overlay — docker-compose.prod.yml — because a
+# required-variable guard anywhere in this file fails the whole file before
+# profile filtering, which would break the default command for everyone.
+# The project name, pinned.
+#
+# Compose derives it from the directory the file sits in, so moving this file
+# into deploy/ silently renamed the project from islamic-game to deploy — new
+# volumes, new network, and a container-name clash with the stack already
+# running. A deployment's identity should not depend on where its description
+# is filed.
+name: siraj
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: siraj-game-db
+    environment:
+      POSTGRES_USER: siraj
+      POSTGRES_PASSWORD: siraj
+      POSTGRES_DB: siraj-db
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siraj -d siraj-db"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Development mail, so the password-reset flow can be exercised end to end on
+  # a clean clone instead of being the one path nobody can verify. It holds
+  # messages and delivers none of them; the production overlay gives it a
+  # profile, which is how a service is kept out of a deployment without a second
+  # base file. The UI is on 8026 rather than the usual 8025: a developer's
+  # machine often already has something there.
+  mail:
+    image: axllent/mailpit:latest
+    container_name: siraj-game-mail
+    ports:
+      - "8026:8025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    restart: unless-stopped
+
+  # SESSION_SECRET is deliberately absent: outside production the application
+  # generates one at boot. A literal here would be a fake credential in version
+  # control and a footgun if it ever reached a deployment.
+  app:
+    # The context is the repository root and the file is in here: the build
+    # needs the whole tree, and this directory describes the deployment rather
+    # than containing it.
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: siraj-game-app
+    # No dependency on mail: the mailer connects when it has something to send,
+    # not at boot, and declaring one here would make the app undefined in any
+    # deployment that excludes the catcher.
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      APP_ADDR: ":8080"
+      DATABASE_URL: postgres://siraj:siraj@db:5432/siraj-db?sslmode=disable
+      BASE_URL: http://localhost:8080
+      SECURE_COOKIES: "false"
+      DEFAULT_LOCALE: ar
+      # Every message goes to the catcher above and no further. With no host
+      # here the mailer only logs, and the whole reset flow is unverifiable.
+      SMTP_HOST: mail
+      SMTP_PORT: "1025"
+      SMTP_FROM_EMAIL: siraj@siraj.test
+      SMTP_STARTTLS: "false"
+      # Photos and voice notes are written to disk with only their metadata in
+      # the database, so the directory has to outlive the container. Without
+      # the volume below every redeploy silently empties the message history
+      # of its attachments.
+      UPLOAD_DIR: /app/data/uploads
+      # SEED_ON_START stays unset: docker compose exec app /app/sirajctl seed
+    volumes:
+      - uploads:/app/data/uploads
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "/app/server", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:

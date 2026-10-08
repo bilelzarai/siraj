@@ -2,7 +2,9 @@ package views
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/bilelzarai/siraj/internal/i18n"
 	"github.com/bilelzarai/siraj/internal/models"
 )
 
@@ -16,105 +18,215 @@ type AdminReviewData struct {
 	// entirely, which is what the translate action operates on.
 	Incomplete      []*models.AdminQuestion
 	IncompleteTotal int
-	Translator      string
-	Available       bool
+	// Noted is the translations a reviewer sent back with a request, oldest
+	// first. They are pending too, so they also appear above — the difference
+	// is that these are waiting on their author rather than on a reviewer.
+	Noted      []*models.ReviewNote
+	Translator string
+	Available  bool
+	// Open is the question being read beside the queue, in full: every
+	// language with its answers, which the listing rows do not carry. OpenID
+	// is which one that is, so the queue can mark it.
+	Open   *models.QuestionDraft
+	OpenID int
+	// Checks is what the automatic checks say about it — a reading of the
+	// draft as it stands, computed rather than stored, because a stored
+	// verdict goes stale the moment the text it was about is edited.
+	Checks []models.ReviewCheck
 }
 
 templ AdminReview(c Ctx, a AdminChrome, d AdminReviewData) {
 	@adminShell(c, a, c.T("admin.nav.review")) {
-		<div class={ "alert", translatorAlertClass(d.Available) }>
-			<span aria-hidden="true">🌐</span>
-			<span>
+		@adminPageHead(c, c.T("admin.nav.review"), c.T("admin.review.help")) {
+			<a class="btn" href="/admin/questions?review=1">
+				@adminIcon("i-question", "")
+				{ c.T("admin.review.inBank") }
+			</a>
+		}
+		<div class={ "callout", translatorCalloutClass(d.Available) }>
+			@adminIcon("i-languages", "")
+			<div>
 				if d.Available {
 					{ c.T("admin.review.providerOn", d.Translator) }
 				} else {
 					{ c.T("admin.review.providerOff") }
 				}
-			</span>
-		</div>
-		<p class="small muted">{ c.T("admin.review.help") }</p>
-		<section class="stack-sm">
-			<div class="card__head" style="margin:0">
-				<span class="card__title">{ c.T("admin.review.awaitingTitle") }</span>
-				if d.Total > 0 {
-					<span class="tag tag--warning num">{ fmt.Sprint(d.Total) }</span>
-				}
 			</div>
-			if len(d.Questions) == 0 {
-				@Empty("✅", c.T("admin.review.empty"))
-			} else {
-				<div class="card card--flush scroll-x">
-					<table class="table">
-						<thead>
-							<tr>
-								<th class="num">#</th>
-								<th>{ c.T("admin.questions.prompt") }</th>
-								<th>{ c.T("admin.questions.awaiting") }</th>
-								<th></th>
-							</tr>
-						</thead>
-						<tbody>
-							for _, q := range d.Questions {
-								<tr>
-									<td class="num tiny muted">{ fmt.Sprint(q.ID) }</td>
-									<td class="truncate" style="max-width:40ch">{ q.Prompt }</td>
-									<td><span class="tag tag--warning num">{ fmt.Sprint(q.PendingReview) }</span></td>
-									<td>
-										// Only the locales actually waiting. Offering all three
-										// invited approving a translation nobody had written.
-										<div class="row row--wrap" style="gap:12px;justify-content:flex-end">
-											for _, locale := range q.PendingLocales {
-												@reviewAction(c, q.ID, locale)
-											}
-										</div>
-									</td>
-								</tr>
-							}
-						</tbody>
-					</table>
+		</div>
+		// Queue on the left, the question being read on the right. A table of
+		// prompts was the wrong shape for this work: a reviewer is reading one
+		// question in three languages and deciding about it, which is a page
+		// and not a row.
+		<div class="review-layout">
+			<section class="panel">
+				<div class="panel-head">
+					<div>
+						<h2>{ c.T("admin.review.awaitingTitle") }</h2>
+						<p class="hint">{ c.T("admin.review.awaitingHint") }</p>
+					</div>
+					if d.Total > 0 {
+						<span class="badge badge-pending no-dot">{ fmt.Sprint(d.Total) }</span>
+					}
 				</div>
+				if len(d.Questions) == 0 {
+					@adminEmpty(c, "i-check-circle", c.T("admin.review.empty"), "")
+				} else {
+					<ul class="list">
+						for _, q := range d.Questions {
+							<li>
+								<a
+									class={ "list-item", templ.KV("is-active", q.ID == d.OpenID) }
+									href={ templ.SafeURL(fmt.Sprintf("/admin/review?q=%d", q.ID)) }
+									if q.ID == d.OpenID {
+										aria-current="true"
+									}
+								>
+									<span class="cat-tile" aria-hidden="true">{ q.CategoryIcon }</span>
+									<div class="grow" style="min-width:0">
+										<div class="t cell-clip">{ q.Prompt }</div>
+										<div class="s truncate">
+											{ fmt.Sprintf("#%d · ", q.ID) }
+											{ q.CategoryName }
+										</div>
+									</div>
+								</a>
+							</li>
+						}
+					</ul>
+					if d.Total > len(d.Questions) {
+						// Said rather than left to be discovered: a queue that
+						// stops silently reads as a queue that is finished.
+						<div class="pager">
+							<span class="pager__count">
+								{ c.T("admin.review.showingOf", len(d.Questions), d.Total) }
+							</span>
+						</div>
+					}
+				}
+			</section>
+			if d.Open != nil {
+				@reviewCard(c, d)
+			} else {
+				<section class="panel">
+					@adminEmpty(c, "i-review", c.T("admin.review.pickOne"), c.T("admin.review.pickOneSub"))
+				</section>
 			}
-		</section>
+		</div>
+		// Sent back with a note. These are pending too, so they appear above
+		// as well — the difference is that these are waiting on their author
+		// rather than on a reviewer, which is a different queue to work.
+		if len(d.Noted) > 0 {
+			<section class="panel">
+				<div class="panel-head">
+					<div>
+						<h2>{ c.T("admin.review.notedTitle") }</h2>
+						<p class="hint">{ c.T("admin.review.notedHint") }</p>
+					</div>
+					<span class="badge badge-draft no-dot">{ fmt.Sprint(len(d.Noted)) }</span>
+				</div>
+				<ul class="list">
+					for _, note := range d.Noted {
+						<li class="list-item">
+							<span class="cat-tile" aria-hidden="true">{ note.CategoryIcon }</span>
+							<div class="grow" style="min-width:0">
+								<div class="t truncate">{ note.Prompt }</div>
+								<div class="s truncate">
+									<a class="qid" href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", note.QuestionID)) }>
+										{ fmt.Sprintf("#%d", note.QuestionID) }
+									</a>
+									{ " · " + note.CategoryName }
+								</div>
+								<div class="review-note">
+									@adminIcon("i-reply", "icon-sm")
+									<div>
+										<p>{ note.Note }</p>
+										<p class="review-note__who">
+											{ reviewNoteWho(c, note) }
+										</p>
+									</div>
+								</div>
+							</div>
+							<span class="lang">{ strings.ToUpper(note.Locale) }</span>
+							<a
+								class="btn btn-sm"
+								href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", note.QuestionID)) }
+							>
+								{ c.T("common.edit") }
+							</a>
+						</li>
+					}
+				</ul>
+			</section>
+		}
 		// A question can also be waiting on a language nobody has written at
 		// all. Those never appeared anywhere, so the provider configured above
 		// had nothing to act on and the whole feature was unreachable.
-		<section class="stack-sm">
-			<div class="card__head" style="margin:0">
-				<span class="card__title">{ c.T("admin.review.missingTitle") }</span>
+		<section class="panel">
+			<div class="panel-head">
+				<div>
+					<h2>{ c.T("admin.review.missingTitle") }</h2>
+					if !d.Available {
+						<p class="hint">{ c.T("admin.review.missingManual") }</p>
+					}
+				</div>
 				if d.IncompleteTotal > 0 {
-					<span class="tag num">{ fmt.Sprint(d.IncompleteTotal) }</span>
+					<span class="badge badge-info no-dot">{ fmt.Sprint(d.IncompleteTotal) }</span>
 				}
 			</div>
 			if len(d.Incomplete) == 0 {
-				@Empty("🌍", c.T("admin.review.missingEmpty"))
+				@adminEmpty(c, "i-languages", c.T("admin.review.missingEmpty"), "")
 			} else {
-				<div class="card card--flush scroll-x">
-					<table class="table">
+				<div class="table-wrap">
+					<table class="table stack-sm">
+						<caption class="sr-only">{ c.T("admin.review.missingTitle") }</caption>
 						<thead>
 							<tr>
-								<th class="num">#</th>
-								<th>{ c.T("admin.questions.prompt") }</th>
-								<th>{ c.T("admin.questions.locales") }</th>
-								<th></th>
+								<th scope="col">{ c.T("admin.questions.prompt") }</th>
+								<th scope="col">{ c.T("admin.questions.locales") }</th>
+								<th scope="col"><span class="sr-only">{ c.T("common.actions") }</span></th>
 							</tr>
 						</thead>
 						<tbody>
 							for _, q := range d.Incomplete {
 								<tr>
-									<td class="num tiny muted">{ fmt.Sprint(q.ID) }</td>
-									<td class="truncate" style="max-width:40ch">{ q.Prompt }</td>
-									<td>
-										<span class={ "tag", localeTagClass(q.LocaleCount) }>
-											{ fmt.Sprintf("%d/%d", q.LocaleCount, models.ShippedLocales) }
+									<td class="cell-first" data-label={ c.T("admin.questions.prompt") }>
+										<div class="cell-main" style="min-width:240px">
+											<span class="cat-tile" aria-hidden="true">{ q.CategoryIcon }</span>
+											<div style="min-width:0">
+												<div class="t cell-clip" title={ q.Prompt }>{ q.Prompt }</div>
+												<div class="s truncate">
+													<a class="qid" href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }>
+														{ fmt.Sprintf("#%d", q.ID) }
+													</a>
+													{ " · " + q.CategoryName }
+												</div>
+											</div>
+										</div>
+									</td>
+									<td data-label={ c.T("admin.questions.locales") }>
+										<span class="langs">
+											for _, loc := range c.Locales() {
+												<span
+													class={ "lang", templ.KV("is-missing", !q.HasLocale(loc.Code)) }
+													title={ localeStateLabel(c, q, loc.Code) }
+												>
+													{ loc.Tag() }
+												</span>
+											}
 										</span>
 									</td>
-									<td>
-										<div class="row row--wrap" style="gap:8px;justify-content:flex-end">
+									<td class="cell-actions">
+										<div class="btn-group">
 											for _, locale := range MissingLocales(q.PresentLocales) {
 												if d.Available {
 													@translateAction(c, q.ID, locale)
 												} else {
-													<span class="tag tag--warning num">{ locale }</span>
+													<a
+														class="btn btn-sm btn-ghost"
+														href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }
+													>
+														{ strings.ToUpper(locale) }
+													</a>
 												}
 											}
 										</div>
@@ -125,9 +237,130 @@ templ AdminReview(c Ctx, a AdminChrome, d AdminReviewData) {
 					</table>
 				</div>
 			}
-			if !d.Available {
-				<p class="tiny muted">{ c.T("admin.review.missingManual") }</p>
-			}
 		</section>
 	}
+}
+
+// reviewCard is the question under review: every language it has been written
+// in, side by side with the correct answer marked, what the automatic checks
+// say, and the four verdicts.
+//
+// Side by side rather than one at a time because that is the comparison being
+// made. Two renderings can each read correctly and disagree with each other,
+// and a reviewer flipping between tabs cannot see that.
+templ reviewCard(c Ctx, d AdminReviewData) {
+	{{ q := d.Open }}
+	<section class="panel review-card">
+		<div class="panel-head">
+			<div class="q-meta">
+				<span class="cat-tile" aria-hidden="true">{ d.OpenIcon() }</span>
+				<b>{ d.OpenCategory() }</b>
+				<span class="diff">
+					<span class="pips" data-level={ fmt.Sprint(q.Difficulty) } title={ c.T(DifficultyKey(q.Difficulty)) }>
+						<i></i><i></i><i></i>
+					</span>
+					<span class="pips-label">{ c.T(DifficultyKey(q.Difficulty)) }</span>
+				</span>
+				<span class="badge badge-pending">{ c.T("admin.questions.inReview") }</span>
+			</div>
+			<a
+				class="btn btn-ghost btn-sm"
+				href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", d.OpenID)) }
+				data-key-edit
+			>
+				@adminIcon("i-edit", "icon-sm")
+				{ c.T("common.edit") }
+			</a>
+		</div>
+		<div class="panel-body">
+			<p class="s">
+				<span class="qid">{ fmt.Sprintf("#%d", d.OpenID) }</span>
+				{ " · " }
+				{ c.T("admin.questions.pointsValue", q.Points) }
+			</p>
+			<div class="locale-cols" style="margin-top:14px">
+				for _, loc := range c.Locales() {
+					@reviewLocale(c, d, loc)
+				}
+			</div>
+			<div class="grid grid-2" style="margin-top:20px;gap:20px">
+				<div class="form-section" style="margin:0;padding:0;border:0">
+					<h3>{ c.T("admin.review.checks") }</h3>
+					for _, check := range d.Checks {
+						<div class="row" style="align-items:flex-start;gap:8px;margin-bottom:8px">
+							@adminIcon(reviewCheckIcon(check.Level), reviewCheckClass(check.Level))
+							<span class="s" style="color:var(--ink-2)">{ c.T("admin." + check.Label) }</span>
+						</div>
+					}
+				</div>
+				<div class="form-section" style="margin:0;padding:0;border:0">
+					<h3>{ c.T("admin.question.source") }</h3>
+					if q.Source != "" {
+						<p class="source">
+							@adminIcon("i-book", "icon-sm")
+							{ q.Source }
+						</p>
+					} else {
+						<p class="help">{ c.T("admin.review.noSource") }</p>
+					}
+				</div>
+			</div>
+		</div>
+		// The four verdicts, with the keys the kit's shortcuts answer to. Each
+		// is a form of its own: they post to different places and a note is
+		// required by only one of them.
+		<div class="review-actions">
+			for _, loc := range d.OpenPending() {
+				@reviewAction(c, d.OpenID, loc)
+			}
+			<span class="spacer"></span>
+			if next := d.NextID(); next > 0 {
+				<a class="btn btn-ghost" href={ templ.SafeURL(fmt.Sprintf("/admin/review?q=%d", next)) } data-key-skip>
+					{ c.T("admin.review.skip") }
+					<span class="kbd">S</span>
+				</a>
+			}
+		</div>
+	</section>
+}
+
+// reviewLocale is one language of the question under review.
+templ reviewLocale(c Ctx, d AdminReviewData, loc i18n.Locale) {
+	{{ t, written := d.Open.Translations[loc.Code] }}
+	<div class="locale-col" dir={ loc.Dir } lang={ loc.Code }>
+		<h4>
+			{ loc.Name }
+			if !written {
+				<span class="badge badge-danger">{ c.T("admin.review.notWritten") }</span>
+			} else if t.NeedsReview {
+				<span class="badge badge-pending">{ c.T("admin.questions.awaiting") }</span>
+			} else {
+				<span class="badge badge-live">{ c.T("admin.review.published") }</span>
+			}
+		</h4>
+		if !written {
+			<p class="help">{ c.T("admin.review.notWrittenHint") }</p>
+		} else {
+			<p class="prompt">{ t.Prompt }</p>
+			<ul class="answers">
+				for i, choice := range t.Choices {
+					<li class={ templ.KV("is-correct", i == d.Open.CorrectIndex) }>
+						<span class="k">{ AnswerKey(loc.Code, i) }</span>
+						<span>{ choice }</span>
+					</li>
+				}
+			</ul>
+			if t.Explanation != "" {
+				<p class="explain">{ t.Explanation }</p>
+			}
+			// A note a reviewer already left on this language, so a second
+			// reviewer does not ask for the same change twice.
+			if t.ReviewNote != "" {
+				<div class="review-note">
+					@adminIcon("i-reply", "icon-sm")
+					<div><p>{ t.ReviewNote }</p></div>
+				</div>
+			}
+		}
+	</div>
 }

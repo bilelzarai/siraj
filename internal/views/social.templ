@@ -149,7 +149,7 @@ templ challengeActions(c Ctx, ch *models.Challenge) {
 		if !ch.ReadyToStart() {
 			<p class="tiny muted">{ c.T("challenge.needMore", models.MinChallengePlayers) }</p>
 		}
-		<div class="row" style="gap:8px">
+		<div class="row gap-4">
 			// Three different presses, and which one you get depends on where
 			// the match is. An invitation is accepted. A lobby waits for its
 			// host, who is the only person who can set it going. Once it is
@@ -343,7 +343,7 @@ templ Friends(c Ctx, d FriendsData) {
 					</div>
 				case "search":
 					<div class="stack">
-						<form method="get" action="/friends" class="row" style="gap:8px">
+						<form method="get" action="/friends" class="row gap-4">
 							<input type="hidden" name="tab" value="search"/>
 							<input
 								class="input"

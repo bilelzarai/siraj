@@ -266,7 +266,7 @@ func TestUnreadInAGroupIsCountedPerMember(t *testing.T) {
 	a.post("/messages/"+group, url.Values{"body": {"two"}})
 
 	unread := func(x *app) int {
-		code, body := x.get("/api/counts")
+		code, body := x.get("/ui/counts")
 		if code != http.StatusOK {
 			t.Fatalf("counts → %d", code)
 		}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -21,15 +22,8 @@ func (h *Handlers) AdminQuestions(w http.ResponseWriter, r *http.Request) {
 	c, chrome := h.adminCtx(w, r)
 
 	paging := h.paging(w, r)
-	filter := repository.AdminQuestionFilter{
-		Query:      strings.TrimSpace(r.URL.Query().Get("q")),
-		CategoryID: queryInt(r, "category", 0),
-		Difficulty: queryInt(r, "difficulty", 0),
-		Locale:     c.Locale,
-		OnlyReview: r.URL.Query().Get("review") == "1",
-		Limit:      paging.Size,
-		Offset:     paging.Offset(),
-	}
+	filter := adminQuestionFilterFrom(r.URL.Query(), c.Locale)
+	filter.Limit, filter.Offset = paging.Size, paging.Offset()
 
 	questions, total, err := h.repo.AdminQuestions(r.Context(), filter)
 	if err != nil {
@@ -37,19 +31,85 @@ func (h *Handlers) AdminQuestions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	paging = paging.withTotal(total)
-	categories, _ := h.repo.Categories(r.Context(), c.Locale)
+	categories, _ := h.repo.Categories(r.Context(), c.Locale, 0)
+	// The domain level above them, so the category select can be grouped and
+	// narrowed. Retired domains included: a category filed under one is still
+	// in the bank and still has to be findable in order to be moved out.
+	domains, _ := h.repo.AdminDomains(r.Context(), c.Locale)
 
 	h.render(w, r, http.StatusOK, views.AdminQuestions(c, chrome, views.AdminQuestionsData{
 		Questions:  questions,
 		Categories: categories,
+		Domains:    domains,
 		Total:      total,
 		Pager:      pagerFor(paging),
 		Query:      filter.Query,
 		CategoryID: filter.CategoryID,
+		DomainID:   filter.DomainID,
 		Difficulty: filter.Difficulty,
 		OnlyReview: filter.OnlyReview,
+		OnlyActive: filter.OnlyActive,
+		Retired:    filter.OnlyRetired,
+		OnlyNoted:  filter.OnlyNoted,
+		MinLocales: filter.MinLocales,
 		ForceIDs:   forceIDs(r.URL.Query().Get("force")),
+		Sorting: views.SortState{
+			Sort: filter.Sort, Path: "/admin/questions", Query: r.URL.Query(),
+		},
 	}))
+}
+
+// adminQuestionFilterFrom reads the question browser's filter out of a set of
+// submitted values.
+//
+// One reader for all three callers — the listing off the query string, a bulk
+// action off its form, and the export — because "everything matching what the
+// admin is looking at" is only true if all three build the same filter from the
+// same names. They did not: the bulk path had its own copy, so a filter field
+// added to the screen silently widened what a bulk delete selected.
+func adminQuestionFilterFrom(v urlValues, locale string) repository.AdminQuestionFilter {
+	f := repository.AdminQuestionFilter{
+		Query:      clip(strings.TrimSpace(v.Get("q")), 200),
+		CategoryID: valueInt(v, "category"),
+		DomainID:   valueInt(v, "domain"),
+		Difficulty: valueInt(v, "difficulty"),
+		Locale:     locale,
+		OnlyReview: v.Get("review") == "1",
+	}
+	// Live and retired are the two halves of one control, so "no state chosen"
+	// has to mean both rather than defaulting to one of them.
+	switch v.Get("state") {
+	case "live":
+		f.OnlyActive = true
+	case "retired":
+		f.OnlyRetired = true
+	}
+	// Translation coverage: anything short of every shipped language.
+	if v.Get("coverage") == "partial" {
+		f.MinLocales = models.ShippedLocales
+	}
+	f.Sort = sortFrom(v)
+	f.OnlyNoted = v.Get("review") == "changes"
+	if f.OnlyNoted {
+		f.OnlyReview = false
+	}
+	return f
+}
+
+// urlValues is what both a query string and a parsed form satisfy, so the
+// filter reader does not care which one it was handed.
+type urlValues interface{ Get(string) string }
+
+// values adapts url.Values to urlValues without naming the package at every
+// call site.
+func values(v url.Values) urlValues { return v }
+
+func valueInt(v urlValues, name string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(v.Get(name)))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // forceIDs reads the rows a refused delete wants unlocked. One id or a comma
@@ -81,13 +141,8 @@ func (h *Handlers) AdminQuestionBulk(w http.ResponseWriter, r *http.Request) {
 	var ids []int
 	if r.PostFormValue("scope") == "filter" {
 		var err error
-		ids, err = h.repo.AdminQuestionIDs(r.Context(), repository.AdminQuestionFilter{
-			Query:      strings.TrimSpace(r.PostFormValue("q")),
-			CategoryID: intParam(r, "category", 0),
-			Difficulty: intParam(r, "difficulty", 0),
-			Locale:     c.Locale,
-			OnlyReview: r.PostFormValue("review") == "1",
-		})
+		ids, err = h.repo.AdminQuestionIDs(r.Context(),
+			adminQuestionFilterFrom(values(r.PostForm), c.Locale))
 		if err != nil {
 			h.serverError(w, r, err)
 			return
@@ -194,11 +249,15 @@ func (h *Handlers) AdminQuestionAction(w http.ResponseWriter, r *http.Request) {
 	switch chi.URLParam(r, "action") {
 	case "activate":
 		if err = h.repo.SetQuestionActive(r.Context(), id, true); err == nil {
-			h.audit(r, "question.activate", "question", chi.URLParam(r, "id"), nil)
+			h.auditChange(r, "question.activate", "question", chi.URLParam(r, "id"), "",
+				map[string]any{"state": "retired"},
+				map[string]any{"state": "live"})
 		}
 	case "deactivate":
 		if err = h.repo.SetQuestionActive(r.Context(), id, false); err == nil {
-			h.audit(r, "question.deactivate", "question", chi.URLParam(r, "id"), nil)
+			h.auditChange(r, "question.deactivate", "question", chi.URLParam(r, "id"), "",
+				map[string]any{"state": "live"},
+				map[string]any{"state": "retired"})
 		}
 	case "delete":
 		// Deleting cascades to game_answers, which rewrites players' history.
@@ -257,7 +316,7 @@ func (h *Handlers) AdminQuestionForm(w http.ResponseWriter, r *http.Request) {
 		d = questionFormFromDraft(draft)
 	}
 
-	categories, err := h.repo.Categories(r.Context(), c.Locale)
+	categories, err := h.categoryOptions(r.Context(), c.Locale, d.CategoryID)
 	if err != nil {
 		h.serverError(w, r, err)
 		return
@@ -302,7 +361,17 @@ func (h *Handlers) AdminQuestionSave(w http.ResponseWriter, r *http.Request) {
 		d.Locales[loc.Code] = form
 	}
 
-	categories, err := h.repo.Categories(r.Context(), c.Locale)
+	// The category this question is already filed under stays selectable even
+	// if its domain has since been retired — see categoryOptions. Read from
+	// what is stored rather than from what was posted, so the exception cannot
+	// be used to aim a question at a category a player cannot reach.
+	keep := 0
+	if d.ID > 0 {
+		if stored, err := h.repo.QuestionDraftByID(r.Context(), d.ID); err == nil {
+			keep = stored.CategoryID
+		}
+	}
+	categories, err := h.categoryOptions(r.Context(), c.Locale, keep)
 	if err != nil {
 		h.serverError(w, r, err)
 		return
@@ -429,6 +498,42 @@ func validateQuestionLocale(form views.QuestionLocaleForm) string {
 		seen[choice] = true
 	}
 	return ""
+}
+
+// categoryOptions is what a question may be filed under: every category a
+// player can reach, plus `keep` when the question already sits in one that is
+// not reachable — a category whose domain has been retired.
+//
+// The exception is the whole point. Without it the select holds no option for
+// the question's own category, the browser preselects the first one, and an
+// edit that never touched the field moves the question into another subject
+// area — back into players' draws under a name nobody chose.
+func (h *Handlers) categoryOptions(ctx context.Context, locale string, keep int) ([]*models.Category, error) {
+	categories, err := h.repo.Categories(ctx, locale, 0)
+	if err != nil {
+		return nil, err
+	}
+	if keep <= 0 {
+		return categories, nil
+	}
+	for _, cat := range categories {
+		if cat.ID == keep {
+			return categories, nil
+		}
+	}
+
+	all, err := h.repo.AdminCategories(ctx, locale)
+	if err != nil {
+		return nil, err
+	}
+	for _, cat := range all {
+		if cat.ID == keep {
+			unreachable := cat.Category
+			categories = append(categories, &unreachable)
+			break
+		}
+	}
+	return categories, nil
 }
 
 func validCategory(categories []*models.Category, id int) bool {

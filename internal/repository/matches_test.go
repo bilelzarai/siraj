@@ -219,7 +219,7 @@ func TestAuthoredQuestionsStayInsideTheirMatch(t *testing.T) {
 
 	// 2. It is never drawn. Ask for far more questions than the bank holds, so
 	// a draw that could reach it would.
-	drawn, err := r.PickQuestionIDs(ctx, nil, 0, 100, "en")
+	drawn, err := r.PickQuestionIDs(ctx, nil, nil, 0, 100, "en")
 	if err != nil {
 		t.Fatalf("draw: %v", err)
 	}

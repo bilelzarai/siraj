@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -17,6 +18,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/bilelzarai/siraj/internal/handlers/api"
+	"github.com/bilelzarai/siraj/internal/repository"
 
 	"github.com/bilelzarai/siraj/internal/config"
 	"github.com/bilelzarai/siraj/internal/database"
@@ -36,6 +40,9 @@ Commands:
   passwd  <username>     Set a password, read from stdin
   stats                  Print platform totals
   seed                   Load the bundled question bank into the database
+  apikey new <label>     Mint a key for the public endpoint, shown once
+  apikey list            List the keys that exist, and when each was last used
+  apikey revoke <id>     Stop a key answering, keeping the row and its trail
 
 Passwords are stored as bcrypt hashes and cannot be read back — not by this
 tool, not by an admin, not from the database. passwd sets a new one:
@@ -49,6 +56,11 @@ seed loads internal/database/seed/questions.json. It is idempotent and will
 not overwrite a translation that something else has edited since, so it is safe
 to re-run after editing the file. Run it once on a new database — the server
 does not seed on boot unless SEED_ON_START says so, and it is not meant to.
+
+A key for the public endpoint is shown exactly once, when it is minted. Only
+its hash is stored, so neither this tool nor a database read can hand one back:
+lose it and mint another. Revoking keeps the row, because which key was used
+and when it was withdrawn is the trail an operator needs afterwards.
 
 Every command reads DATABASE_URL from the environment or from .env.
 `
@@ -101,10 +113,87 @@ func run(command string, args []string) error {
 		return stats(ctx, pool)
 	case "seed":
 		return seedBank(ctx, pool)
+	case "apikey":
+		return apiKey(ctx, pool, args)
 	default:
 		flag.Usage()
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+// apiKey mints, lists and revokes the credential behind the public endpoint.
+//
+// Minting is here rather than in the admin area for the same reason promoting
+// the first administrator is: it is a credential that answers without a
+// session, and nothing reachable over the web should be able to create one.
+func apiKey(ctx context.Context, pool *pgxpool.Pool, args []string) error {
+	repo := repository.New(pool)
+	if len(args) == 0 {
+		return errors.New("expected new, list or revoke")
+	}
+
+	switch args[0] {
+	case "new":
+		if len(args) != 2 {
+			return errors.New("expected a label, so a key can be told from the others later")
+		}
+		label := strings.TrimSpace(args[1])
+		if label == "" {
+			return errors.New("a label cannot be blank")
+		}
+		plaintext, hash, err := api.Mint()
+		if err != nil {
+			return fmt.Errorf("minting: %w", err)
+		}
+		key, err := repo.CreateAPIKey(ctx, label, hash, nil)
+		if err != nil {
+			return fmt.Errorf("storing: %w", err)
+		}
+		// The one moment this value exists anywhere. It is printed to stdout
+		// and not logged, so redirecting output is the only way it is kept.
+		fmt.Printf("key %d (%s) minted. It is shown once and cannot be recovered:\n\n  %s\n\n",
+			key.ID, key.Label, plaintext)
+		return nil
+
+	case "list":
+		keys, err := repo.APIKeys(ctx)
+		if err != nil {
+			return err
+		}
+		if len(keys) == 0 {
+			fmt.Println("no keys")
+			return nil
+		}
+		fmt.Printf("%-4s  %-24s  %-20s  %-20s  %s\n", "id", "label", "created", "last used", "state")
+		for _, k := range keys {
+			state := "live"
+			if !k.Live() {
+				state = "revoked " + k.RevokedAt.Format(time.DateOnly)
+			}
+			last := "never"
+			if k.LastUsedAt != nil {
+				last = k.LastUsedAt.Format(time.DateTime)
+			}
+			fmt.Printf("%-4d  %-24s  %-20s  %-20s  %s\n",
+				k.ID, k.Label, k.CreatedAt.Format(time.DateTime), last, state)
+		}
+		return nil
+
+	case "revoke":
+		if len(args) != 2 {
+			return errors.New("expected the id of the key to revoke, from `apikey list`")
+		}
+		id, err := strconv.Atoi(args[1])
+		if err != nil || id <= 0 {
+			return fmt.Errorf("%q is not a key id", args[1])
+		}
+		if err := repo.RevokeAPIKey(ctx, id); err != nil {
+			return err
+		}
+		fmt.Printf("key %d revoked. It will be refused from the next request.\n", id)
+		return nil
+	}
+	return fmt.Errorf("unknown apikey command %q", args[0])
 }
 
 func setAdmin(ctx context.Context, pool *pgxpool.Pool, args []string, admin bool) error {
@@ -175,8 +264,14 @@ func setAdmin(ctx context.Context, pool *pgxpool.Pool, args []string, admin bool
 // area at /admin/users shows the same thing with search and filters; this is
 // for when you are not signed in as an admin yet.
 func listUsers(ctx context.Context, pool *pgxpool.Pool) error {
+	// COALESCE in the query rather than a *string in the scan: a temporary
+	// player has no address — migration 0025 made the column nullable for
+	// exactly that — and pgx refuses to scan NULL into a string. Without this,
+	// every one of these commands failed outright on any server a guest had
+	// ever played on, which includes the command you reach for before you have
+	// an admin account to sign in with.
 	rows, err := pool.Query(ctx, `
-		SELECT username, display_name, email, role::text, status::text,
+		SELECT username, display_name, COALESCE(email::text, ''), role::text, status::text,
 		       locale, created_at, last_seen_at
 		  FROM users
 		 ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'moderator' THEN 1 ELSE 2 END,
@@ -273,7 +368,7 @@ func setPassword(ctx context.Context, pool *pgxpool.Pool, args []string) error {
 
 func listAdmins(ctx context.Context, pool *pgxpool.Pool) error {
 	rows, err := pool.Query(ctx, `
-		SELECT username, display_name, email, created_at, last_seen_at
+		SELECT username, display_name, COALESCE(email::text, ''), created_at, last_seen_at
 		  FROM users WHERE role = 'admin' ORDER BY created_at`)
 	if err != nil {
 		return err
@@ -317,8 +412,9 @@ func whois(ctx context.Context, pool *pgxpool.Pool, args []string) error {
 		created, seen                                    time.Time
 	)
 	err := pool.QueryRow(ctx, `
-		SELECT id::text, username, display_name, email, locale, country,
-		       role::text, xp, games_played, games_won, created_at, last_seen_at
+		SELECT id::text, username, display_name, COALESCE(email::text, ''),
+		       locale, country, role::text, xp, games_played, games_won,
+		       created_at, last_seen_at
 		  FROM users WHERE username = $1`, strings.TrimSpace(args[0]),
 	).Scan(&id, &username, &name, &email, &locale, &country,
 		&role, &xp, &played, &won, &created, &seen)

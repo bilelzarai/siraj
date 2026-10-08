@@ -69,7 +69,7 @@ templ Profile(c Ctx, d ProfileData) {
 			</section>
 			<div class="grid grid--2">
 				<section class="card stack">
-					<div class="card__head" style="margin:0">
+					<div class="card__head flush">
 						<span class="card__title">{ c.T("profile.byCategory") }</span>
 					</div>
 					if len(d.Stats.ByCategory) == 0 {
@@ -99,14 +99,14 @@ templ Profile(c Ctx, d ProfileData) {
 					}
 				</section>
 				<section class="card stack">
-					<div class="card__head" style="margin:0">
+					<div class="card__head flush">
 						<span class="card__title">{ c.T("profile.activity") }</span>
 					</div>
 					@activityChart(c, d.Stats.Last7Days)
 				</section>
 			</div>
 			<section class="card stack">
-				<div class="card__head" style="margin:0">
+				<div class="card__head flush">
 					<span class="card__title">{ c.T("profile.badges") }</span>
 				</div>
 				if earnedCount(d.Badges) == 0 {
@@ -134,7 +134,7 @@ templ Profile(c Ctx, d ProfileData) {
 					<div class="card__head" style="padding:18px 20px 0;margin:0">
 						<span class="card__title">{ c.T("home.activity.title") }</span>
 						if d.IsSelf {
-							<a class="tiny bold" style="color:var(--accent)" href="/history">
+							<a class="tiny bold accent" href="/history">
 								{ c.T("common.viewAll") }
 							</a>
 						}
@@ -253,7 +253,7 @@ templ EditProfile(c Ctx, d EditProfileData) {
 					</span>
 					<div class="stack stack--tight">
 						<strong class="small">{ c.T("profile.photo") }</strong>
-						<div class="row" style="gap:8px;flex-wrap:wrap">
+						<div class="row" style="gap:var(--s-4);flex-wrap:wrap">
 							<label class="btn btn--soft btn--sm">
 								{ c.T("profile.photoChoose") }
 								<input
@@ -309,7 +309,7 @@ templ EditProfile(c Ctx, d EditProfileData) {
 					Optional:  true,
 					Error:     d.Err("country"),
 				})
-				<div class="row" style="gap:10px">
+				<div class="row gap-5">
 					<button class="btn btn--primary" type="submit">{ c.T("profile.save") }</button>
 					<a class="btn btn--ghost" href="/profile">{ c.T("common.cancel") }</a>
 				</div>

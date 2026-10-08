@@ -440,7 +440,9 @@ func (s *Social) CreateMatch(ctx context.Context, host uuid.UUID, invited []uuid
 		}
 
 	default:
-		ids, err = s.repo.PickQuestionIDs(ctx, categoryID, difficulty, count, locale)
+		// A match is one category or the whole bank; drawing a match from a
+		// whole subject area is prompt 6f's question, not this one's.
+		ids, err = s.repo.PickQuestionIDs(ctx, categoryID, nil, difficulty, count, locale)
 		if err != nil {
 			return nil, err
 		}

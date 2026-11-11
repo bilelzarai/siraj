@@ -1,0 +1,78 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// LockedForGuest is S02: the page a guest gets instead of a members-only screen
+// (RL-03). `what` is a key suffix: friends, messages, profile, history, notifications,
+// my-questions, challenges, duel, rooms.
+templ LockedForGuest(v *view.Ctx, what string) {
+	@layouts.App(v, v.Tr("action.signup")) {
+		<div class="page">
+			<div class="lock-page">
+				<span class="e-ic">
+					@components.IconClass("lock", "i-lg")
+				</span>
+				<h1>{ v.Tr("locked.title", "what", v.Tr(lockedWhatKey(what))) }</h1>
+				<p class="muted">{ v.Tr("locked.body", "name", v.Name()) }</p>
+				<div class="row wrap center">
+					<a class="btn btn-primary btn-lg" href="/signup">{ v.Tr("action.signup") }</a>
+					<a class="btn btn-lg" href="/signin">{ v.Tr("action.signin") }</a>
+				</div>
+				<a class="link-btn" href="/play">{ v.Tr("locked.keep_playing") }</a>
+			</div>
+		</div>
+	}
+}
+
+var lockedWhats = map[string]bool{
+	"friends": true, "messages": true, "profile": true, "history": true,
+	"notifications": true, "my-questions": true, "challenges": true, "duel": true, "rooms": true,
+}
+
+func lockedWhatKey(what string) string {
+	if lockedWhats[what] {
+		return "locked.what." + what
+	}
+	return "locked.what.default"
+}
+
+// PublicProfile is endpoint 70 on the website: another player's card.
+templ PublicProfile(v *view.Ctx, p Person, xp int32) {
+	@layouts.App(v, p.Name) {
+		<div class="page narrow">
+			<section class="card pad stack center-text">
+				@components.PersonAvatar(p.Initials, p.Color, "xl", p.Online)
+				<h1>{ p.Name }</h1>
+				<p class="muted">{ "@" + p.Username }</p>
+				<p class="muted">{ v.Tr("profile.public_sub", "level", p.Level, "xp", xp) }</p>
+				<div class="row wrap center gap-sm">
+					if !p.IsFriend {
+						<form method="post" action="/friend-requests">
+							<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+							<input type="hidden" name="to" value={ p.ID }/>
+							<button class="btn btn-primary" type="submit">
+								@components.IconClass("plus", "i-sm")
+								{ v.Tr("friends.add") }
+							</button>
+						</form>
+					}
+					<a class="btn" href={ templ.URL("/messages?with=" + p.ID) }>
+						@components.IconClass("chat", "i-sm flip")
+						{ v.Tr("friends.message") }
+					</a>
+					<a class="btn" href={ templ.URL("/challenges/new?with=" + p.ID) }>
+						@components.IconClass("swords", "i-sm")
+						{ v.Tr("friends.challenge") }
+					</a>
+				</div>
+			</section>
+		</div>
+	}
+}
+
+var _ = fmt.Sprint

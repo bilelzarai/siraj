@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS ticket_attachments;
+DROP TABLE IF EXISTS ticket_messages;
+DROP SEQUENCE IF EXISTS support_ticket_number;
+DROP TABLE IF EXISTS support_tickets;
+DROP TYPE IF EXISTS ticket_status;
+DROP TYPE IF EXISTS ticket_topic;
+DROP TABLE IF EXISTS notifications;
+DROP TYPE IF EXISTS notification_kind;

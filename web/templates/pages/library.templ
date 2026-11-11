@@ -1,0 +1,451 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// My library: the player's own branches of the universal tree, and the ones they have
+// hung under official nodes (§6).
+//
+// It is the same tree the admin console edits — one hierarchy, not a parallel one for
+// players. What differs is who owns what, which is why a row says so plainly: a branch
+// a player built, an extension of something official, or official content they are
+// looking at from the inside.
+
+// LibraryNode is one row of the player's tree.
+type LibraryNode struct {
+	ID        int64
+	Name      string
+	Icon      string
+	Color     string
+	Children  int
+	Questions int
+	Status    string
+	Official  bool
+	Extension bool
+	// Under names the official branch an extension hangs from.
+	Under string
+	// Mine is true when the player owns it, which is what decides whether the row
+	// offers to change anything.
+	Mine bool
+}
+
+// LibraryCrumb is one step of the trail.
+type LibraryCrumb struct {
+	ID       int64
+	Name     string
+	Official bool
+}
+
+// LibraryItem is one piece of content hanging on the branch in view.
+type LibraryItem struct {
+	ID      int64
+	Type    string
+	Icon    string
+	Title   string
+	Back    string
+	Status  string
+	Mine    bool
+}
+
+// LibraryType is one kind a writer may add, as the registry describes it.
+type LibraryType struct {
+	Code   string
+	Icon   string
+	Fields []string
+}
+
+// LibraryData backs the library screen.
+type LibraryData struct {
+	// Parent is the branch being looked inside; zero is the player's own roots.
+	Parent int64
+	// ParentName and ParentOfficial describe that branch, for the heading and for
+	// whether "add here" reads as building or as extending.
+	ParentName     string
+	ParentOfficial bool
+	Trail          []LibraryCrumb
+	Nodes          []LibraryNode
+	Page           int
+	Pages          int
+	Total          int
+	Languages      []string
+	CanWrite       bool
+	// Items is what hangs on this branch, and Types is what may be added to it.
+	Items      []LibraryItem
+	Types      []LibraryType
+	ItemsTotal int
+}
+
+templ Library(v *view.Ctx, d LibraryData) {
+	@layouts.App(v, v.Tr("library.title")) {
+		<div class="page mid library-page">
+			<div class="page-head">
+				<div>
+					<h1>
+						if d.Parent == 0 {
+							{ v.Tr("library.title") }
+						} else {
+							{ d.ParentName }
+						}
+					</h1>
+					<p class="sub">
+						if d.Parent == 0 {
+							{ v.Tr("library.sub") }
+						} else if d.ParentOfficial {
+							{ v.Tr("library.inside_official") }
+						} else {
+							{ v.Tr("library.inside_mine") }
+						}
+					</p>
+				</div>
+				if d.CanWrite {
+					<button class="btn btn-primary" type="button" x-on:click="$refs.newNode.showModal()">
+						@components.IconClass("plus", "i-sm")
+						if d.ParentOfficial && d.Parent > 0 {
+							{ v.Tr("library.extend_here") }
+						} else {
+							{ v.Tr("library.add_here") }
+						}
+					</button>
+				}
+			</div>
+			if len(d.Trail) > 0 {
+				<nav class="crumbs push-bottom" aria-label={ v.Tr("library.title") }>
+					<a href="/library">{ v.Tr("library.mine") }</a>
+					for _, c := range d.Trail {
+						@components.IconClass("chevR", "i-sm flip")
+						<a href={ templ.URL(fmt.Sprintf("/library?parent=%d", c.ID)) }>
+							{ c.Name }
+							if c.Official {
+								<span class="badge blue">{ v.Tr("library.official") }</span>
+							}
+						</a>
+					}
+				</nav>
+			}
+			if d.ParentOfficial && d.Parent > 0 {
+				<p class="note push-bottom">
+					@components.IconClass("info", "i-sm")
+					{ v.Tr("library.extension_note") }
+				</p>
+			}
+			if len(d.Nodes) == 0 {
+				@components.Empty("book", v.Tr("library.empty"), v.Tr("library.empty_help"))
+			} else {
+				<ul class="list card">
+					for _, n := range d.Nodes {
+						<li class="li">
+							<span class="cat-ic sm" style={ "--c:" + first(n.Color, "#0b7a5c") }>
+								@components.Icon(first(n.Icon, "book"))
+							</span>
+							<span class="grow min0">
+								<a class="t block" href={ templ.URL(fmt.Sprintf("/library?parent=%d", n.ID)) }>{ n.Name }</a>
+								<span class="s">
+									if n.Under != "" {
+										{ v.Tr("library.under", "name", n.Under) }
+										{ " · " }
+									}
+									{ v.Tr("library.counts", "children", n.Children, "questions", n.Questions) }
+								</span>
+							</span>
+							if n.Official {
+								<span class="badge blue">{ v.Tr("library.official") }</span>
+							} else if n.Extension {
+								<span class="badge gold">{ v.Tr("library.my_extension") }</span>
+							} else {
+								<span class="badge green">{ v.Tr("library.mine") }</span>
+							}
+							if n.Mine {
+								<a class="btn btn-sm btn-ghost" href={ templ.URL(fmt.Sprintf("/library/%d/share", n.ID)) }>
+									{ v.Tr("library.share") }
+								</a>
+								<form method="post" action={ templ.SafeURL(fmt.Sprintf("/library/%d/archive", n.ID)) }>
+									<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+									<button class="btn btn-sm btn-ghost" type="submit">
+										{ v.Tr("action.archive") }
+									</button>
+								</form>
+							}
+						</li>
+					}
+				</ul>
+				if d.Pages > 1 {
+					<nav class="pager push-top" aria-label={ v.Tr("action.next_page") }>
+						for i := 1; i <= d.Pages; i++ {
+							<a
+								class={ "page-n", templ.KV("on", i == d.Page) }
+								href={ templ.URL(fmt.Sprintf("/library?parent=%d&page=%d", d.Parent, i)) }
+							>{ fmt.Sprint(i) }</a>
+						}
+					</nav>
+				}
+			}
+			if d.Parent > 0 {
+				<section class="push-top">
+					<div class="section-head">
+						<h2>{ v.Tr("library.content") }</h2>
+						if d.CanWrite && len(d.Types) > 0 {
+							<button class="btn btn-sm" type="button" x-on:click="$refs.newItem.showModal()">
+								@components.IconClass("plus", "i-sm")
+								{ v.Tr("library.add_card") }
+							</button>
+						}
+					</div>
+					if len(d.Items) == 0 {
+						<p class="muted">{ v.Tr("library.no_content") }</p>
+					} else {
+						<ul class="list card">
+							for _, it := range d.Items {
+								<li class="li">
+									<span class="cat-ic sm" style="--c:#0b7a5c">
+										@components.Icon(first(it.Icon, "book"))
+									</span>
+									<span class="grow min0">
+										<span class="t block" dir="auto">{ it.Title }</span>
+										if it.Back != "" {
+											<span class="s" dir="auto">{ it.Back }</span>
+										}
+									</span>
+									<span class="badge">{ v.Tr("content.type." + it.Type) }</span>
+									if it.Mine {
+										<form method="post" action={ templ.SafeURL(fmt.Sprintf("/library/content/%d/delete", it.ID)) }>
+											<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+											<button class="btn btn-sm btn-ghost" type="submit">{ v.Tr("action.delete") }</button>
+										</form>
+									}
+								</li>
+							}
+						</ul>
+					}
+				</section>
+			}
+			@libraryNewDialog(v, d)
+			if d.Parent > 0 && d.CanWrite {
+				@libraryItemDialog(v, d)
+			}
+		</div>
+	}
+}
+
+// libraryNewDialog adds a branch under whatever the player is looking at. Under one of
+// their own nodes that is building; under an official one it is an extension, and the
+// wording says which so nobody thinks they are editing the official tree.
+templ libraryNewDialog(v *view.Ctx, d LibraryData) {
+	<dialog class="sheet" x-ref="newNode">
+		<form method="post" action="/library">
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<input type="hidden" name="parent" value={ fmt.Sprint(d.Parent) }/>
+			<div class="sheet-head">
+				<h2>
+					if d.ParentOfficial && d.Parent > 0 {
+						{ v.Tr("library.extend_here") }
+					} else {
+						{ v.Tr("library.add_here") }
+					}
+				</h2>
+				<button class="icon-btn" type="button" x-on:click="$refs.newNode.close()" aria-label={ v.Tr("action.close") }>
+					@components.Icon("x")
+				</button>
+			</div>
+			<div class="sheet-body stack">
+				<div class="field">
+					<label class="label" for="lib-name">{ v.Tr("library.name") }</label>
+					<input
+						class="input"
+						id="lib-name"
+						name={ "name_" + v.Lang }
+						dir="auto"
+						required
+						maxlength="80"
+						placeholder={ v.Tr("library.name_placeholder") }
+					/>
+					<span class="help">{ v.Tr("library.name_help", "lang", i18n.Native[v.Lang]) }</span>
+				</div>
+				<div class="field">
+					<label class="label" for="lib-desc">{ v.Tr("library.description") }</label>
+					<textarea class="textarea" id="lib-desc" name={ "desc_" + v.Lang } dir="auto" rows="2" maxlength="300"></textarea>
+				</div>
+			</div>
+			<div class="sheet-foot">
+				<button class="btn" type="button" x-on:click="$refs.newNode.close()">{ v.Tr("action.cancel") }</button>
+				<button class="btn btn-primary" type="submit">{ v.Tr("action.create") }</button>
+			</div>
+		</form>
+	</dialog>
+}
+
+// libraryItemDialog writes a piece of content onto the branch in view. The fields come
+// from the registry, so a kind added in the console appears here with no change to
+// this template (§14).
+templ libraryItemDialog(v *view.Ctx, d LibraryData) {
+	<dialog class="sheet" x-ref="newItem">
+		<form method="post" action="/library/content">
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<input type="hidden" name="node" value={ fmt.Sprint(d.Parent) }/>
+			<div class="sheet-head">
+				<h2>{ v.Tr("library.add_card") }</h2>
+				<button class="icon-btn" type="button" x-on:click="$refs.newItem.close()" aria-label={ v.Tr("action.close") }>
+					@components.Icon("x")
+				</button>
+			</div>
+			<div class="sheet-body stack" x-data={ typePicker(d) }>
+				<div class="field">
+					<label class="label" for="item-type">{ v.Tr("library.kind") }</label>
+					<select class="select" id="item-type" name="type" x-model="kind">
+						for _, t := range d.Types {
+							<option value={ t.Code }>{ v.Tr("content.type." + t.Code) }</option>
+						}
+					</select>
+				</div>
+				for _, t := range d.Types {
+					<div x-show={ "kind === '" + t.Code + "'" } class="stack">
+						for _, f := range t.Fields {
+							<div class="field">
+								<label class="label" for={ t.Code + "-" + f }>{ v.Tr("content.field." + f) }</label>
+								<textarea
+									class="textarea"
+									id={ t.Code + "-" + f }
+									name={ "field_" + t.Code + "_" + f }
+									dir="auto"
+									rows="2"
+								></textarea>
+							</div>
+						}
+					</div>
+				}
+			</div>
+			<div class="sheet-foot">
+				<button class="btn" type="button" x-on:click="$refs.newItem.close()">{ v.Tr("action.cancel") }</button>
+				<button class="btn btn-primary" type="submit">{ v.Tr("action.create") }</button>
+			</div>
+		</form>
+	</dialog>
+}
+
+// typePicker shows the fields of whichever kind is chosen. The kinds come from the
+// database, so the component is built from the data rather than listing them.
+func typePicker(d LibraryData) string {
+	kind := ""
+	if len(d.Types) > 0 {
+		kind = d.Types[0].Code
+	}
+	return "{ kind: '" + kind + "' }"
+}
+
+// LibraryShare is one person a branch is open to.
+type LibraryShare struct {
+	UserID string
+	Name    string
+	Initials string
+	Color   string
+	Level   string
+}
+
+// LibraryPerson is a search result a branch can be shared with.
+type LibraryPerson struct {
+	UserID   string
+	Name     string
+	Handle   string
+	Initials string
+	Color    string
+}
+
+// ShareData backs the sharing screen of one branch.
+type ShareData struct {
+	NodeID   int64
+	NodeName string
+	Shares   []LibraryShare
+	Found    []LibraryPerson
+	Query    string
+	// Levels are the four §7 levels, in the order they widen.
+	Levels []string
+}
+
+// Sharing a branch (§7). A share lets somebody else in at a stated level; it never
+// changes who owns the branch, and it reaches everything under it — which the screen
+// says out loud, because sharing a subject and discovering later that it included
+// every lesson under it is not a pleasant surprise.
+templ Share(v *view.Ctx, d ShareData) {
+	@layouts.App(v, v.Tr("share.title", "name", d.NodeName)) {
+		<div class="page mid">
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("share.title", "name", d.NodeName) }</h1>
+					<p class="sub">{ v.Tr("share.sub") }</p>
+				</div>
+				<a class="btn" href={ templ.URL(fmt.Sprintf("/library?parent=%d", d.NodeID)) }>
+					{ v.Tr("action.back") }
+				</a>
+			</div>
+			<p class="note push-bottom">
+				@components.IconClass("info", "i-sm")
+				{ v.Tr("share.reaches_branch") }
+			</p>
+			<section class="card pad stack">
+				<h2>{ v.Tr("share.with_whom") }</h2>
+				<form method="get" action={ templ.SafeURL(fmt.Sprintf("/library/%d/share", d.NodeID)) } class="row gap-sm">
+					<input
+						class="input grow"
+						type="search"
+						name="q"
+						value={ d.Query }
+						placeholder={ v.Tr("share.find_someone") }
+						aria-label={ v.Tr("share.find_someone") }
+					/>
+					<button class="btn" type="submit">{ v.Tr("action.search") }</button>
+				</form>
+				if d.Query != "" && len(d.Found) == 0 {
+					<p class="muted">{ v.Tr("share.nobody_found") }</p>
+				}
+				for _, p := range d.Found {
+					<form
+						class="li"
+						method="post"
+						action={ templ.SafeURL(fmt.Sprintf("/library/%d/share", d.NodeID)) }
+					>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<input type="hidden" name="user" value={ p.UserID }/>
+						<span class="avatar sm" style={ "--c:" + p.Color }>{ p.Initials }</span>
+						<span class="grow min0">
+							<span class="t block">{ p.Name }</span>
+							if p.Handle != "" {
+								<span class="s">{ "@" + p.Handle }</span>
+							}
+						</span>
+						<select class="select sm" name="level" aria-label={ v.Tr("share.level") }>
+							for _, lv := range d.Levels {
+								<option value={ lv } selected?={ lv == "play" }>{ v.Tr("share.level." + lv) }</option>
+							}
+						</select>
+						<button class="btn btn-sm btn-primary" type="submit">{ v.Tr("share.invite") }</button>
+					</form>
+				}
+			</section>
+			<section class="card pad stack push-top">
+				<h2>{ v.Tr("share.who_has_access") }</h2>
+				if len(d.Shares) == 0 {
+					<p class="muted">{ v.Tr("share.nobody_yet") }</p>
+				} else {
+					<ul class="list">
+						for _, sh := range d.Shares {
+							<li class="li">
+								<span class="avatar sm" style={ "--c:" + sh.Color }>{ sh.Initials }</span>
+								<span class="grow min0"><span class="t block">{ sh.Name }</span></span>
+								<span class="badge">{ v.Tr("share.level." + sh.Level) }</span>
+								<form method="post" action={ templ.SafeURL(fmt.Sprintf("/library/%d/revoke", d.NodeID)) }>
+									<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+									<input type="hidden" name="user" value={ sh.UserID }/>
+									<button class="btn btn-sm btn-ghost" type="submit">{ v.Tr("share.revoke") }</button>
+								</form>
+							</li>
+						}
+					</ul>
+				}
+			</section>
+		</div>
+	}
+}

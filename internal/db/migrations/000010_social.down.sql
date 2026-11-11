@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS invites;
+DROP TABLE IF EXISTS blocks;
+DROP TABLE IF EXISTS friend_requests;
+DROP TABLE IF EXISTS friendships;

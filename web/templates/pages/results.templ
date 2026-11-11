@@ -1,0 +1,311 @@
+package pages
+
+import (
+	"fmt"
+	"slices"
+
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// ResultsData is the results screen (RS-01…RS-04).
+type ResultsData struct {
+	GameID    string
+	Title     string
+	Score     int32
+	Correct   int32
+	Total     int32
+	XP        int32
+	Accuracy  int32
+	AverageMS int32
+	Goal      int32
+	DoneToday int32
+	ByDomain  []DomainResult
+	// Review is the page of answers on screen, not the whole game: a 20-question
+	// round is read a few lines at a time (GP-05).
+	Review      []ReviewItem
+	ReviewPage  int
+	ReviewPages int
+	ReviewPer   int
+	Again       string // where "play again" goes
+}
+
+// ReviewPerPage is how many answers a page of the review can hold; the first is the
+// default and a quick game fits in one page.
+var ReviewPerPage = []int{5, 3, 10, 20}
+
+type DomainResult struct {
+	DomainID   int64
+	DomainName string
+	Color      string
+	Answered   int32
+	Correct    int32
+}
+
+type ReviewItem struct {
+	Question GameQuestion
+	Choice   *int32
+	Correct  bool
+	Points   int32
+	TimeMS   int32
+	Skipped  bool
+}
+
+// Results is prototype screen 11 (P11).
+templ Results(v *view.Ctx, d ResultsData) {
+	@layouts.App(v, v.Tr("results.title")) {
+		<div class="page mid results-page" x-data={ confettiInit(d) }>
+			<section class="card result-hero">
+				<span class={ "badge", resultBadge(d) }>{ d.Title }</span>
+				<div class="big-score num">
+					{ fmt.Sprint(d.Correct) }
+					<small>/ { fmt.Sprint(d.Total) }</small>
+				</div>
+				<h1 class="res-msg">{ resultMessage(v, d) }</h1>
+				<p class="muted">
+					if v.IsGuest() {
+						{ v.Tr("results.guest_keep") }
+					} else if d.Goal > 0 {
+						{ v.Tr("results.xp_and_goal", "xp", d.XP, "done", d.DoneToday, "goal", d.Goal) }
+					} else {
+						{ v.Tr("results.xp_gained", "xp", d.XP) }
+					}
+				</p>
+			</section>
+			<div class="stat-row four">
+				<div class="stat gold">
+					<div class="k">{ v.Tr("results.points") }</div>
+					<div class="v num">{ fmt.Sprint(d.Score) }</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("results.accuracy") }</div>
+					<div class="v num">{ fmt.Sprint(d.Accuracy) }%</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("results.avg_time") }</div>
+					<div class="v num">{ v.Tr("results.seconds", "n", averageSeconds(d)) }</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("results.xp") }</div>
+					<div class="v num">+{ fmt.Sprint(d.XP) }</div>
+				</div>
+			</div>
+			if v.IsGuest() {
+				<div class="banner">
+					<span class="mode-ic gold sm">
+						@components.Icon("star")
+					</span>
+					<div class="grow">{ v.Tr("results.guest_banner", "points", d.Score) }</div>
+					<a class="btn btn-primary" href="/signup">{ v.Tr("action.signup") }</a>
+				</div>
+			}
+			<div class="row wrap gap-sm">
+				<a class="btn btn-primary btn-lg" href={ templ.URL(d.Again) }>
+					@components.IconClass("tri", "flip")
+					{ v.Tr("results.play_again") }
+				</a>
+				<a class="btn btn-lg" href="/setup">{ v.Tr("results.change_settings") }</a>
+				if !v.IsGuest() {
+					<a class="btn btn-lg" href={ templ.URL("/challenges/new?from=" + d.GameID) }>
+						@components.Icon("send")
+						{ v.Tr("results.challenge_friend") }
+					</a>
+				}
+				<span class="spacer"></span>
+				<a class="btn btn-ghost btn-lg" href="/home">{ v.Tr("nav.home") }</a>
+			</div>
+			if len(d.ByDomain) > 1 {
+				<section class="card pad stack">
+					<h2 class="card-title">{ v.Tr("results.by_domain") }</h2>
+					for _, row := range d.ByDomain {
+						<div class="dom-line">
+							<span class="dot-c" style={ "--c:" + row.Color }></span>
+							<span class="grow">{ row.DomainName }</span>
+							<span class="num">{ fmt.Sprint(row.Correct) } / { fmt.Sprint(row.Answered) }</span>
+						</div>
+					}
+				</section>
+			}
+			@ReviewList(v, d)
+		</div>
+	}
+}
+
+// ReviewList is "Review your answers", one page at a time: how many lines a page
+// holds, then the lines, then the pager. It swaps itself, so turning the page never
+// reloads the whole results screen (GP-05).
+templ ReviewList(v *view.Ctx, d ResultsData) {
+	<section class="card" id="review">
+		<div class="card-head review-head">
+			<h2>{ v.Tr("results.review") }</h2>
+			<span class="help">{ v.Tr("results.review_help") }</span>
+		</div>
+		<div class="review-bar">
+			<span class="help">{ v.Tr("results.per_page") }</span>
+			<div class="seg sm" role="group" aria-label={ v.Tr("results.per_page") }>
+				for _, n := range sortedPerPage() {
+					<a
+						class={ "seg-item num", templ.KV("on", n == d.ReviewPer) }
+						href={ templ.URL(reviewHref(d, 1, n)) }
+						aria-pressed={ fmt.Sprint(n == d.ReviewPer) }
+						{ reviewHX(d, 1, n)... }
+					>{ fmt.Sprint(n) }</a>
+				}
+			</div>
+			<span class="spacer"></span>
+			<nav class="pager" aria-label={ v.Tr("action.next_page") }>
+				@components.PagerArrow(reviewHref(d, d.ReviewPage-1, d.ReviewPer), "chevL", v.Tr("action.previous_page"), d.ReviewPage > 1, reviewHX(d, d.ReviewPage-1, d.ReviewPer))
+				<span class="pg-info num">{ fmt.Sprintf("%d / %d", d.ReviewPage, d.ReviewPages) }</span>
+				@components.PagerArrow(reviewHref(d, d.ReviewPage+1, d.ReviewPer), "chevR", v.Tr("action.next_page"), d.ReviewPage < d.ReviewPages, reviewHX(d, d.ReviewPage+1, d.ReviewPer))
+			</nav>
+		</div>
+		for _, item := range d.Review {
+			@ReviewRow(v, item)
+		}
+	</section>
+}
+
+// sortedPerPage lists the page sizes smallest first; ReviewPerPage keeps the default
+// in front, which is not the order a row of choices is read in.
+func sortedPerPage() []int {
+	out := append([]int(nil), ReviewPerPage...)
+	slices.Sort(out)
+	return out
+}
+
+func reviewHref(d ResultsData, page int, per int) string {
+	if page < 1 {
+		page = 1
+	}
+	return fmt.Sprintf("/games/%s/results?rp=%d&rpp=%d", d.GameID, page, per)
+}
+
+// reviewHX swaps the review card in place; the href behind it still works on its own.
+func reviewHX(d ResultsData, page int, per int) templ.Attributes {
+	return templ.Attributes{
+		"hx-get":    reviewHref(d, page, per),
+		"hx-target": "#review",
+		"hx-select": "#review",
+		"hx-swap":   "outerHTML",
+	}
+}
+
+// ReviewRow is one line of "Review your answers": the mark, the question, what the
+// player answered and what was right, then the stars, comment and report (RS-03, RS-04).
+templ ReviewRow(v *view.Ctx, item ReviewItem) {
+	<div class="review-q">
+		<span class={ "mark", markClass(item) }>
+			@components.IconClass(markIcon(item), "i-sm")
+		</span>
+		<div class="body">
+			<div class="qq" lang={ v.Lang }>{ item.Question.Body }</div>
+			<div class="ra-line">
+				if item.Correct {
+					<b class="good-ink">{ item.Question.Answers[item.Question.CorrectIndex] }</b>
+				} else {
+					if item.Skipped {
+						<span class="muted">{ v.Tr("results.skipped") }</span>
+					} else if item.Choice == nil {
+						<span class="muted">{ v.Tr("results.no_answer") }</span>
+					} else {
+						<s class="muted">{ item.Question.Answers[*item.Choice] }</s>
+					}
+					{ " · " }
+					<b class="good-ink">{ item.Question.Answers[item.Question.CorrectIndex] }</b>
+				}
+				<span class="muted">
+					{ " · " }
+					{ item.Question.CategoryName }
+					{ " · " }
+					if item.Points > 0 {
+						+{ fmt.Sprint(item.Points) } { v.Tr("results.pts") }
+					} else {
+						0 { v.Tr("results.pts") }
+					}
+				</span>
+			</div>
+			<div class="rate">
+				@components.Stars(item.Question.ID, 0, v)
+				<span class="spacer"></span>
+				<button
+					class="btn btn-ghost btn-sm"
+					type="button"
+					hx-get={ fmt.Sprintf("/questions/%d/comments", item.Question.ID) }
+					hx-target="#drawer-slot"
+					hx-swap="outerHTML"
+				>
+					@components.IconClass("chat", "i-sm flip")
+					{ v.Tr("results.comment_short") }
+				</button>
+				<button
+					class="btn btn-ghost btn-sm"
+					type="button"
+					hx-get={ fmt.Sprintf("/questions/%d/report", item.Question.ID) }
+					hx-target="#drawer-slot"
+					hx-swap="outerHTML"
+				>
+					@components.IconClass("flag", "i-sm")
+					{ v.Tr("results.report_short") }
+				</button>
+			</div>
+		</div>
+	</div>
+}
+
+func markClass(item ReviewItem) string {
+	switch {
+	case item.Correct:
+		return "ok"
+	case item.Skipped:
+		return "skip"
+	default:
+		return "no"
+	}
+}
+
+func markIcon(item ReviewItem) string {
+	switch {
+	case item.Correct:
+		return "check"
+	case item.Skipped:
+		return "skip"
+	default:
+		return "x"
+	}
+}
+
+func resultBadge(d ResultsData) string {
+	if d.Total > 0 && d.Correct*100/d.Total >= 70 {
+		return "green"
+	}
+	return "gold"
+}
+
+func averageSeconds(d ResultsData) string {
+	return fmt.Sprintf("%.1f", float64(d.AverageMS)/1000)
+}
+
+// confettiInit fires the confetti at 80% correct or more (RS-01, motion rules).
+func confettiInit(d ResultsData) string {
+	if d.Total > 0 && d.Correct*100/d.Total >= 80 {
+		return "sjConfetti"
+	}
+	return "{}"
+}
+
+func resultMessage(v *view.Ctx, d ResultsData) string {
+	if d.Total == 0 {
+		return v.Tr("results.message.keep")
+	}
+	switch percent := d.Correct * 100 / d.Total; {
+	case percent == 100:
+		return v.Tr("results.message.perfect")
+	case percent >= 80:
+		return v.Tr("results.message.great")
+	case percent >= 50:
+		return v.Tr("results.message.good")
+	default:
+		return v.Tr("results.message.keep")
+	}
+}

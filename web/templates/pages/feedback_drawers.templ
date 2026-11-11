@@ -1,0 +1,161 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+)
+
+// Comment is one comment under a question (RS-03).
+type Comment struct {
+	Author   string
+	Initials string
+	Color    string
+	Body     string
+	When     string
+}
+
+// ReportDrawer is the "Report a problem" drawer (RS-04): the question it is about,
+// the reason as one of a row of chips, and an optional note.
+templ ReportDrawer(v *view.Ctx, questionID int64, body string, reasons []string, sent bool) {
+	<div id="drawer-slot" x-data="sjOverlay" x-init="show()">
+		<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+		<aside
+			class="ov drawer sheet"
+			role="dialog"
+			aria-modal="true"
+			x-show="open"
+			x-on:keydown.escape.window="hide()"
+			x-trap="open"
+		>
+			<div class="drawer-head">
+				<div>
+					<h2>{ v.Tr("report.title") }</h2>
+					<p>{ v.Tr("report.subtitle", "id", questionID) }</p>
+				</div>
+				<span class="spacer"></span>
+				<button type="button" class="icon-btn sm" x-on:click="hide()" aria-label={ v.Tr("action.close") }>
+					@components.Icon("x")
+				</button>
+			</div>
+			if sent {
+				<div class="drawer-body stack">
+					<p class="good">{ v.Tr("report.thanks") }</p>
+					<button class="btn btn-primary" type="button" x-on:click="hide()">{ v.Tr("action.close") }</button>
+				</div>
+			} else {
+				<form
+					hx-post={ fmt.Sprintf("/questions/%d/report", questionID) }
+					hx-target="#drawer-slot"
+					hx-swap="outerHTML"
+				>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<div class="drawer-body stack">
+						if body != "" {
+							<blockquote class="report-q">{ body }</blockquote>
+						}
+						<div>
+							<div class="label push-bottom-sm">{ v.Tr("report.whats_wrong") }</div>
+							<div class="row wrap gap-sm">
+								for i, reason := range reasons {
+									<label class="chip">
+										<input class="sr-only" type="radio" name="reason" value={ reason } required checked?={ i == 0 }/>
+										{ v.Tr("report.reason." + reason) }
+									</label>
+								}
+							</div>
+						</div>
+						<div class="field">
+							<label class="label" for="note">{ v.Tr("report.details") }</label>
+							<textarea class="input" id="note" name="note" rows="4" placeholder={ v.Tr("report.details_placeholder") }></textarea>
+						</div>
+					</div>
+					<div class="drawer-foot">
+						<button class="btn btn-ghost" type="button" x-on:click="hide()">{ v.Tr("action.cancel") }</button>
+						<button class="btn btn-primary" type="submit">{ v.Tr("report.send") }</button>
+					</div>
+				</form>
+			}
+		</aside>
+	</div>
+}
+
+// CommentsDrawer is the comment sheet of a question (RS-03): what the question was,
+// what other players wrote, and the box to add to it. It uses the same frame as the
+// report drawer — head, scrolling body, foot — so nothing touches the panel edge and
+// the sheet reads the same way in Arabic.
+templ CommentsDrawer(v *view.Ctx, questionID int64, body string, comments []Comment) {
+	<div id="drawer-slot" x-data="sjOverlay" x-init="show()">
+		<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+		<aside
+			class="ov drawer sheet"
+			role="dialog"
+			aria-modal="true"
+			x-show="open"
+			x-on:keydown.escape.window="hide()"
+			x-trap="open"
+		>
+			<div class="drawer-head">
+				<div>
+					<h2>{ v.Tr("comment.title") }</h2>
+					<p>{ v.Tr("comment.subtitle") }</p>
+				</div>
+				<span class="spacer"></span>
+				<button type="button" class="icon-btn sm" x-on:click="hide()" aria-label={ v.Tr("action.close") }>
+					@components.Icon("x")
+				</button>
+			</div>
+			<form
+				hx-post={ fmt.Sprintf("/questions/%d/comments", questionID) }
+				hx-target="#drawer-slot"
+				hx-swap="outerHTML"
+			>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<div class="drawer-body stack">
+					if body != "" {
+						<blockquote class="report-q">{ body }</blockquote>
+					}
+					if len(comments) == 0 {
+						<p class="muted">{ v.Tr("comment.none") }</p>
+					} else {
+						<div class="comments">
+							for _, c := range comments {
+								<div class="comment">
+									@components.PersonAvatar(c.Initials, c.Color, "sm", false)
+									<div class="c-main">
+										<div class="c-top">
+											<b>{ c.Author }</b>
+											<bdi class="help">{ c.When }</bdi>
+										</div>
+										<p dir="auto">{ c.Body }</p>
+									</div>
+								</div>
+							}
+						</div>
+					}
+					if v.SignedIn() {
+						<div class="field">
+							<label class="label" for="body">{ v.Tr("comment.yours") }</label>
+							<textarea
+								class="input"
+								id="body"
+								name="body"
+								rows="3"
+								maxlength="400"
+								required
+								placeholder={ v.Tr("comment.placeholder") }
+							></textarea>
+							<span class="help">{ v.Tr("comment.moderated") }</span>
+						</div>
+					}
+				</div>
+				<div class="drawer-foot">
+					<button class="btn btn-ghost" type="button" x-on:click="hide()">{ v.Tr("action.close") }</button>
+					if v.SignedIn() {
+						<button class="btn btn-primary" type="submit">{ v.Tr("comment.send") }</button>
+					}
+				</div>
+			</form>
+		</aside>
+	</div>
+}

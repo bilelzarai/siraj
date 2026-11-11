@@ -1,0 +1,324 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// Person is another player as the social screens show them.
+type Person struct {
+	ID        string
+	Username  string
+	Name      string
+	Initials  string
+	Color     string
+	Level     int32
+	Online    bool
+	IsFriend  bool
+	Requested bool
+	// Guest marks someone playing without an account: they can be met and messaged,
+	// but never befriended (RL-02, RL-03).
+	Guest bool
+	Wins      int32
+	Losses    int32
+	HasRecord bool
+}
+
+// FriendRequest is one row of the "Friend requests" card.
+type FriendRequest struct {
+	ID     string
+	Person Person
+}
+
+// FriendsData backs P23 (FR-01).
+type FriendsData struct {
+	Q          string
+	Friends    []Person
+	Online     []Person
+	Found      []Person
+	Requests   []FriendRequest
+	Suggest    []Person
+	InviteLink string
+}
+
+templ Friends(v *view.Ctx, d FriendsData) {
+	@layouts.App(v, v.Tr("friends.title")) {
+		<div
+			class="page friends-page"
+			id="friends"
+			hx-get="/friends"
+			hx-trigger="sj:live:friends from:body"
+			hx-select="#friends"
+			hx-swap="outerHTML"
+		>
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("friends.title") }</h1>
+					<p class="sub">{ v.Tr("friends.sub") }</p>
+				</div>
+				@inviteDialog(v, d)
+			</div>
+			<form class="input-icon block push-bottom" role="search" action="/friends" method="get">
+				@components.Icon("search")
+				<span class="sr-only">{ v.Tr("action.search") }</span>
+				<input
+					class="input"
+					name="q"
+					value={ d.Q }
+					placeholder={ v.Tr("friends.search_placeholder") }
+					autocomplete="off"
+					hx-get="/friends"
+					hx-trigger="input changed delay:300ms"
+					hx-target="body"
+					hx-push-url="true"
+				/>
+			</form>
+			<div class="cols">
+				<div class="col-main stack-lg">
+					if d.Q == "" && len(d.Online) > 0 {
+						<section>
+							<div class="label push-bottom-sm">{ v.Tr("friends.online_now") }</div>
+							<div class="online-strip">
+								for _, p := range d.Online {
+									<a class="on-av" href={ templ.URL("/messages?with=" + p.ID) }>
+										@components.PersonAvatar(p.Initials, p.Color, "lg", true)
+										<span>{ p.Name }</span>
+									</a>
+								}
+							</div>
+						</section>
+					}
+					<section>
+						<div class="section-head tight">
+							<h2>
+								{ v.Tr("friends.your_friends") }
+								<span class="muted num semibold">{ fmt.Sprint(len(d.Friends)) }</span>
+							</h2>
+						</div>
+						if len(d.Friends) == 0 {
+							<div class="card">
+								if d.Q != "" {
+									@components.Empty("users", v.Tr("friends.none_match"), "")
+								} else {
+									@components.Empty("users", v.Tr("friends.none"), v.Tr("friends.sub"))
+								}
+							</div>
+						} else {
+							<div class="f-grid">
+								for _, p := range d.Friends {
+									@friendCard(v, p)
+								}
+							</div>
+						}
+					</section>
+					if d.Q != "" {
+						<section>
+							<div class="section-head tight">
+								<h2>{ v.Tr("friends.people") }</h2>
+							</div>
+							<div class="card pad tight-rows">
+								if len(d.Found) == 0 {
+									@components.Empty("search", v.Tr("friends.no_one"), "")
+								} else {
+									for _, p := range d.Found {
+										@personRow(v, p) {
+											@addFriendButton(v, p)
+										}
+									}
+								}
+							</div>
+						</section>
+					}
+				</div>
+				<aside class="col-side">
+					<section class="card pad">
+						<div class="card-head">
+							<h2>{ v.Tr("friends.requests") }</h2>
+							if len(d.Requests) > 0 {
+								<span class="count gold">{ fmt.Sprint(len(d.Requests)) }</span>
+							}
+						</div>
+						if len(d.Requests) == 0 {
+							<p class="help">{ v.Tr("friends.no_requests") }</p>
+						} else {
+							for _, r := range d.Requests {
+								@personRow(v, r.Person) {
+									<div class="row gap-xs">
+										<form method="post" action={ templ.SafeURL("/friend-requests/" + r.ID + "/decline") }>
+											<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+											<button class="icon-btn sm outline" type="submit" aria-label={ v.Tr("friends.decline") }>
+												@components.IconClass("x", "i-sm")
+											</button>
+										</form>
+										<form method="post" action={ templ.SafeURL("/friend-requests/" + r.ID + "/accept") }>
+											<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+											<button class="btn btn-sm btn-primary" type="submit">{ v.Tr("friends.accept") }</button>
+										</form>
+									</div>
+								}
+							}
+						}
+					</section>
+					<section class="card pad">
+						<div class="card-head">
+							<h2>{ v.Tr("friends.played_with") }</h2>
+						</div>
+						<p class="help push-bottom-xs">{ v.Tr("friends.played_with_help") }</p>
+						for _, p := range d.Suggest {
+							@personRow(v, p) {
+								@addFriendButton(v, p)
+							}
+						}
+					</section>
+				</aside>
+			</div>
+		</div>
+	}
+}
+
+templ friendCard(v *view.Ctx, p Person) {
+	<article class="card f-card">
+		<div class="f-top">
+			@components.PersonAvatar(p.Initials, p.Color, "lg", p.Online)
+			<div class="f-more" x-data="sjOverlay">
+				<button class="icon-btn sm" type="button" x-on:click="toggle()" x-bind:aria-expanded="open" aria-label={ p.Name }>
+					@components.IconClass("more", "i-sm")
+				</button>
+				<div class="menu" role="menu" x-show="open" x-on:click.outside="hide()" x-cloak>
+					<a class="mi" href={ templ.URL("/u/" + p.Username) }>
+						@components.Icon("user")
+						{ v.Tr("profile.title") }
+					</a>
+					<form method="post" action={ templ.SafeURL("/friends/" + p.ID + "/remove") }>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="mi" type="submit">
+							@components.Icon("trash")
+							{ v.Tr("friends.remove") }
+						</button>
+					</form>
+					<form method="post" action={ templ.SafeURL("/blocks/" + p.ID) }>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="mi danger" type="submit">
+							@components.Icon("x")
+							{ v.Tr("friends.block") }
+						</button>
+					</form>
+				</div>
+			</div>
+		</div>
+		<b class="f-name">{ p.Name }</b>
+		<span class="help">{ "@" + p.Username + " · " + v.Tr("friends.level", "level", p.Level) }</span>
+		<span class="f-rec">
+			if p.HasRecord {
+				{ v.Tr("friends.record") }
+				<b class="num">{ fmt.Sprintf("%d – %d", p.Wins, p.Losses) }</b>
+			} else {
+				{ v.Tr("friends.no_games_together") }
+			}
+		</span>
+		<div class="row gap-xs full">
+			<a class="btn btn-sm btn-soft grow" href={ templ.URL("/challenges/new?with=" + p.ID) }>
+				@components.IconClass("swords", "i-sm")
+				{ v.Tr("friends.challenge") }
+			</a>
+			<a class="btn btn-sm grow" href={ templ.URL("/messages?with=" + p.ID) }>
+				@components.IconClass("chat", "i-sm flip")
+				{ v.Tr("friends.message") }
+			</a>
+		</div>
+	</article>
+}
+
+templ personRow(v *view.Ctx, p Person) {
+	<div class="li tight">
+		@components.PersonAvatar(p.Initials, p.Color, "", p.Online)
+		<div class="grow">
+			<div class="t">{ p.Name }</div>
+			<div class="s">{ personLine(v, p) }</div>
+		</div>
+		{ children... }
+	</div>
+}
+
+// personLine is the line under a name: the username when there is one, and the level.
+// A guest has no username, so the line never starts with a bare "@" (RL-02).
+func personLine(v *view.Ctx, p Person) string {
+	level := v.Tr("friends.level", "level", p.Level)
+	if p.Guest || p.Username == "" {
+		if p.Guest {
+			return v.Tr("guest.badge") + " · " + level
+		}
+		return level
+	}
+	return "@" + p.Username + " · " + level
+}
+
+// addFriendButton is the one action on somebody you are not friends with yet. A guest
+// has no account to befriend, so they get nothing to press (RL-03).
+templ addFriendButton(v *view.Ctx, p Person) {
+	if p.Guest {
+		<span class="help">{ v.Tr("friends.guest_no_account") }</span>
+	} else if p.Requested {
+		<span class="badge">{ v.Tr("friends.requested") }</span>
+	} else {
+		<form method="post" action="/friend-requests">
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<input type="hidden" name="to" value={ p.ID }/>
+			<button class="btn btn-sm" type="submit">
+				@components.IconClass("plus", "i-sm")
+				{ v.Tr("friends.add") }
+			</button>
+		</form>
+	}
+}
+
+// inviteDialog is "Invite with a link" and the dialog behind it (FR-05): the link,
+// one button that copies it, and the way out. The link is read from the field by the
+// copy itself, so no address is ever written into a script.
+templ inviteDialog(v *view.Ctx, d FriendsData) {
+	<div x-data="sjInvite">
+		<button class="btn" type="button" x-on:click="show()" x-bind:aria-expanded="open">
+			@components.Icon("link")
+			{ v.Tr("friends.invite_link") }
+		</button>
+		<div x-show="open" x-cloak>
+			<div class="ov scrim" x-on:click="hide()" x-transition.opacity></div>
+			<div
+				class="ov modal"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="invite-title"
+				x-on:keydown.escape.window="hide()"
+				x-trap="open"
+			>
+				<span class="m-ic">
+					@components.Icon("link")
+				</span>
+				<h2 id="invite-title">{ v.Tr("invite.title") }</h2>
+				<p class="muted">{ v.Tr("invite.body") }</p>
+				<div class="row gap-sm push-top-sm">
+					<label class="sr-only" for="invite-link">{ v.Tr("friends.invite_link") }</label>
+					<input
+						class="input grow"
+						id="invite-link"
+						value={ d.InviteLink }
+						data-copied={ v.Tr("friends.invite_copied") }
+						readonly
+						spellcheck="false"
+						x-ref="link"
+						x-on:focus="$el.select()"
+					/>
+					<button class="btn" type="button" x-on:click="copy()">
+						@components.IconClass("copy", "i-sm")
+						{ v.Tr("action.copy") }
+					</button>
+				</div>
+				<div class="actions">
+					<button class="btn btn-primary" type="button" x-on:click="hide()">{ v.Tr("action.done") }</button>
+				</div>
+			</div>
+		</div>
+	</div>
+}

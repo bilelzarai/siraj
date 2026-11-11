@@ -1,0 +1,97 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// Welcome is prototype screen 1 (AU-01, BR-05): tagline, the three facts, play as a
+// guest, create an account, and the question of the day playable without an account.
+templ Welcome(v *view.Ctx, domains []view.Domain, qotd *QOTD) {
+	@layouts.Focus(v, v.Tr("action.signin")) {
+		<div class="welcome">
+			@components.Pattern("kh-welcome")
+			<div class="glow"></div>
+			<div class="welcome-top">
+				<span class="brand-mark">
+					@components.Lamp()
+				</span>
+				<span class="brand-name welcome-brand">{ v.Tr("app.name") }</span>
+				<span class="spacer"></span>
+				<div class="row welcome-langs">
+					for _, code := range []string{"ar", "en", "fr"} {
+						<form method="post" action="/settings/language">
+							<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+							<input type="hidden" name="lang" value={ code }/>
+							<input type="hidden" name="back" value="/welcome"/>
+							<button
+								class={ "btn btn-sm btn-ghost", templ.KV("on", v.Lang == code) }
+								type="submit"
+								aria-pressed={ fmt.Sprint(v.Lang == code) }
+							>
+								{ langBadge(code) }
+							</button>
+						</form>
+					}
+				</div>
+				<a class="btn btn-sm btn-outline-light hide-sm" href="/signin">{ v.Tr("action.signin") }</a>
+			</div>
+			<div class="welcome-body">
+				<div class="welcome-copy">
+					<h1>{ v.Tr("welcome.headline") }</h1>
+					<p class="lead">{ v.Tr("welcome.lead") }</p>
+					<div class="row wrap welcome-cta">
+						<a class="btn btn-gold btn-lg" href="/guest">
+							@components.IconClass("tri", "flip")
+							{ v.Tr("guest.play") }
+						</a>
+						<a class="btn btn-lg btn-outline-light" href="/signup">{ v.Tr("action.signup") }</a>
+					</div>
+					<a class="link-btn welcome-have" href="/signin">
+						{ v.Tr("welcome.i_have_account") } · { v.Tr("action.signin") }
+					</a>
+					if len(domains) > 0 {
+						<div class="w-doms">
+							for _, d := range domains {
+								<span style={ "--d:" + d.Color }><i></i>{ d.Name }</span>
+							}
+							<span class="more"><i></i>{ v.Tr("welcome.more_monthly") }</span>
+						</div>
+					}
+					<div class="facts">
+						<span>
+							@components.Icon("languages")
+							{ v.Tr("welcome.fact.langs") }
+						</span>
+						<span>
+							@components.IconClass("book", "flip")
+							{ v.Tr("welcome.fact.sources") }
+						</span>
+						<span>
+							@components.Icon("gift")
+							{ v.Tr("welcome.fact.free") }
+						</span>
+					</div>
+				</div>
+				<div class="welcome-try">
+					if qotd != nil {
+						@QotdCard(v, qotd, "w-qotd", true)
+					}
+				</div>
+			</div>
+		</div>
+	}
+}
+
+func langBadge(code string) string {
+	switch code {
+	case "ar":
+		return "ع"
+	case "fr":
+		return "FR"
+	default:
+		return "EN"
+	}
+}

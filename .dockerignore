@@ -1,16 +1,48 @@
-.git
+# What never belongs in a deploy. The server stage does `COPY . .`, so without this
+# file the whole working directory — 280 MB of it — is sent to the daemon and lands
+# in a build layer: the dependencies Bun installs itself, the logs and binaries of a
+# dev run, the uploads a dev database points at, and .env with the real credentials
+# in it. Only the sources the two stages actually build are left in.
+
+# Secrets. .env is read by the server at runtime from its own environment, never
+# from the image.
 .env
-bin/
-tmp/
+.env.*
+!.env.example
+
+# History and local tooling
+.git
+.gitignore
+.github
+.vscode
+.air.toml
+.editorconfig
+
+# Built and installed by the stages themselves
+node_modules
+web/dist
+
+# A dev run's leavings: logs, pid files and the binaries scripts/app.sh builds
+tmp
+var
+server
+worker
+devseed
+server.pid
 *.log
+*.pid
+*.exe
+*.test
+*.out
 
-# Build output and installed packages: the image builds its own, and a stale
-# local copy must never shadow the stage output.
-node_modules/
-static/dist/
-
-# The long-form documents, now one directory. CLAUDE.md and README.md stay at
-# the root and are excluded by name, because the root is not a documents
-# directory and never becomes one.
-docs/
+# Documentation, design material and the dev kit: none of it is served
+docs
+siraj-v2-dev-kit
 *.md
+*.pdf
+*.patch
+api.http
+scripts
+tests
+docker-compose.yml
+Dockerfile

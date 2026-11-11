@@ -1,0 +1,228 @@
+### Sirāj API — click "Send Request" above each block (REST Client extension).
+### Pick the environment once: Ctrl+Alt+E (Cmd+Alt+E on macOS) → "local". Start the server first (task 3).
+###
+### The database ships empty: domains, categories and questions are written in the
+### admin console (/admin). The ids below — @domain, @game, @room… — are the ones
+### your own data hands back, so send the request above them first.
+
+### Health (#113)
+GET {{base}}/health
+
+### App config (#112)
+GET {{base}}/config
+
+### Start a guest session (#4) — copies the token into @token below automatically
+# @name guest
+POST {{base}}/auth/guest
+Content-Type: application/json
+
+{ "name": "Malek", "client": "ios" }
+
+###
+@token = {{guest.response.body.data.token}}
+
+### Current user (#11)
+GET {{base}}/me
+Authorization: Bearer {{token}}
+
+### Your domains (#114) — a new player starts with the flagship, if one is published
+# @name mine
+GET {{base}}/me/domains
+Authorization: Bearer {{token}}
+Accept-Language: en
+
+###
+@domain = {{mine.response.body.data.0.id}}
+
+### Explore every domain, in Arabic (#17, scope=all)
+GET {{base}}/domains?scope=all&page=1&per_page=6
+Authorization: Bearer {{token}}
+Accept-Language: ar
+
+### Search domains and categories (#21)
+GET {{base}}/search?scope=all&q=tawhid
+Authorization: Bearer {{token}}
+
+### Domain detail (#18) and its categories (#19)
+GET {{base}}/domains/{{domain}}
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/domains/{{domain}}/categories
+Authorization: Bearer {{token}}
+Accept-Language: fr
+
+### One category (#20)
+GET {{base}}/categories/1
+Authorization: Bearer {{token}}
+
+### Add a domain (#116) — playing in one adds it too
+POST {{base}}/me/domains/{{domain}}
+Authorization: Bearer {{token}}
+
+### Replace and reorder (#115) — onboarding or Manage
+PUT {{base}}/me/domains
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "domain_ids": [{{domain}}], "source": "added" }
+
+### Remove a domain (#117) — refused with 409 last_domain when it's the last one
+DELETE {{base}}/me/domains/{{domain}}
+Authorization: Bearer {{token}}
+
+### Question of the day (#22)
+GET {{base}}/daily-question
+Authorization: Bearer {{token}}
+
+### Start a quick game (#24) — 422 no_questions until the bank has some
+# @name game
+POST {{base}}/games
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "kind": "quick", "domain_id": {{domain}} }
+
+###
+@game = {{game.response.body.data.id}}
+
+### Game state (#25), 50/50 (#27), an answer (#26), finish (#29), results (#30)
+GET {{base}}/games/{{game}}
+Authorization: Bearer {{token}}
+
+###
+POST {{base}}/games/{{game}}/fifty
+Authorization: Bearer {{token}}
+
+###
+POST {{base}}/games/{{game}}/answers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "position": 0, "choice": 1, "time_ms": 1200 }
+
+###
+POST {{base}}/games/{{game}}/finish
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/games/{{game}}/results
+Authorization: Bearer {{token}}
+
+### Host a live room (#36), then join it with the code (#38)
+# @name room
+POST {{base}}/rooms
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "domain_id": {{domain}}, "question_count": 5, "seconds": 20, "max_players": 4 }
+
+###
+@room = {{room.response.body.data.code}}
+
+### The lobby (#37), ready (#41), chat (#45, #44), start (#43), podium (#46)
+GET {{base}}/rooms/{{room}}
+Authorization: Bearer {{token}}
+
+###
+POST {{base}}/rooms/{{room}}/ready
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "ready": true }
+
+###
+POST {{base}}/rooms/{{room}}/messages
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "body": "bismillah" }
+
+###
+POST {{base}}/rooms/{{room}}/start
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/rooms/{{room}}/podium
+Authorization: Bearer {{token}}
+
+### Duels: queue (#47), state, stop searching (#48), ratings (#50)
+POST {{base}}/duels/queue
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "domain_id": {{domain}} }
+
+###
+GET {{base}}/duels/queue
+Authorization: Bearer {{token}}
+
+###
+DELETE {{base}}/duels/queue
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/me/duel-ratings
+Authorization: Bearer {{token}}
+
+### Challenges: the three boxes (#51), the counts (#52), a new one (#53)
+GET {{base}}/challenges?box=received
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/challenges/stats
+Authorization: Bearer {{token}}
+
+###
+POST {{base}}/challenges
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "friend_ids": [], "domain_id": {{domain}}, "question_count": 5, "seconds": 20, "days": 3, "message": "yalla" }
+
+### A random opponent (#61) and a pass-the-device round (#62)
+POST {{base}}/challenges/random-opponent
+Authorization: Bearer {{token}}
+
+###
+POST {{base}}/local-rounds
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "locals": ["Malek", "Yusuf"], "domain_id": {{domain}}, "question_count": 5, "seconds": 20 }
+
+### Messages: the inbox (#75), a thread (#77), sending (#83), the badge
+GET {{base}}/conversations?tab=people
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/conversations-candidates
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/conversations-unread-count
+Authorization: Bearer {{token}}
+
+### Progress (#90), mastery (#91), leaderboard (#95), notifications (#87)
+GET {{base}}/me/progress
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/me/mastery
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/leaderboards?period=week&scope=global
+Authorization: Bearer {{token}}
+
+###
+GET {{base}}/notifications
+Authorization: Bearer {{token}}
+
+### The live stream (standing in for the WebSocket, #111): one line per signal
+GET {{base}}/events
+Authorization: Bearer {{token}}
+
+### Sign out (#7)
+POST {{base}}/auth/logout
+Authorization: Bearer {{token}}

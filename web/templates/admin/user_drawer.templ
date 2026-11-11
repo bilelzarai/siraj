@@ -1,0 +1,298 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+)
+
+// A02b, the user drawer: who the account is, what staff may change on it — the role,
+// the player's own settings and the domains their app shows — and what it has done.
+// Everything on it is read from the database; nothing here is a sample.
+
+// UserChip is one domain this player follows.
+type UserChip struct {
+	ID       int64
+	Name     string
+	Color    string
+	Icon     string
+	Islamic  bool
+	Source   string
+	Selected bool
+}
+
+// UserMastery is one line of the "strongest categories" block.
+type UserMastery struct {
+	Name    string
+	Icon    string
+	Color   string
+	Percent int
+	Warn    bool
+}
+
+// UserSanctionRow is one line of the moderation history.
+type UserSanctionRow struct {
+	Kind   string
+	Reason string
+	By     string
+	When   string
+	Lifted bool
+}
+
+// UserFormData is the whole drawer.
+type UserFormData struct {
+	ID          string
+	Name        string
+	Username    string
+	Email       string
+	Initials    string
+	Color       string
+	Kind        string
+	Role        string
+	Lang        string
+	Theme       string
+	DailyGoal   int32
+	IslamicOnly bool
+	Joined      string
+	LastSeen    string
+	Providers   string
+	Level       int32
+	XP          int32
+	Games       int
+	Accuracy    int
+	Streak      int
+	Chips       []UserChip
+	Top         []UserMastery
+	Sanctions   []UserSanctionRow
+	Action      string
+	SanctionURL string
+	LiftURL     string
+	// CanRole is false for staff who may open the drawer but not change a role.
+	CanRole bool
+	Error   string
+}
+
+templ UserDrawer(v *view.Ctx, d UserFormData) {
+	<aside class="drawer" role="dialog" aria-modal="true" aria-hidden="true" style="width:min(620px,100vw)">
+		<form method="post" action={ templ.SafeURL(d.Action) } hx-post={ d.Action } hx-target="#drawer-slot" hx-swap="innerHTML">
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<div class="drawer-head">
+				<div class="profile-head">
+					<span class="avatar lg" style={ "--c:" + d.Color }>{ d.Initials }</span>
+					<div>
+						<h2>{ d.Name }</h2>
+						<p>
+							if d.Username != "" {
+								{ "@" + d.Username } ·
+							}
+							{ v.Tr("admin.joined", "when", d.Joined) }
+						</p>
+					</div>
+				</div>
+				<button class="icon-btn" type="button" data-close aria-label={ v.Tr("admin.close") }>
+					@Icon("x")
+				</button>
+			</div>
+			<div class="drawer-body">
+				if d.Error != "" {
+					<div class="callout danger">
+						@Icon("alert")
+						<div>{ d.Error }</div>
+					</div>
+				}
+				<div class="grid grid-3" style="gap:10px;margin-bottom:22px">
+					<div class="kpi" style="padding:12px 14px">
+						<div class="kpi-label">{ v.Tr("admin.games") }</div>
+						<div class="kpi-value" style="font-size:22px">{ fmt.Sprint(d.Games) }</div>
+					</div>
+					<div class="kpi" style="padding:12px 14px">
+						<div class="kpi-label">{ v.Tr("admin.accuracy") }</div>
+						<div class="kpi-value" style="font-size:22px">{ fmt.Sprintf("%d%%", d.Accuracy) }</div>
+					</div>
+					<div class="kpi" style="padding:12px 14px">
+						<div class="kpi-label">{ v.Tr("admin.streak") }</div>
+						<div class="kpi-value" style="font-size:22px">{ fmt.Sprintf("%d d", d.Streak) }</div>
+					</div>
+				</div>
+				<div class="form-section">
+					<h3>{ v.Tr("admin.account") }</h3>
+					<dl class="side-facts">
+						<dt>{ v.Tr("admin.email") }</dt>
+						<dd>
+							if d.Email != "" {
+								{ d.Email }
+							} else {
+								{ v.Tr("admin.guest_no_email") }
+							}
+						</dd>
+						<dt>{ v.Tr("admin.kind") }</dt>
+						<dd>{ d.Kind }</dd>
+						<dt>{ v.Tr("admin.level") }</dt>
+						<dd>{ fmt.Sprintf("%d · %d XP", d.Level, d.XP) }</dd>
+						<dt>{ v.Tr("admin.sign_in") }</dt>
+						<dd>
+							if d.Providers != "" {
+								{ d.Providers }
+							} else {
+								{ v.Tr("admin.no_provider") }
+							}
+						</dd>
+						<dt>{ v.Tr("admin.last_seen") }</dt>
+						<dd>{ d.LastSeen }</dd>
+					</dl>
+				</div>
+				<div class="form-section">
+					<h3>{ v.Tr("admin.role") }</h3>
+					<div class="field">
+						<label class="label" for="u-role">{ v.Tr("admin.role") }</label>
+						<select class="select" id="u-role" name="role" disabled?={ !d.CanRole }>
+							for _, o := range roleOptions(v) {
+								<option value={ o.Value } selected?={ o.Value == d.Role }>{ o.Label }</option>
+							}
+						</select>
+						<span class="help">{ v.Tr("admin.role_help") }</span>
+					</div>
+				</div>
+				<div class="form-section">
+					<h3>{ v.Tr("admin.player_settings") }</h3>
+					<div class="form-grid">
+						<div class="field">
+							<label class="label" for="u-lang">{ v.Tr("admin.language") }</label>
+							<select class="select" id="u-lang" name="lang">
+								for _, lang := range i18n.Langs {
+									<option value={ lang } selected?={ d.Lang == lang }>{ i18n.Native[lang] }</option>
+								}
+							</select>
+						</div>
+						<div class="field">
+							<label class="label" for="u-theme">{ v.Tr("admin.theme") }</label>
+							<select class="select" id="u-theme" name="theme">
+								<option value="system" selected?={ d.Theme == "system" }>{ v.Tr("settings.theme_system") }</option>
+								<option value="light" selected?={ d.Theme == "light" }>{ v.Tr("settings.theme_light") }</option>
+								<option value="dark" selected?={ d.Theme == "dark" }>{ v.Tr("settings.theme_dark") }</option>
+							</select>
+						</div>
+						<div class="field">
+							<label class="label" for="u-goal">{ v.Tr("admin.daily_goal") }</label>
+							<input class="input num" id="u-goal" type="number" name="daily_goal" min="1" max="20" value={ fmt.Sprint(d.DailyGoal) }/>
+						</div>
+						<div class="field">
+							<span class="label">{ v.Tr("settings.islamic_only") }</span>
+							<label class="check-row">
+								<input type="checkbox" name="islamic_only" value="1" checked?={ d.IslamicOnly }/>
+								<span>{ v.Tr("admin.islamic_only_help") }</span>
+							</label>
+						</div>
+					</div>
+				</div>
+				<div class="form-section">
+					<h3>{ v.Tr("admin.their_domains") }</h3>
+					<div class="field">
+						<span class="label">
+							{ v.Tr("admin.your_domains") }
+							<span class="opt">· { v.Tr("admin.domains_help") }</span>
+						</span>
+						<div class="dom-chips" style="margin-top:8px">
+							for _, chip := range d.Chips {
+								<label class={ "dom-chip", templ.KV("is-off", !chip.Selected) } style={ "--c:" + chip.Color }>
+									<input
+										type="checkbox"
+										name="domain_id"
+										value={ fmt.Sprint(chip.ID) }
+										checked?={ chip.Selected }
+										class="sr-only"
+									/>
+									<span class="dot">{ chip.Icon }</span>
+									{ chip.Name }
+								</label>
+							}
+						</div>
+						if len(d.Chips) == 0 {
+							<div class="empty" style="padding:12px 0"><p>{ v.Tr("admin.no_domains_yet") }</p></div>
+						}
+					</div>
+				</div>
+				<div class="form-section">
+					<h3>{ v.Tr("admin.strongest") }</h3>
+					if len(d.Top) == 0 {
+						<div class="empty" style="padding:16px 0"><p>{ v.Tr("admin.no_mastery") }</p></div>
+					}
+					for _, m := range d.Top {
+						<div class="field">
+							<div class="row">
+								<span><span class="cat-tile" style={ "--c:" + m.Color } aria-hidden="true">{ m.Icon }</span></span>
+								<span style="flex:1">{ m.Name }</span>
+							</div>
+							<div class="meter">
+								<div class={ "meter-bar", templ.KV("warn", m.Warn) }>
+									<i style={ fmt.Sprintf("--v:%d%%", m.Percent) }></i>
+								</div>
+								<span class="v">{ fmt.Sprintf("%d%%", m.Percent) }</span>
+							</div>
+						</div>
+					}
+				</div>
+				<div class="form-section">
+					<h3>{ v.Tr("admin.moderation_history") }</h3>
+					if len(d.Sanctions) == 0 {
+						<div class="empty" style="padding:16px 0"><p>{ v.Tr("admin.no_sanctions") }</p></div>
+					}
+					for _, s := range d.Sanctions {
+						<div class="row" style="padding:6px 0">
+							<span class={ "badge", templ.KV("badge-danger", !s.Lifted), templ.KV("badge-neutral", s.Lifted) }>{ s.Kind }</span>
+							<span style="flex:1">{ s.Reason }</span>
+							<span class="help">{ s.When } · { s.By }</span>
+						</div>
+					}
+				</div>
+			</div>
+			<div class="drawer-foot">
+				if d.SanctionURL != "" {
+					<a class="btn btn-danger-ghost" href={ templ.URL(d.SanctionURL) }>
+						@Icon("clock")
+						{ v.Tr("admin.suspend") }
+					</a>
+				}
+				<span class="spacer"></span>
+				<button class="btn btn-ghost" type="button" data-close>{ v.Tr("admin.cancel") }</button>
+				<button class="btn btn-primary" type="submit">{ v.Tr("admin.save_changes") }</button>
+			</div>
+		</form>
+	</aside>
+}
+
+func roleOptions(v *view.Ctx) []Option {
+	return []Option{
+		{Value: "player", Label: v.Tr("admin.role_player")},
+		{Value: "translator", Label: v.Tr("admin.role_translator")},
+		{Value: "moderator", Label: v.Tr("admin.role_moderator")},
+		{Value: "support", Label: v.Tr("admin.role_support")},
+		{Value: "admin", Label: v.Tr("admin.role_admin")},
+	}
+}
+
+// UserPage is the same configuration without JavaScript: a deep link to one
+// account, with the drawer's own fields inside the console's layout (NF-02).
+templ UserPage(v *view.Ctx, s Shell, d UserFormData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div class="profile-head">
+				<span class="avatar lg" style={ "--c:" + d.Color }>{ d.Initials }</span>
+				<div>
+					<h1>{ d.Name }</h1>
+					<p class="sub">
+						if d.Username != "" {
+							{ "@" + d.Username } ·
+						}
+						{ v.Tr("admin.joined", "when", d.Joined) }
+					</p>
+				</div>
+			</div>
+		</div>
+		<div class="panel">
+			<div class="panel-body">
+				@UserDrawer(v, d)
+			</div>
+		</div>
+	}
+}

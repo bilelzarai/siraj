@@ -1,0 +1,281 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// SettingsData backs P29 (OT-02). Guests see the banner and the display section only.
+type SettingsData struct {
+	Name         string
+	Username     string
+	Email        string
+	IslamicOnly  bool
+	DailyGoal    int32
+	Theme        string
+	Notify       map[string]bool
+	Privacy      map[string]string
+	ShowOnBoards bool
+	HasGoogle    bool
+	HasPassword  bool
+	Saved        bool
+}
+
+templ Settings(v *view.Ctx, d SettingsData) {
+	@layouts.App(v, v.Tr("settings.title")) {
+		<div class="page narrow stack-lg settings-page">
+			<div class="page-head flush">
+				<h1>{ v.Tr("settings.title") }</h1>
+			</div>
+			if v.IsGuest() {
+				<div class="banner">
+					<div class="grow">
+						<b>{ v.Tr("settings.guest_banner", "name", v.Name()) }</b>
+						{ " " }
+						{ v.Tr("settings.guest_banner_body") }
+					</div>
+					<a class="btn btn-primary btn-sm" href="/signup">{ v.Tr("action.signup") }</a>
+				</div>
+			} else {
+				<form class="card pad stack" method="post" action="/settings/profile">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<h2 class="card-title">{ v.Tr("settings.profile") }</h2>
+					<div class="form-grid">
+						<div class="field">
+							<label class="label" for="st-name">{ v.Tr("settings.name") }</label>
+							<input class="input" id="st-name" name="display_name" value={ d.Name } maxlength="40"/>
+						</div>
+						<div class="field">
+							<label class="label" for="st-user">{ v.Tr("settings.username") }</label>
+							<input class="input" id="st-user" name="username" value={ d.Username } maxlength="20"/>
+						</div>
+					</div>
+					<div class="field">
+						<label class="label" for="st-email">{ v.Tr("settings.email") }</label>
+						<input class="input" id="st-email" type="email" value={ d.Email } disabled/>
+					</div>
+					<div class="row">
+						<span class="spacer"></span>
+						<button class="btn btn-primary" type="submit">{ v.Tr("settings.save") }</button>
+					</div>
+				</form>
+			}
+			<form class="card pad stack" method="post" action="/settings/content">
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<div>
+					<h2 class="card-title">{ v.Tr("settings.content") }</h2>
+					<p class="help">{ v.Tr("settings.content_help") }</p>
+				</div>
+				<label class="switch start">
+					<input type="checkbox" name="islamic_only" value="1" checked?={ d.IslamicOnly } hx-post="/settings/content" hx-include="closest form" hx-swap="none"/>
+					<span>
+						<b>{ v.Tr("settings.islamic_only") }</b>
+						<br/>
+						<span class="help">{ v.Tr("settings.islamic_only_help") }</span>
+					</span>
+				</label>
+				<div>
+					<div class="label push-bottom-sm">
+						{ v.Tr("settings.your_domains") }
+						<span class="muted normal">{ " · " + v.Tr("settings.your_domains_help") }</span>
+					</div>
+					<div class="ichips">
+						for _, dom := range v.MyDomains {
+							<span class="ichip" style={ "--d:" + dom.Color } aria-pressed="true">
+								<span class="ci">
+									@components.Icon(dom.Icon)
+								</span>
+								{ dom.Name }
+							</span>
+						}
+					</div>
+					<div class="row wrap gap-sm push-top-sm">
+						<a class="btn btn-sm" href="/domains?ns=manage" hx-get="/domains?ns=manage" hx-target="#drawer-slot" hx-swap="outerHTML">
+							@components.IconClass("sliders", "i-sm")
+							{ v.Tr("action.manage") }
+						</a>
+						<a class="btn btn-sm" href="/domains?ns=add" hx-get="/domains?ns=add" hx-target="#drawer-slot" hx-swap="outerHTML">
+							@components.IconClass("plus", "i-sm")
+							{ v.Tr("domains.add") }
+						</a>
+					</div>
+				</div>
+			</form>
+			<section class="card pad stack">
+				<h2 class="card-title">{ v.Tr("settings.language_display") }</h2>
+				<div>
+					<div class="label push-bottom-sm">{ v.Tr("settings.app_language") }</div>
+					<div class="seg">
+						for _, code := range i18n.Langs {
+							<form method="post" action="/settings/language">
+								<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+								<input type="hidden" name="lang" value={ code }/>
+								<input type="hidden" name="back" value="/settings"/>
+								<button type="submit" aria-pressed={ fmt.Sprint(v.Lang == code) }>{ i18n.Native[code] }</button>
+							</form>
+						}
+					</div>
+				</div>
+				<div>
+					<div class="label push-bottom-sm">{ v.Tr("settings.theme") }</div>
+					<div class="seg">
+						@themeButton(v, d.Theme, "light", v.Tr("theme.light"))
+						@themeButton(v, d.Theme, "dark", v.Tr("theme.dark"))
+						@themeButton(v, d.Theme, "system", v.Tr("theme.system"))
+					</div>
+				</div>
+				if !v.IsGuest() {
+					<form class="field" method="post" action="/settings/goal">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<label class="label" for="st-goal">{ v.Tr("settings.daily_goal") }</label>
+						<div class="row gap-sm">
+							<input class="input" id="st-goal" name="daily_goal" type="number" min="1" max="20" value={ fmt.Sprint(d.DailyGoal) }/>
+							<button class="btn" type="submit">{ v.Tr("action.save") }</button>
+						</div>
+						<p class="help">{ v.Tr("settings.daily_goal_help") }</p>
+					</form>
+				}
+			</section>
+			if !v.IsGuest() {
+				<form class="card pad stack" method="post" action="/settings/notifications">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<h2 class="card-title">{ v.Tr("settings.notifications") }</h2>
+					@settingSwitch(v, "notify_qotd", v.Tr("settings.notify.qotd"), v.Tr("settings.notify.qotd_help"), d.Notify["qotd"])
+					@settingSwitch(v, "notify_challenges", v.Tr("settings.notify.challenges"), v.Tr("settings.notify.challenges_help"), d.Notify["challenges"])
+					@settingSwitch(v, "notify_messages", v.Tr("settings.notify.messages"), "", d.Notify["messages"])
+					@settingSwitch(v, "notify_rooms", v.Tr("settings.notify.rooms"), "", d.Notify["rooms"])
+					@settingSwitch(v, "notify_weekly", v.Tr("settings.notify.weekly"), v.Tr("settings.notify.weekly_help"), d.Notify["weekly"])
+					<div class="row">
+						<span class="spacer"></span>
+						<button class="btn btn-primary" type="submit">{ v.Tr("settings.save") }</button>
+					</div>
+				</form>
+				<form class="card pad stack" method="post" action="/settings/privacy">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<h2 class="card-title">{ v.Tr("settings.privacy") }</h2>
+					@settingSwitch(v, "show_on_boards", v.Tr("settings.privacy.leaderboard"), "", d.ShowOnBoards)
+					<div class="form-grid">
+						<div class="field">
+							<label class="label" for="p-chal">{ v.Tr("settings.privacy.challenge_from") }</label>
+							<select class="select" id="p-chal" name="challenge_from">
+								@whoOption(v, "friends", d.Privacy["challenge_from"])
+								@whoOption(v, "anyone", d.Privacy["challenge_from"])
+								@whoOption(v, "none", d.Privacy["challenge_from"])
+							</select>
+						</div>
+						<div class="field">
+							<label class="label" for="p-msg">{ v.Tr("settings.privacy.message_from") }</label>
+							<select class="select" id="p-msg" name="message_from">
+								@whoOption(v, "friends", d.Privacy["message_from"])
+								@whoOption(v, "none", d.Privacy["message_from"])
+							</select>
+						</div>
+					</div>
+					<div class="row">
+						<span class="spacer"></span>
+						<button class="btn btn-primary" type="submit">{ v.Tr("settings.save") }</button>
+					</div>
+				</form>
+				<section class="card pad stack">
+					<h2 class="card-title">{ v.Tr("settings.account") }</h2>
+					if d.HasGoogle {
+						<div class="row">
+							@components.Icon("google")
+							<span class="grow">{ v.Tr("settings.google_connected") }</span>
+						</div>
+					}
+					if d.HasPassword {
+						<form class="row" method="post" action="/forgot-password">
+							<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+							<input type="hidden" name="email" value={ d.Email }/>
+							@components.Icon("lock")
+							<span class="grow">{ v.Tr("settings.password") }</span>
+							<button class="btn btn-sm" type="submit">{ v.Tr("settings.change") }</button>
+						</form>
+					}
+					<div class="divider"></div>
+					<div class="row wrap">
+						<form method="post" action="/signout">
+							<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+							<button class="btn" type="submit">
+								@components.IconClass("logout", "flip")
+								{ v.Tr("action.signout") }
+							</button>
+						</form>
+						<span class="spacer"></span>
+						<a class="btn btn-ghost danger" href="/settings/delete">
+							@components.Icon("trash")
+							{ v.Tr("settings.delete") }
+						</a>
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
+
+// themeButton writes the choice (cookie + user_settings) and paints it at once, the
+// same way the top bar's theme menu does.
+templ themeButton(v *view.Ctx, current string, value string, label string) {
+	<button
+		type="button"
+		aria-pressed={ fmt.Sprint(current == value) }
+		hx-post="/settings/theme"
+		hx-vals={ fmt.Sprintf(`{"theme":"%s"}`, value) }
+		hx-swap="none"
+		x-on:click={ themePaint(value) }
+	>{ label }</button>
+}
+
+func themePaint(theme string) string {
+	if theme == "system" {
+		return `document.documentElement.removeAttribute("data-theme")`
+	}
+	return `document.documentElement.setAttribute("data-theme","` + theme + `")`
+}
+
+templ settingSwitch(v *view.Ctx, name string, label string, help string, on bool) {
+	<label class="switch row-line">
+		<input type="checkbox" name={ name } value="1" checked?={ on }/>
+		<span class="grow">
+			<b>{ label }</b>
+			if help != "" {
+				<br/>
+				<span class="help">{ help }</span>
+			}
+		</span>
+	</label>
+}
+
+templ whoOption(v *view.Ctx, value string, current string) {
+	<option value={ value } selected?={ current == value }>{ v.Tr("settings.who." + value) }</option>
+}
+
+// DeleteAccount is the confirmation page behind "Delete account" (OT-02).
+templ DeleteAccount(v *view.Ctx, errorMessage string) {
+	@layouts.App(v, v.Tr("settings.delete_title")) {
+		<div class="page narrow">
+			<section class="card pad stack">
+				<div class="m-ic red">
+					@components.IconClass("trash", "i-lg")
+				</div>
+				<h1>{ v.Tr("settings.delete_title") }</h1>
+				<p class="muted">{ v.Tr("settings.delete_body") }</p>
+				if errorMessage != "" {
+					<p class="error-text">{ errorMessage }</p>
+				}
+				<form class="stack" method="post" action="/settings/delete">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<input class="input" name="confirm" aria-label="DELETE" autocomplete="off"/>
+					<div class="actions">
+						<a class="btn" href="/settings">{ v.Tr("action.cancel") }</a>
+						<button class="btn btn-danger" type="submit">{ v.Tr("settings.delete") }</button>
+					</div>
+				</form>
+			</section>
+		</div>
+	}
+}

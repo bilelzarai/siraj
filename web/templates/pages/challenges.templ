@@ -1,0 +1,601 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// ChallengePlayer is one side of a challenge card. Score is empty while the challenge
+// is open and the player is not the viewer — the module hides it, the page never
+// receives it (CH-09).
+type ChallengePlayer struct {
+	Name     string
+	Initials string
+	Color    string
+	IsMe     bool
+	Score    string
+	Played   bool
+	Result   string
+	// What the detail page needs on top of the card (CH-04, CH-08).
+	Status string // pending | playing | played | declined | removed
+	Host   bool
+	Rank   int32
+	Points int32
+	Gap    int32
+}
+
+// ChallengeCard is one challenge on P19.
+type ChallengeCard struct {
+	ID      string
+	Title   string
+	Icon    string
+	Color   string
+	Expires string
+	Message string
+	Mine    bool
+	Pending bool
+	// Sent marks a challenge you created that is still open: it waits for the
+	// others, so it offers Remind and Cancel rather than Accept (CH-09, CH-10).
+	Sent bool
+	// PlayMine is a challenge you sent whose own round you have not finished.
+	PlayMine  bool
+	Closed    bool
+	MyResult  string
+	Questions int32
+	Players   []ChallengePlayer
+	Waiting   string
+}
+
+// ChallengesData backs P19 (CH-02).
+type ChallengesData struct {
+	Box      string // received | sent | finished
+	Received int
+	Sent     int
+	Finished int
+	Cards    []ChallengeCard
+	Page     int
+	Pages    int
+}
+
+// Challenges is prototype screen 19.
+templ Challenges(v *view.Ctx, d ChallengesData) {
+	@layouts.App(v, v.Tr("nav.challenges")) {
+		<div class="page challenges-page">
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("nav.challenges") }</h1>
+					<p class="sub">{ v.Tr("challenges.sub") }</p>
+				</div>
+				<div class="actions row gap-sm">
+					<form method="post" action="/challenges/random">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="btn btn-soft" type="submit">
+							@components.Icon("shuffle")
+							{ v.Tr("challenges.random") }
+						</button>
+					</form>
+					<a class="btn btn-primary" href="/challenges/new">
+						@components.Icon("plus")
+						{ v.Tr("challenges.new") }
+					</a>
+				</div>
+			</div>
+			<div class="seg full push-bottom" role="group" aria-label={ v.Tr("nav.challenges") }>
+				@challengeTab(v, d, "received", v.Tr("challenges.received"), d.Received)
+				@challengeTab(v, d, "sent", v.Tr("challenges.sent"), d.Sent)
+				@challengeTab(v, d, "finished", v.Tr("challenges.finished"), d.Finished)
+			</div>
+			if len(d.Cards) == 0 {
+				<section class="card">
+					@components.Empty("swords", v.Tr("challenges.empty."+d.Box), v.Tr("challenges.empty_body")) {
+						<a class="btn btn-primary" href="/challenges/new">{ v.Tr("challenges.new") }</a>
+					}
+				</section>
+			} else {
+				<div class="ch-grid">
+					for _, card := range d.Cards {
+						@ChallengeCardView(v, card)
+					}
+				</div>
+			}
+			if d.Pages > 1 {
+				@components.Pager(d.Page, d.Pages, challengeHref(d), v)
+			}
+		</div>
+	}
+}
+
+templ ChallengeCardView(v *view.Ctx, c ChallengeCard) {
+	<article class={ "card ch-card", templ.KV("r-"+c.MyResult, c.Closed && c.MyResult != "") }>
+		<div class="row gap-sm top">
+			<span class="cat-ic sm" style={ "--c:" + c.Color }>
+				@components.Icon(c.Icon)
+			</span>
+			<span class="grow s">{ c.Title }</span>
+			if c.Expires != "" {
+				<span class="badge gold">{ c.Expires }</span>
+			}
+		</div>
+		<div class="vs-box">
+			for i, p := range c.Players {
+				if i > 0 {
+					<span class="vs-mid">{ v.Tr("challenges.vs") }</span>
+				}
+				<div class="vs-p">
+					@components.PersonAvatar(p.Initials, p.Color, "", false)
+					<b>
+						if p.IsMe {
+							{ v.Tr("home.you") }
+						} else {
+							{ p.Name }
+						}
+					</b>
+					<span class={ "vs-num", templ.KV("waiting", p.Score == ""), templ.KV("win", p.Result == "won"), templ.KV("lose", p.Result == "lost") }>
+						if p.Score != "" {
+							{ p.Score }
+						} else {
+							?
+						}
+					</span>
+				</div>
+			}
+		</div>
+		if c.Sent {
+			<span class="badge ch-waiting">{ v.Tr("challenges.waiting_badge") }</span>
+		}
+		if c.Message != "" {
+			<blockquote class="ch-quote">{ "“" + c.Message + "”" }</blockquote>
+		}
+		if c.Waiting != "" {
+			<p class="help">{ c.Waiting }</p>
+		}
+		if c.Pending {
+			<div class="row gap-sm ch-acts">
+				<form method="post" action={ templ.SafeURL("/challenges/" + c.ID + "/decline") } class="one">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-block" type="submit">{ v.Tr("action.decline") }</button>
+				</form>
+				<form method="post" action={ templ.SafeURL("/challenges/" + c.ID + "/accept") } class="two">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-primary btn-block" type="submit">
+						@components.IconClass("tri", "flip")
+						{ v.Tr("action.accept_play") }
+					</button>
+				</form>
+			</div>
+		} else if c.Sent {
+			<div class="row gap-sm ch-acts">
+				<form method="post" action={ templ.SafeURL("/challenges/" + c.ID + "/cancel") } class="one">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-block" type="submit">{ v.Tr("action.cancel") }</button>
+				</form>
+				if c.PlayMine {
+					<form method="post" action={ templ.SafeURL("/challenges/" + c.ID + "/accept") } class="two">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="btn btn-primary btn-block" type="submit">
+							@components.IconClass("tri", "flip")
+							{ v.Tr("action.play_now") }
+						</button>
+					</form>
+				} else {
+					<form method="post" action={ templ.SafeURL("/challenges/" + c.ID + "/remind") } class="one">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="btn btn-soft btn-block" type="submit">
+							@components.IconClass("bell", "i-sm")
+							{ v.Tr("action.remind") }
+						</button>
+					</form>
+				}
+			</div>
+		} else if c.Closed && c.MyResult != "" {
+			<div class={ "ch-result", c.MyResult }>{ v.Tr("challenges.result." + c.MyResult) }</div>
+		}
+	</article>
+}
+
+templ challengeTab(v *view.Ctx, d ChallengesData, box string, label string, count int) {
+	<a
+		class={ "seg-item", templ.KV("on", d.Box == box) }
+		href={ templ.URL("/challenges?box=" + box) }
+		aria-pressed={ fmt.Sprint(d.Box == box) }
+	>
+		{ label }
+		if count > 0 {
+			<span class="num muted">{ fmt.Sprint(count) }</span>
+		}
+	</a>
+}
+
+func challengeHref(d ChallengesData) func(int) string {
+	return func(page int) string {
+		return fmt.Sprintf("/challenges?box=%s&page=%d", d.Box, page)
+	}
+}
+
+// ChallengeStep is one of the four lines of "How challenges end", which the design
+// puts on every open challenge so nobody has to guess the rules (CH-04).
+type ChallengeStep struct {
+	Title string
+	Body  string
+}
+
+// ChallengeDetail backs the challenge page: the waiting state while it is open, and
+// the results once it closes (CH-04, CH-08).
+type ChallengeDetail struct {
+	ID        string
+	Title     string
+	Topic     string
+	Deadline  string
+	Questions int
+	Players   []ChallengePlayer
+	Removed   []ChallengePlayer
+	Played    int
+	Total     int
+	Playing   int
+	NotStart  int
+	Message   string
+	From      string
+	// What this player may do.
+	CanPlay  bool
+	CanClose bool
+	IsHost   bool
+	Closed   bool
+	Blocker  string
+	WillGo   string
+	// Mine is the viewer's own score, the one they may see before the end.
+	MyScore int32
+	HasMine bool
+	// The results.
+	WinnerName string
+	WinnerInit string
+	WinnerCol  string
+	Headline   string
+	Subline    string
+	MyRank     int32
+	Confetti   bool
+}
+
+// ChallengeView is the challenge's own page. While it is open it shows who has
+// finished and nothing of what they scored; once it closes it shows everything
+// (CH-04, CH-08).
+templ ChallengeView(v *view.Ctx, d ChallengeDetail) {
+	@layouts.App(v, d.Title) {
+		<div
+			class="page mid stack gap-md"
+			id="challenge"
+			if !d.Closed {
+				hx-get={ "/challenges/" + d.ID }
+				hx-trigger="sj:live:challenges from:body, every 20s"
+				hx-select="#challenge"
+				hx-swap="outerHTML"
+			}
+			if d.Confetti {
+				x-data="sjConfetti"
+			}
+		>
+			<a class="btn btn-ghost btn-sm back-link" href="/challenges">
+				@components.IconClass("arrowL", "flip")
+				{ v.Tr("nav.challenges") }
+			</a>
+			if d.Closed {
+				@challengeResults(v, d)
+			} else {
+				@challengeWaiting(v, d)
+			}
+			@challengePlayers(v, d)
+			if !d.Closed {
+				@challengeRules(v)
+			}
+			if d.Message != "" {
+				<p class="quote">{ d.Message }{ " · " + d.From }</p>
+			}
+		</div>
+	}
+}
+
+// challengeWaiting is the head of an open challenge: how far it has got, what this
+// player can do about it, and their own score once they have played (CH-04).
+templ challengeWaiting(v *view.Ctx, d ChallengeDetail) {
+	<section class="card pad stack gap-sm">
+		<div class="row wrap gap-sm">
+			<span class="dom-chip">{ d.Topic }</span>
+			<span class="spacer"></span>
+			if d.Deadline != "" {
+				<span class="badge gold">
+					@components.IconClass("clock", "i-sm")
+					{ d.Deadline }
+				</span>
+			}
+		</div>
+		<h1>{ d.Title }</h1>
+		<div class="row">
+			<b>{ v.Tr("challenges.n_of_m_finished", "n", d.Played, "total", d.Total) }</b>
+			<span class="spacer"></span>
+			<span class="help">{ waitingNote(v, d) }</span>
+		</div>
+		// One segment per player: green when they have finished, blue while they are
+		// playing, empty until they start (CH-04).
+		<div class="seg-bar">
+			for _, p := range d.Players {
+				<i class={ templ.KV("done", p.Status == "played"), templ.KV("playing", p.Status == "playing") }></i>
+			}
+		</div>
+		if d.HasMine {
+			<div class="gv-mine">
+				<span class="help">{ v.Tr("challenges.your_score") }</span>
+				<b class="num">{ fmt.Sprint(d.MyScore) }</b>
+				<span class="help">{ v.Tr("challenges.others_show_later") }</span>
+			</div>
+		}
+		<div class="row wrap gap-sm">
+			if d.CanPlay {
+				<a class="btn btn-primary btn-lg" href={ templ.URL("/challenges/" + d.ID + "/accept") }>
+					@components.IconClass("tri", "flip")
+					{ v.Tr("challenges.play_now") }
+				</a>
+				<form method="post" action={ templ.SafeURL("/challenges/" + d.ID + "/decline") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-lg" type="submit">{ v.Tr("challenges.decline") }</button>
+				</form>
+			} else if d.IsHost {
+				<form method="post" action={ templ.SafeURL("/challenges/" + d.ID + "/remind") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-gold" type="submit">
+						@components.IconClass("bell", "i-sm")
+						{ v.Tr("challenges.remind_others") }
+					</button>
+				</form>
+				<form method="post" action={ templ.SafeURL("/challenges/" + d.ID + "/close") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn" type="submit" disabled?={ !d.CanClose }>
+						@components.IconClass("flag", "i-sm")
+						{ v.Tr("challenges.close_now") }
+					</button>
+				</form>
+			} else {
+				<form method="post" action={ templ.SafeURL("/challenges/" + d.ID + "/remind") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-gold" type="submit">
+						@components.IconClass("bell", "i-sm")
+						{ v.Tr("challenges.remind_others") }
+					</button>
+				</form>
+			}
+		</div>
+		if d.IsHost && !d.CanPlay {
+			<p class="help">{ closeNote(v, d) }</p>
+		}
+	</section>
+}
+
+// challengeResults is the closed challenge: who took it, the podium when there are
+// three to stand on it, and the standings underneath (CH-08).
+templ challengeResults(v *view.Ctx, d ChallengeDetail) {
+	<section class="res-hero">
+		<span class="eyebrow">{ v.Tr("challenges.results_eyebrow") }</span>
+		<span class="help">{ d.Topic }</span>
+		<span class="crown-av">
+			@components.IconClass("crown", "crown-ic")
+			@components.PersonAvatar(d.WinnerInit, d.WinnerCol, "xl", false)
+		</span>
+		<h1>{ d.Headline }</h1>
+		<p class="muted">{ d.Subline }</p>
+		if d.HasMine && d.MyRank > 0 {
+			<span class="you-pill">{ v.Tr("challenges.you_finished", "rank", ordinalOf(v, int(d.MyRank)), "points", d.MyScore) }</span>
+		}
+	</section>
+	if len(d.Players) >= 3 {
+		<div class="podium">
+			@challengePodium(v, d.Players, 1)
+			@challengePodium(v, d.Players, 0)
+			@challengePodium(v, d.Players, 2)
+		</div>
+	}
+}
+
+templ challengePodium(v *view.Ctx, players []ChallengePlayer, i int) {
+	if i < len(players) {
+		<div class={ "pod", fmt.Sprintf("p%d", i+1) }>
+			@components.PersonAvatar(players[i].Initials, players[i].Color, "lg", false)
+			<b>
+				if players[i].IsMe {
+					{ v.Tr("home.you") }
+				} else {
+					{ players[i].Name }
+				}
+			</b>
+			<span class="pts num">{ fmt.Sprint(players[i].Points) }</span>
+			<div class="block">{ fmt.Sprint(players[i].Rank) }</div>
+		</div>
+	} else {
+		<div></div>
+	}
+}
+
+// challengePlayers is the list under both faces: who is in, where they have got to,
+// and — only once it is over — what they scored (CH-04).
+templ challengePlayers(v *view.Ctx, d ChallengeDetail) {
+	<section class="card">
+		<div class="card-head pad-head">
+			<h2>
+				if d.Closed {
+					{ v.Tr("challenges.final_standings") }
+				} else {
+					{ v.Tr("challenges.players") }
+				}
+			</h2>
+			<span class="help">
+				if d.Closed {
+					{ v.Tr("challenges.same_questions") }
+				} else {
+					@components.IconClass("lock", "i-sm")
+					{ v.Tr("challenges.scores_hidden") }
+				}
+			</span>
+		</div>
+		<ol class="list">
+			for _, p := range d.Players {
+				@challengeRow(v, d, p)
+			}
+			for _, p := range d.Removed {
+				@challengeRow(v, d, p)
+			}
+		</ol>
+	</section>
+	if d.Closed {
+		<div class="row wrap gap-sm center">
+			<form method="post" action={ templ.SafeURL("/challenges/" + d.ID + "/rematch") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button class="btn btn-primary btn-lg" type="submit">
+					@components.IconClass("tri", "flip")
+					{ v.Tr("challenges.rematch") }
+				</button>
+			</form>
+			<a class="btn btn-lg" href="/challenges?box=finished">{ v.Tr("challenges.all_finished") }</a>
+		</div>
+	}
+}
+
+// challengeRow is one player: their place once it is over, their status until then,
+// and a score only when everyone may see it (CH-04).
+templ challengeRow(v *view.Ctx, d ChallengeDetail, p ChallengePlayer) {
+	<li class={ "li", templ.KV("me", p.IsMe), templ.KV("gv-out", p.Status == "removed" || p.Status == "declined") }>
+		if d.Closed {
+			<span class={ "rank num", templ.KV("r1", p.Rank == 1) }>
+				if p.Rank > 0 {
+					{ fmt.Sprint(p.Rank) }
+				} else {
+					{ "–" }
+				}
+			</span>
+		}
+		@components.PersonAvatar(p.Initials, p.Color, "sm", false)
+		<span class="grow min0">
+			<span class="t">
+				if p.IsMe {
+					{ v.Tr("home.you") }
+				} else {
+					{ p.Name }
+				}
+			</span>
+			if p.Host {
+				<span class="badge sm">{ v.Tr("rooms.host") }</span>
+			}
+		</span>
+		@challengeStatus(v, d, p)
+	</li>
+}
+
+// challengeStatus is the right-hand end of a row: the badge while the challenge is
+// open, the score once it is closed, and the removal when there was one.
+templ challengeStatus(v *view.Ctx, d ChallengeDetail, p ChallengePlayer) {
+	if p.Status == "removed" || p.Status == "declined" {
+		<span class="badge danger sm">
+			@components.IconClass("x", "i-sm")
+			if p.Status == "declined" {
+				{ v.Tr("challenges.declined_badge") }
+			} else {
+				{ v.Tr("challenges.removed_badge") }
+			}
+		</span>
+	} else if d.Closed {
+		if p.Rank > 1 && p.Gap > 0 {
+			<span class="help num">{ "−" + fmt.Sprint(p.Gap) }</span>
+		}
+		<b class="num">{ v.Tr("rooms.points_short", "n", p.Points) }</b>
+	} else if p.Status == "played" {
+		<span class="badge green">
+			@components.IconClass("check", "i-sm")
+			{ v.Tr("challenges.finished_badge") }
+		</span>
+		if p.IsMe {
+			<b class="num">{ v.Tr("rooms.points_short", "n", p.Points) }</b>
+		} else {
+			<span class="gv-hidden">
+				@components.IconClass("lock", "i-sm")
+				{ "•••" }
+			</span>
+		}
+	} else if p.Status == "playing" {
+		<span class="badge blue">{ v.Tr("challenges.playing_badge") }</span>
+	} else {
+		<span class="badge">
+			@components.IconClass("clock", "i-sm")
+			{ v.Tr("challenges.not_started_badge") }
+		</span>
+	}
+}
+
+// challengeRules is "How challenges end": the four lines the design shows on every
+// open challenge, so the rules are never a surprise (CH-04, CH-06).
+templ challengeRules(v *view.Ctx) {
+	<section class="card pad">
+		<b class="block push-bottom-sm">{ v.Tr("challenges.how_end") }</b>
+		<ol class="gv-steps">
+			for i, step := range []ChallengeStep{
+				{"challenges.rule_play", "challenges.rule_play_body"},
+				{"challenges.rule_hidden", "challenges.rule_hidden_body"},
+				{"challenges.rule_removed", "challenges.rule_removed_body"},
+				{"challenges.rule_unlock", "challenges.rule_unlock_body"},
+			} {
+				<li>
+					<span class="n num">{ fmt.Sprint(i + 1) }</span>
+					<span>
+						<b class="block">{ v.Tr(step.Title) }</b>
+						<span class="help">{ v.Tr(step.Body) }</span>
+					</span>
+				</li>
+			}
+		</ol>
+	</section>
+}
+
+// waitingNote is the line beside the count: who is mid-game and who has not begun.
+func waitingNote(v *view.Ctx, d ChallengeDetail) string {
+	parts := []string{}
+	if d.Playing > 0 {
+		parts = append(parts, v.Tr("challenges.n_playing", "n", d.Playing))
+	}
+	if d.NotStart > 0 {
+		parts = append(parts, v.Tr("challenges.n_not_started", "n", d.NotStart))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// closeNote says why the host may or may not close the challenge right now (CH-07).
+func closeNote(v *view.Ctx, d ChallengeDetail) string {
+	if d.Blocker != "" {
+		return v.Tr("challenges.close_blocked", "name", d.Blocker)
+	}
+	if d.WillGo != "" {
+		return v.Tr("challenges.close_removes", "names", d.WillGo)
+	}
+	return ""
+}
+
+// ordinalOf writes a place the way each language does (LG-05).
+func ordinalOf(v *view.Ctx, n int) string {
+	switch v.Lang {
+	case "fr":
+		if n == 1 {
+			return "1er"
+		}
+		return fmt.Sprintf("%de", n)
+	case "ar":
+		return fmt.Sprint(n)
+	}
+	switch {
+	case n%100 >= 11 && n%100 <= 13:
+		return fmt.Sprintf("%dth", n)
+	case n%10 == 1:
+		return fmt.Sprintf("%dst", n)
+	case n%10 == 2:
+		return fmt.Sprintf("%dnd", n)
+	case n%10 == 3:
+		return fmt.Sprintf("%drd", n)
+	}
+	return fmt.Sprintf("%dth", n)
+}

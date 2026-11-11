@@ -1,0 +1,228 @@
+package pages
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// Onboarding is prototype screen 5 (AU-04): language → your domains (+ Islamic content
+// only) → daily goal and reminder. Three steps, one form per step, skippable.
+// OnboardingData is everything the three steps need.
+type OnboardingData struct {
+	Step         int
+	Domains      []view.Domain
+	Picked       map[int64]bool
+	Categories   map[int64][]components.Category
+	PickedCats   map[int64]bool
+	Query        string
+	TotalDomains int
+	Goal         int32
+	Reminder     string
+	IslamicOnly  bool
+	Problem      string
+}
+
+templ Onboarding(v *view.Ctx, d OnboardingData) {
+	{{ step := d.Step }}
+	{{ domains := d.Domains }}
+	{{ picked := d.Picked }}
+	{{ goal := d.Goal }}
+	{{ reminder := d.Reminder }}
+	{{ islamicOnly := d.IslamicOnly }}
+	{{ problem := d.Problem }}
+	@layouts.Focus(v, v.Tr("onboarding.step", "n", step)) {
+		<div class="auth-wrap">
+			<div class="auth-card onb-card">
+				<div class="steps" aria-label={ v.Tr("onboarding.step", "n", step) }>
+					for n := 1; n <= 3; n++ {
+						<i class={ templ.KV("on", n <= step) }></i>
+					}
+				</div>
+				<form method="post" action="/onboarding" class="onb-form" x-data={ pickedDomains(picked) }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<input type="hidden" name="step" value={ fmt.Sprint(step) }/>
+					if step == 1 {
+						<h1>{ v.Tr("onboarding.lang.title") }</h1>
+						<p class="muted">{ v.Tr("onboarding.lang.body") }</p>
+						<div class="stack onb-list">
+							for _, code := range i18n.Langs {
+								<button
+									class="dom"
+									type="submit"
+									name="lang"
+									value={ code }
+									aria-pressed={ fmt.Sprint(v.Lang == code) }
+								>
+									<span class="cat-ic brand-ic">
+										@components.Icon("languages")
+									</span>
+									<span>
+										<span class="dn" lang={ code }>{ i18n.Native[code] }</span>
+										<span class="dd">{ i18n.English[code] }</span>
+									</span>
+								</button>
+							}
+						</div>
+						<div class="row onb-actions">
+							<button class="btn btn-ghost" type="submit" name="skip" value="1">{ v.Tr("action.skip_step") }</button>
+							<span class="spacer"></span>
+							<button class="btn btn-primary" type="submit" name="lang" value={ v.Lang }>
+								{ v.Tr("onboarding.continue") }
+								@components.IconClass("chevR", "flip")
+							</button>
+						</div>
+					} else if step == 2 {
+						<h1>{ v.Tr("onboarding.domains.title") }</h1>
+						<p class="muted">{ v.Tr("onboarding.domains.body") }</p>
+						if d.TotalDomains > 6 {
+							<label class="input-icon onb-search">
+								@components.Icon("search")
+								<span class="sr-only">{ v.Tr("action.search") }</span>
+								<input
+									class="input"
+									type="search"
+									name="q"
+									value={ d.Query }
+									autocomplete="off"
+									placeholder={ v.Tr("onboarding.search", "count", d.TotalDomains) }
+									hx-get="/onboarding?step=2"
+									hx-trigger="input changed delay:300ms, search"
+									hx-target="closest .onb-form"
+									hx-select=".onb-form"
+									hx-swap="outerHTML"
+								/>
+							</label>
+							if d.Query == "" {
+								<p class="help">{ v.Tr("onboarding.search_help") }</p>
+							}
+						}
+						<div class="stack onb-list">
+							for _, dom := range domains {
+								<div>
+									<label class="dom" x-bind:class={ "{ on: has(" + fmt.Sprint(dom.ID) + ") }" }>
+										<input
+											class="sr-only"
+											type="checkbox"
+											name="domain_ids"
+											value={ fmt.Sprint(dom.ID) }
+											checked?={ picked[dom.ID] }
+											x-on:change={ "toggle(" + fmt.Sprint(dom.ID) + ", $event.target.checked)" }
+										/>
+										<span class="cat-ic" style={ "--c:" + dom.Color }>
+											@components.Icon(dom.Icon)
+										</span>
+										<span class="dom-text">
+											<span class="dn">
+												{ dom.Name }
+												if dom.IsNew {
+													<span class="badge gold">{ v.Tr("domain.new") }</span>
+												}
+											</span>
+											<span class="dd">{ dom.Description }</span>
+										</span>
+									</label>
+									if picked[dom.ID] && len(d.Categories[dom.ID]) > 0 {
+										<div class="row wrap onb-cats">
+											for _, c := range d.Categories[dom.ID] {
+												<label class={ "chip sm", templ.KV("on", d.PickedCats[c.ID]) }>
+													<input class="sr-only" type="checkbox" name="category_ids" value={ fmt.Sprint(c.ID) } checked?={ d.PickedCats[c.ID] }/>
+													@components.IconClass("check", "i-sm ck")
+													{ c.Name }
+												</label>
+											}
+										</div>
+									}
+								</div>
+							}
+						</div>
+						<label class="switch card pad onb-islamic">
+							<input type="checkbox" name="islamic_only" value="1" checked?={ islamicOnly }/>
+							<span>
+								<b>{ v.Tr("onboarding.islamic_only.label") }</b>
+								<br/>
+								<span class="help">{ v.Tr("onboarding.islamic_only.help") }</span>
+							</span>
+						</label>
+						if problem != "" {
+							<p class="err" role="alert">{ problem }</p>
+						}
+					} else {
+						<h1>{ v.Tr("onboarding.goal.title") }</h1>
+						<p class="muted">{ v.Tr("onboarding.goal.body") }</p>
+						<div class="stack onb-list">
+							for _, option := range []struct {
+								N       int32
+								NameKey string
+								Minutes int
+							}{{3, "onboarding.goal.light", 10}, {5, "onboarding.goal.steady", 15}, {10, "onboarding.goal.serious", 30}} {
+								<label class={ "dom", templ.KV("on", goal == option.N) }>
+									<input class="sr-only" type="radio" name="daily_goal" value={ fmt.Sprint(option.N) } checked?={ goal == option.N }/>
+									<span class="cat-ic lamp-ic num">{ fmt.Sprint(option.N) }</span>
+									<span>
+										<span class="dn">{ v.Tr(option.NameKey) } · { v.Tr("onboarding.goal.games", "n", option.N) }</span>
+										<span class="dd">{ v.Tr("onboarding.goal.minutes", "n", option.Minutes) }</span>
+									</span>
+								</label>
+							}
+						</div>
+						<div class="card pad onb-remind">
+							<div class="field">
+								<label class="label" for="reminder_time">{ v.Tr("onboarding.reminder") }</label>
+								<select class="select" id="reminder_time" name="reminder_time">
+									<option value="">{ v.Tr("onboarding.reminder.off") }</option>
+									for _, time := range []string{"07:00", "13:00", "20:00"} {
+										<option value={ time } selected?={ reminder == time }>{ time }</option>
+									}
+								</select>
+								<span class="help">{ v.Tr("onboarding.remind.help") }</span>
+							</div>
+						</div>
+					}
+					<div class={ "row onb-actions", templ.KV("hidden", step == 1) }>
+						if step > 1 {
+							<button class="btn btn-ghost" type="submit" name="back" value="1">
+								@components.IconClass("chevL", "flip")
+								{ v.Tr("action.back") }
+							</button>
+						}
+						<span class="spacer"></span>
+						if step == 3 {
+							<button class="btn btn-primary" type="submit" name="finish" value="1">{ v.Tr("onboarding.finish") }</button>
+						} else if step == 2 {
+							<button
+								class="btn btn-primary"
+								type="submit"
+								name="next"
+								value="1"
+								disabled?={ len(picked) == 0 }
+								x-bind:disabled="count < 1"
+							>
+								{ v.Tr("onboarding.continue") }
+								@components.IconClass("chevR", "flip")
+							</button>
+						}
+					</div>
+				</form>
+			</div>
+		</div>
+	}
+}
+
+// pickedDomains seeds the step with whatever the player already chose, so Continue is
+// open from the first paint when they come back to it (HM-01).
+func pickedDomains(picked map[int64]bool) string {
+	ids := make([]string, 0, len(picked))
+	for id, on := range picked {
+		if on {
+			ids = append(ids, fmt.Sprint(id))
+		}
+	}
+	sort.Strings(ids)
+	return "sjPicks([" + strings.Join(ids, ",") + "])"
+}

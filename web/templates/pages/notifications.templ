@@ -1,0 +1,103 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// Notification is one row of the bell list; Text is built by the handler so each
+// language reads it in its own words.
+type Notification struct {
+	ID     string
+	Text   string
+	When   string
+	Icon   string
+	Tone   string // blue | green | night | gold
+	Link   string
+	Unread bool
+}
+
+// NotificationsData backs P27 (OT-01).
+type NotificationsData struct {
+	UnreadOnly bool
+	Unread     int
+	Rows       []Notification
+	Page       int
+	Pages      int
+}
+
+templ Notifications(v *view.Ctx, d NotificationsData) {
+	@layouts.App(v, v.Tr("notifications.title")) {
+		<div
+			class="page narrow notifications-page"
+			id="notifs"
+			hx-get={ notificationsHref(d.UnreadOnly)(d.Page) }
+			hx-trigger="sj:live:notifications from:body"
+			hx-select="#notifs"
+			hx-swap="outerHTML"
+		>
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("notifications.title") }</h1>
+					<p class="sub">
+						if d.Unread > 0 {
+							{ v.Tr("notifications.unread_count", "count", d.Unread) }
+						} else {
+							{ v.Tr("notifications.caught_up") }
+						}
+					</p>
+				</div>
+				<div class="row gap-sm">
+					<form method="post" action="/notifications/read">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="btn btn-sm" type="submit" disabled?={ d.Unread == 0 }>
+							@components.IconClass("check", "i-sm")
+							{ v.Tr("notifications.mark_all") }
+						</button>
+					</form>
+					<a class="icon-btn sm outline" href="/settings" aria-label={ v.Tr("settings.notifications") }>
+						@components.IconClass("sliders", "i-sm")
+					</a>
+				</div>
+			</div>
+			<div class="seg push-bottom">
+				<a href="/notifications" aria-pressed={ fmt.Sprint(!d.UnreadOnly) }>{ v.Tr("notifications.all") }</a>
+				<a href="/notifications?filter=unread" aria-pressed={ fmt.Sprint(d.UnreadOnly) }>{ v.Tr("notifications.unread") }</a>
+			</div>
+			<section class="card">
+				if len(d.Rows) == 0 {
+					@components.Empty("bell", v.Tr("notifications.empty"), "")
+				} else {
+					for _, n := range d.Rows {
+						<a class={ "li", "click", "notif", templ.KV("unread", n.Unread) } href={ templ.URL("/notifications/" + n.ID) }>
+							<span class={ "mode-ic", n.Tone }>
+								@components.Icon(n.Icon)
+							</span>
+							<span class="grow start">
+								<span class={ "t", "block", templ.KV("bold", n.Unread) }>{ n.Text }</span>
+								<span class="s">{ n.When }</span>
+							</span>
+							if n.Unread {
+								<span class="udot" aria-label={ v.Tr("notifications.unread") }></span>
+							}
+						</a>
+					}
+				}
+			</section>
+			if d.Pages > 1 {
+				@components.Pager(d.Page, d.Pages, notificationsHref(d.UnreadOnly), v)
+			}
+		</div>
+	}
+}
+
+func notificationsHref(unreadOnly bool) func(int) string {
+	return func(page int) string {
+		if unreadOnly {
+			return fmt.Sprintf("/notifications?filter=unread&page=%d", page)
+		}
+		return fmt.Sprintf("/notifications?page=%d", page)
+	}
+}

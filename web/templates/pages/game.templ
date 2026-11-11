@@ -1,0 +1,471 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// GameQuestion and GameState mirror what the games service returns, so the templates
+// stay independent of the module (the module maps its structs onto these).
+type GameQuestion struct {
+	Position      int32
+	ID            int64
+	CategoryName  string
+	CategoryIcon  string
+	CategoryColor string
+	DomainName    string
+	DomainIcon    string
+	DomainColor   string
+	Difficulty    int32
+	Points        int32
+	CorrectIndex  int32
+	Source        string
+	Body          string
+	Answers       []string
+	Explanation   string
+	InLanguage    bool
+}
+
+type GameState struct {
+	QuestionCount int32
+	Score         int32
+	Results       []bool
+	FiftyUsed     bool
+	SkipUsed      bool
+}
+
+// GameFeedback is the answer the server gave back.
+type GameFeedback struct {
+	Correct  bool
+	TimedOut bool
+	Points   int32
+}
+
+// GameData is one screen of a running game (GP-03, GP-05).
+type GameData struct {
+	GameID string
+	// Player is the turn of a pass-the-device round; it rides on every form so a
+	// reload keeps answering for the same person (RM-06).
+	Player string
+	// Mode and RoomCode add the live strip beside a shared game: the opponent's
+	// score in a duel (P18) and the room's board in a live game (P15).
+	Mode     string
+	RoomCode string
+	Title    string
+	Question GameQuestion
+	State    GameState
+	Feedback *GameFeedback
+	Hidden   []int32 // answers removed by 50/50
+	Picked   *int32
+	Seconds  int32
+	Last     bool
+	// Swap is true when this card is the answer to an htmx request: only then does it
+	// carry the out-of-band copy of the header (a full page already has one).
+	Swap bool
+}
+
+func (d GameData) IsHidden(i int) bool {
+	for _, h := range d.Hidden {
+		if int(h) == i {
+			return true
+		}
+	}
+	return false
+}
+
+func (d GameData) Revealed() bool { return d.Feedback != nil }
+
+// Game is prototype screen 10: the solo game. The timer is Alpine, every rule is the
+// server's (NF-05); htmx swaps the question card and the feedback.
+templ Game(v *view.Ctx, d GameData) {
+	@layouts.Focus(v, d.Title) {
+		<div class="game" x-data>
+			@GameTop(v, d)
+			<div class="game-body">
+				<div class="game-main">
+					// The duel's score strip belongs over the question, under the progress
+					// dots, and outside the card htmx swaps, so it keeps polling (DU-01).
+					@GameStrip(v, d)
+					if d.Mode == "live" && d.RoomCode != "" {
+						// In a team room the two totals and the tug between them run the
+						// full width over the question, as the design has it. It comes
+						// back empty when the room plays for itself (RM-05).
+						<div
+							id="room-arena"
+							hx-get={ fmt.Sprintf("/rooms/%s/arena?at=%d", d.RoomCode, d.Question.Position) }
+							hx-trigger="load, sj:live:rooms from:body, every 15s"
+							hx-swap="outerHTML"
+						></div>
+					}
+					@GameCard(v, d)
+				</div>
+				if d.Mode == "live" && d.RoomCode != "" {
+					// A room's board is a column beside the question, as the design has
+					// it: everyone's score and who has answered (RM-04).
+					<div
+						id="live-board"
+						class="game-side"
+						hx-get={ fmt.Sprintf("/rooms/%s/board?at=%d", d.RoomCode, d.Question.Position) }
+						hx-trigger="load, sj:live:rooms from:body, every 15s"
+						hx-swap="outerHTML"
+					></div>
+				}
+			</div>
+		</div>
+	}
+}
+
+// GameHead is the part of the top bar that changes with every answer: the question
+// counter, the progress dots and the score pill. The card sends it back out of band
+// (hx-swap-oob), because htmx only swaps the card itself.
+templ GameHead(v *view.Ctx, d GameData, oob bool) {
+	<div
+		class="game-head"
+		id="game-head"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		<div class="row game-head-line">
+			<span class="hide-sm ellipsis">{ d.Title }</span>
+			<span class="spacer"></span>
+			<span class="num">{ v.Tr("game.question_of", "n", d.Question.Position+1, "total", d.State.QuestionCount) }</span>
+		</div>
+		<div class="progress-dots">
+			for i := 0; i < int(d.State.QuestionCount); i++ {
+				if i < len(d.State.Results) {
+					if d.State.Results[i] {
+						<i class="ok"></i>
+					} else {
+						<i class="no"></i>
+					}
+				} else if i == int(d.Question.Position) {
+					<i class="now"></i>
+				} else {
+					<i></i>
+				}
+			}
+		</div>
+	</div>
+	<span
+		class="score-pill num"
+		id="game-score"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		@components.IconClass("star", "i-sm")
+		{ fmt.Sprint(d.State.Score) }
+	</span>
+}
+
+templ GameTop(v *view.Ctx, d GameData) {
+	<header class="game-top">
+		<div class="game-top-in">
+			// O05: leaving a game is confirmed first, because the answers so far
+			// are thrown away.
+			<div x-data="sjOverlay">
+				<button class="icon-btn sm" type="button" x-on:click="show()" aria-label={ v.Tr("game.quit") }>
+					@components.Icon("x")
+				</button>
+				<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity x-cloak></div>
+				<div
+					class="ov modal narrow-modal"
+					role="dialog"
+					aria-modal="true"
+					x-show="open"
+					x-on:keydown.escape.window="hide()"
+					x-trap="open"
+					x-cloak
+				>
+					<div class="m-ic red">
+						@components.IconClass("door", "i-lg")
+					</div>
+					<h2>{ v.Tr("game.quit.title") }</h2>
+					<p class="muted">{ v.Tr("game.quit.body") }</p>
+					<div class="actions">
+						<button class="btn" type="button" x-on:click="hide()">{ v.Tr("game.quit.keep") }</button>
+						<form method="post" action={ templ.SafeURL("/games/" + d.GameID + "/finish") }>
+							<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+							if d.Player != "" {
+								<input type="hidden" name="player" value={ d.Player }/>
+							}
+							<input type="hidden" name="abandon" value="1"/>
+							<button class="btn btn-danger" type="submit">{ v.Tr("game.quit.leave") }</button>
+						</form>
+					</div>
+				</div>
+			</div>
+			@GameHead(v, d, false)
+			<div class="nav-tools">
+				@layouts.LangMenu(v)
+			</div>
+			if d.Seconds > 0 {
+				<div
+					class="timer"
+					role="timer"
+					aria-live="off"
+					aria-label={ v.Tr("game.seconds_left", "n", d.Seconds) }
+					x-bind:data-s="$store.timer.secondsLeft"
+					x-bind:style="`--p:${$store.timer.fraction * 100}`"
+					x-bind:class="{ low: $store.timer.low }"
+				></div>
+			} else {
+				<div class="timer off" aria-hidden="true"></div>
+			}
+		</div>
+	</header>
+}
+
+// GameStrip is the duel's live score over the question (P18), refreshed on its own.
+templ GameStrip(v *view.Ctx, d GameData) {
+	if d.Mode == "duel" {
+		<div
+			id="duel-bar"
+			hx-get={ "/duel/" + d.GameID + "/bar" }
+			hx-trigger="load, sj:live:duels from:body, every 15s"
+			hx-swap="outerHTML"
+		></div>
+	}
+}
+
+// GameCard is the htmx target: question, answers, lifelines and the feedback panel.
+templ GameCard(v *view.Ctx, d GameData) {
+	<div
+		class="q-wrap"
+		id="game-main"
+		x-data="sjAnswerKeys"
+		x-on:keydown.window="press($event)"
+		x-init={ timerInit(d) }
+	>
+		<form
+			id="answer-form"
+			class="q-card"
+			method="post"
+			action={ templ.SafeURL("/games/" + d.GameID + "/answers") }
+			hx-post={ "/games/" + d.GameID + "/answers" }
+			hx-target="#game-main"
+			hx-swap="outerHTML"
+			x-on:sj:timeup.window="$store.timer.stop(); $el.requestSubmit()"
+		>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			if d.Player != "" {
+				<input type="hidden" name="player" value={ d.Player }/>
+			}
+			<input type="hidden" name="position" value={ fmt.Sprint(d.Question.Position) }/>
+			// htmx fills this in from the timer store on submit; the server measures the
+			// real time itself and only falls back to this value (NF-05).
+			<input type="hidden" name="time_ms" value="0"/>
+			<div class="q-meta">
+				@components.DomainChipOf(d.Question.DomainName, d.Question.DomainIcon, d.Question.DomainColor)
+				<span class="cat-ic sm" style={ "--c:" + d.Question.CategoryColor }>
+					@components.Icon(d.Question.CategoryIcon)
+				</span>
+				<span>{ d.Question.CategoryName }</span>
+				<span>·</span>
+				<span>{ difficultyName(v, d.Question.Difficulty) }</span>
+				<span>·</span>
+				<span class="num">{ fmt.Sprint(d.Question.Points) }+ { v.Tr("game.points") }</span>
+			</div>
+			<h1 class="q-text qtext" lang={ questionLang(v, d) }>{ d.Question.Body }</h1>
+			if !d.Question.InLanguage {
+				<p class="help">{ v.Tr("game.translation_missing") }</p>
+			}
+			<div class="answers">
+				for i, answer := range d.Question.Answers {
+					<button
+						class={ "ans light", answerClass(d, i) }
+						type="submit"
+						name="choice"
+						value={ fmt.Sprint(i) }
+						disabled?={ d.Revealed() || d.IsHidden(i) }
+					>
+						<span class="k">{ answerLetter(v.Lang, i) }</span>
+						<span class="grow">{ answer }</span>
+						if d.Revealed() && int32(i) == d.Question.CorrectIndex {
+							@components.Icon("check")
+						}
+					</button>
+				}
+			</div>
+			if !d.Revealed() {
+				<div class="lifelines">
+					<button
+						class="lifeline"
+						type="submit"
+						formaction={ templ.SafeURL("/games/" + d.GameID + "/fifty") }
+						hx-post={ "/games/" + d.GameID + "/fifty" }
+						hx-target="#game-main"
+						hx-swap="outerHTML"
+						disabled?={ d.State.FiftyUsed }
+					>
+						@components.Icon("half")
+						{ v.Tr("game.fifty") }
+					</button>
+					<button
+						class="lifeline"
+						type="submit"
+						formaction={ templ.SafeURL("/games/" + d.GameID + "/skip") }
+						hx-post={ "/games/" + d.GameID + "/skip" }
+						hx-target="#game-main"
+						hx-swap="outerHTML"
+						disabled?={ d.State.SkipUsed }
+					>
+						@components.IconClass("skip", "flip")
+						{ v.Tr("game.skip") }
+					</button>
+					<span class="spacer"></span>
+					<span class="help hide-sm">
+						{ v.Tr("game.keys") } <span class="kbd">1</span>–<span class="kbd">4</span>
+					</span>
+				</div>
+			}
+		</form>
+		if d.Revealed() {
+			@Feedback(v, d)
+		}
+		if d.Swap {
+			@GameHead(v, d, true)
+		}
+	</div>
+}
+
+// Feedback is the panel under the question: right or wrong, the answer, the
+// explanation, the source, a report link and the inline 5-star rater (GP-05).
+templ Feedback(v *view.Ctx, d GameData) {
+	<div class={ "feedback", feedbackClass(d) } role="status">
+		<div class="ft">
+			if d.Feedback.Correct {
+				{ v.Tr("game.correct") } · +{ fmt.Sprint(d.Feedback.Points) } { v.Tr("game.points") }
+			} else if d.Feedback.TimedOut {
+				{ v.Tr("game.timeup") } · { v.Tr("game.answer_is") } { d.Question.Answers[d.Question.CorrectIndex] }
+			} else {
+				{ v.Tr("game.wrong") } · { v.Tr("game.answer_is") } { d.Question.Answers[d.Question.CorrectIndex] }
+			}
+		</div>
+		if d.Question.Explanation != "" {
+			<p class="fx qtext" lang={ questionLang(v, d) }>{ d.Question.Explanation }</p>
+		}
+		<div class="src">
+			if d.Question.Source != "" {
+				<span>
+					@components.IconClass("book", "i-sm flip")
+					{ v.Tr("game.source") }: { d.Question.Source }
+				</span>
+			}
+			<button
+				class="link-btn sm"
+				type="button"
+				hx-get={ fmt.Sprintf("/questions/%d/report", d.Question.ID) }
+				hx-target="#drawer-slot"
+				hx-swap="outerHTML"
+			>
+				@components.IconClass("flag", "i-sm")
+				{ v.Tr("game.report") }
+			</button>
+			@components.Stars(d.Question.ID, 0, v)
+			<span class="spacer"></span>
+			if d.Mode == "live" && d.RoomCode != "" {
+				// The room moves together: the panel waits for the others, then counts
+				// everyone into the next question. It brings its own form, so it must
+				// not sit inside this one (RM-03).
+				@RoomNextSlot(v, d)
+			} else {
+				<form
+					method="post"
+					action={ templ.SafeURL("/games/" + d.GameID + "/next") }
+					hx-post={ "/games/" + d.GameID + "/next" }
+					hx-target="#game-main"
+					hx-swap="outerHTML"
+					if d.Mode == "duel" {
+						// A duel is a race: neither player waits on the other to read
+						// the explanation, so the next question comes by itself (DU-01).
+						x-data="{ left: 3 }"
+						x-init="const t = setInterval(() => { if (--left <= 0) { clearInterval(t); $el.requestSubmit(); } }, 1000)"
+					}
+				>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					if d.Player != "" {
+						<input type="hidden" name="player" value={ d.Player }/>
+					}
+					if d.Mode == "duel" {
+						<button class="btn btn-primary" type="submit" data-next autofocus>
+							if d.Last {
+								<span x-text={ fmt.Sprintf("`%s`", v.Tr("duel.results_in", "n", "${left}")) }>{ v.Tr("game.see_results") }</span>
+							} else {
+								<span x-text={ fmt.Sprintf("`%s`", v.Tr("duel.next_in", "n", "${left}")) }>{ v.Tr("game.next") }</span>
+							}
+							@components.IconClass("chevR", "flip")
+						</button>
+					} else {
+						<button class="btn btn-primary" type="submit" data-next autofocus>
+							if d.Last {
+								{ v.Tr("game.see_results") }
+							} else {
+								{ v.Tr("game.next") }
+							}
+							@components.IconClass("chevR", "flip")
+						</button>
+					}
+				</form>
+			}
+		</div>
+	</div>
+}
+
+// RoomNextSlot asks the room where it is: still answering, or ready to move on.
+templ RoomNextSlot(v *view.Ctx, d GameData) {
+	<div
+		id="room-next"
+		class="room-next"
+		hx-get={ fmt.Sprintf("/rooms/%s/next?at=%d", d.RoomCode, d.Question.Position) }
+		hx-trigger="load, sj:live:rooms from:body, every 15s"
+		hx-target="this"
+		hx-swap="outerHTML"
+	></div>
+}
+
+// timerInit starts the countdown for a fresh question and freezes it once the answer
+// is revealed. It runs every time htmx swaps a new card in.
+func timerInit(d GameData) string {
+	if d.Revealed() {
+		return "$store.timer.stop()"
+	}
+	return fmt.Sprintf("$store.timer.start(%d)", d.Seconds)
+}
+
+func answerClass(d GameData, i int) string {
+	if d.IsHidden(i) {
+		return "is-gone"
+	}
+	if !d.Revealed() {
+		return ""
+	}
+	switch {
+	case int32(i) == d.Question.CorrectIndex:
+		return "is-right"
+	case d.Picked != nil && int32(i) == *d.Picked:
+		return "is-wrong"
+	default:
+		return "is-dim"
+	}
+}
+
+func feedbackClass(d GameData) string {
+	if d.Feedback != nil && d.Feedback.Correct {
+		return "good"
+	}
+	return "bad"
+}
+
+// questionLang marks the text so Arabic gets the Naskh face (LG-02). When the question
+// has no translation yet it is shown in its main language (LG-05).
+func questionLang(v *view.Ctx, d GameData) string {
+	if d.Question.InLanguage {
+		return v.Lang
+	}
+	return i18n.Fallback
+}

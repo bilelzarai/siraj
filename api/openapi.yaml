@@ -1,82 +1,4028 @@
-# The published contract for the public surface. Versioned with it: the prefix
-# is the version, a field may be added, and one is never removed or given a new
-# meaning without a new one.
 openapi: 3.1.0
 info:
-  title: Sirāj
+  title: Sirāj API
   version: "1.0.0"
-  description: >
-    One read-only, credentialed route over the question bank. It serves the
-    same rows the game draws from, under the same conditions — including that
-    nothing awaiting review is ever served.
+  summary: The JSON API behind the Sirāj quiz app — the same services the website calls.
+  description: |
+    Sirāj is a trilingual (Arabic / English / French) quiz app. One Go binary serves the
+    player website, the staff admin console and this API from one service layer, so a
+    rule enforced on a screen is enforced here too.
+
+    ## Authenticating
+    Every call that needs a player sends `Authorization: Bearer <token>`. A token comes
+    from `POST /auth/guest` (no account needed, 24 h) or `POST /auth/login`. Token
+    clients never receive a cookie and never need a CSRF header; the website's cookie
+    session is a separate path that this document does not describe.
+
+    ## Language
+    Send `Accept-Language: ar | en | fr` (or `?lang=`) on every request. Any text a
+    player reads comes back in that language, falling back to English.
+
+    ## The envelope
+    Success is `{"data": …}`; a list adds `{"page": {page, per_page, total}}`; failure is
+    `{"error": {"code", "message", "fields"}}`. `204 No Content` carries no body. Codes
+    are stable strings (`not_found`, `unauthorized`, `no_questions`, `last_domain`…);
+    messages are for people and may change.
+
+    ## What the server decides
+    Scores, XP, ratings and timers are the server's. A client never sends a score, and
+    the correct answer never travels with a question. Until a challenge closes, nobody
+    else's score leaves the server.
+  contact:
+    name: Sirāj
+    url: https://siraj.app
+  license:
+    name: Proprietary
+    url: https://siraj.app/terms
+
 servers:
-  - url: /api/v1
+  # The deployment comes first on purpose: a generated client takes servers[0] as its
+  # default, and a mobile app built from this document must not ship pointing at a
+  # developer's own machine. `base` is overridden per environment.
+  - url: "{base}/api/v1"
+    description: Any deployment
+    variables:
+      base:
+        default: https://siraj.app
+  - url: http://localhost:8080/api/v1
+    description: Local development
+
 security:
-  - bearerKey: []
+  - bearerAuth: []
+
+tags:
+  - name: App
+    description: Health, configuration and the live event stream.
+  - name: Identity
+    description: Accounts, guests, sessions and the signed-in player (1–16).
+  - name: Catalog
+    description: Domains, categories, search and "Your domains" (17–21, 114–117).
+  - name: Questions
+    description: The question of the day, ratings, comments and reports (22, 23, 32–35).
+  - name: Games
+    description: Starting, playing and finishing a game (24–31).
+  - name: Rooms
+    description: "Live rooms: host, join, play together, podium (36–46, 119)."
+  - name: Duels
+    description: One-on-one matches and ratings (47–50).
+  - name: Challenges
+    description: Asynchronous rounds, share links and pass-the-device (51–62, 118).
+  - name: Social
+    description: Friends, requests, blocks, people and invites (63–74).
+  - name: Messages
+    description: Conversations, messages and uploads (75–86).
+  - name: Notifications
+    description: The list and the badge (87–89).
+  - name: Progress
+    description: XP, mastery, achievements, activity and leaderboards (90–95).
+  - name: Sets
+    description: A player's own question sets (96–105).
+  - name: Support
+    description: Topics and tickets (106–110).
+
 paths:
-  /questions:
+  # ------------------------------------------------------------------ App
+  /health:
     get:
-      summary: One page of the question bank
-      parameters:
-        - { name: locale,     in: query, schema: { type: string, enum: [ar, en, fr], default: ar } }
-        - { name: category,   in: query, schema: { type: string }, description: Category slug }
-        - { name: domain,     in: query, schema: { type: string }, description: Subject-area slug }
-        - { name: difficulty, in: query, schema: { type: integer, minimum: 1, maximum: 3 } }
-        - { name: limit,      in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
-        - { name: cursor,     in: query, schema: { type: string }, description: Opaque, from the previous response }
+      operationId: getHealth
+      tags: [App]
+      summary: Health check (113)
+      security: []
       responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
         "200":
-          description: A page, and the total the filter matches
+          description: The server and its database answer.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/QuestionPage" }
-        "400": { description: A parameter this endpoint cannot act on, $ref: "#/components/responses/Error" }
-        "401": { description: No key, or one this system does not know, $ref: "#/components/responses/Error" }
-        "403": { description: A revoked key, $ref: "#/components/responses/Error" }
-        "429": { description: Too many requests for this key, $ref: "#/components/responses/Error" }
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      ok: { type: boolean }
+                      database: { type: boolean }
+                      lang: { type: string }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /openapi.yaml:
+    get:
+      operationId: getOpenapiYaml
+      tags: [App]
+      summary: This document
+      description: The contract, served by the same binary that implements it.
+      security: []
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: The OpenAPI description of this API.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /docs:
+    get:
+      tags: [App]
+      operationId: getDocs
+      summary: The reference page
+      description: This document, rendered for a person to read in a browser.
+      security: []
+      responses:
+        "200":
+          description: An HTML page.
+          content:
+            text/html:
+              schema: { type: string }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /config:
+    get:
+      operationId: getConfig
+      tags: [App]
+      summary: What a client needs before signing in (112)
+      security: []
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Languages and the numbers the rules use.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Config" }
+
+  /events:
+    get:
+      operationId: getEvents
+      tags: [App]
+      summary: Live events (stands in for the WebSocket, 111)
+      description: |
+        A server-sent event stream, one line per signal (`rooms`, `messages`,
+        `notifications`, `challenges`), with no payload: the client re-reads whatever
+        changed from its own endpoint. Keeps itself alive with a comment every 25 s.
+      responses:
+        "200":
+          description: The stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ------------------------------------------------------------------ Identity
+  /auth/register:
+    post:
+      operationId: postAuthRegister
+      tags: [Identity]
+      summary: Create an account (1)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display_name, username, email, password, accept_terms]
+              properties:
+                display_name: { type: string, maxLength: 40 }
+                username: { type: string, maxLength: 20 }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                lang: { $ref: "#/components/schemas/Lang" }
+                accept_terms: { type: boolean }
+                client: { type: string, example: ios }
+      responses:
+        "201": { $ref: "#/components/responses/Session" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /auth/login:
+    post:
+      operationId: postAuthLogin
+      tags: [Identity]
+      summary: Sign in (2)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [login, password]
+              properties:
+                login: { type: string, description: Email or username. }
+                password: { type: string }
+                client: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/google:
+    post:
+      operationId: postAuthGoogle
+      tags: [Identity]
+      summary: Sign in with Google (3)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_token]
+              properties:
+                id_token: { type: string }
+                lang: { $ref: "#/components/schemas/Lang" }
+                client: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "201": { $ref: "#/components/responses/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: Google sign-in is not configured on this server.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /auth/guest:
+    post:
+      operationId: postAuthGuest
+      tags: [Identity]
+      summary: Start a guest session (4)
+      description: A guest is a real user for 24 hours; upgrading keeps the same id and points.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 40 }
+                lang: { $ref: "#/components/schemas/Lang" }
+                client: { type: string }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "201": { $ref: "#/components/responses/Session" }
+
+  /auth/guest/upgrade:
+    post:
+      operationId: postAuthGuestUpgrade
+      tags: [Identity]
+      summary: Turn a guest into an account (5)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display_name, username, email, password]
+              properties:
+                display_name: { type: string }
+                username: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                accept_terms: { type: boolean }
+      responses:
+        "201": { $ref: "#/components/responses/Session" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /auth/refresh:
+    post:
+      operationId: postAuthRefresh
+      tags: [Identity]
+      summary: Refresh the session (6)
+      description: Send the token as a Bearer header, or in the body — whichever the client keeps.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/logout:
+    post:
+      operationId: postAuthLogout
+      tags: [Identity]
+      summary: Sign out (7)
+      responses:
+        "204": { description: The session is closed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/password/forgot:
+    post:
+      operationId: postAuthPasswordForgot
+      tags: [Identity]
+      summary: Send a reset link (8)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                lang: { $ref: "#/components/schemas/Lang" }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Always answered the same way, whether or not the address is known.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkEnvelope" }
+
+  /auth/password/reset:
+    post:
+      operationId: postAuthPasswordReset
+      tags: [Identity]
+      summary: Set a new password (9)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /auth/username-available:
+    get:
+      operationId: getAuthUsernameAvailable
+      tags: [Identity]
+      summary: Check a username (10)
+      security: []
+      parameters:
+        - name: username
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Whether it can be taken.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      available: { type: boolean }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /me:
+    get:
+      operationId: getMe
+      tags: [Identity]
+      summary: The signed-in player (11)
+      responses:
+        "200":
+          description: The account.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      operationId: patchMe
+      tags: [Identity]
+      summary: Update the profile (12)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string, maxLength: 40 }
+                username: { type: string, maxLength: 20 }
+                avatar_url: { type: string }
+                lang: { $ref: "#/components/schemas/Lang" }
+      responses:
+        "200":
+          description: The account as it now stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/User" }
+        "422": { $ref: "#/components/responses/Invalid" }
+    delete:
+      operationId: deleteMe
+      tags: [Identity]
+      summary: Delete the account (16)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm: { type: string, description: The word the screen asks for. }
+      responses:
+        "204": { description: The account and everything personal in it are gone. }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /auth/countries:
+    get:
+      tags: [Identity]
+      operationId: getAuthCountries
+      summary: The country list the phone field uses
+      description: Each country carries its dialling code and the national number lengths it allows.
+      security: []
+      responses:
+        "200":
+          description: The picker's list, and which one it opens on.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      default: { type: string, example: TN }
+                      countries:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            code: { type: string, example: TN }
+                            name: { type: string }
+                            dial: { type: string, example: "+216" }
+                            digits:
+                              type: array
+                              items: { type: integer }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /auth/code:
+    post:
+      tags: [Identity]
+      operationId: postAuthCode
+      summary: Send a one-time code (V5 sign-in)
+      description: |
+        Six digits to a phone or an email. The same call serves signing in and
+        creating an account: which it turns out to be is decided at verification.
+        A guest's token may be sent along, so their points follow them in.
+
+        The code lasts ten minutes, survives three wrong tries, and cannot be asked
+        for again for thirty seconds (`too_soon`) or more than six times an hour
+        (`too_many_codes`).
+
+        `creating: true` is the "Create account" screen, which asks for the name and
+        the password before the code goes out. They are checked here — a password
+        has to pass all five rules (8 characters, a capital, a small letter, a digit
+        and a symbol) — and wait on the code, so verifying it finishes the account in
+        one step. `resend: true` asks for the same details again without resending
+        them.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel]
+              properties:
+                channel: { type: string, enum: [phone, email] }
+                country: { type: string, example: TN }
+                phone: { type: string, example: "20 123 456" }
+                email: { type: string, format: email }
+                call: { type: boolean, description: Read the code out by telephone instead of texting it. }
+                creating: { type: boolean, description: "The Create account flow, which carries the details below." }
+                display_name: { type: string, maxLength: 40, description: Required when `creating`. }
+                password: { type: string, format: password, description: "Required when `creating`: all five rules." }
+                accept_terms: { type: boolean, description: Required when `creating`. }
+                resend: { type: boolean, description: Send the same code again; the details are read off the last one. }
+      responses:
+        "200":
+          description: The code is on its way.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      channel: { type: string, enum: [phone, email] }
+                      destination: { type: string, description: "The number in E.164, or the address." }
+                      exists: { type: boolean, description: Whether it already has an account. }
+                      resend_in: { type: integer }
+                      expires_at: { type: string, format: date-time }
+                      length: { type: integer }
+                      tries: { type: integer }
+                      dev_code:
+                        type: string
+                        description: Development only — the code itself, when no gateway is configured.
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /auth/code/verify:
+    post:
+      tags: [Identity]
+      operationId: postAuthCodeVerify
+      summary: Prove a one-time code
+      description: |
+        Answers in one of two ways: a session, when the destination already has an
+        account (and a guest's points moved into it), or `new_account: true`, when
+        nothing is linked to it yet — then call `/auth/complete`.
+
+        A code that was asked for with `creating: true` already carries the name and
+        the password, so it answers with a session and `created: true`: there is no
+        `/auth/complete` step.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, code]
+              properties:
+                channel: { type: string, enum: [phone, email] }
+                country: { type: string }
+                phone: { type: string }
+                email: { type: string, format: email }
+                code: { type: string, example: "482173" }
+                remember: { type: boolean, default: true, description: "\"Keep me signed in\"." }
+                client: { type: string }
+      responses:
+        "200":
+          description: Signed in, or a number nobody has yet.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      new_account: { type: boolean }
+                      created: { type: boolean, description: The account was made by this call (the "Create account" flow). }
+                      destination: { type: string }
+                      channel: { type: string, enum: [phone, email] }
+                      moved_points: { type: integer }
+                      token: { type: string }
+                      expires_at: { type: string, format: date-time }
+                      user: { $ref: "#/components/schemas/User" }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /auth/complete:
+    post:
+      tags: [Identity]
+      operationId: postAuthComplete
+      summary: Name a new account
+      description: |
+        The last step for a destination nobody had: the name other players see, an
+        optional address to recover by, and the Terms. A guest playing in this
+        browser becomes the account — same id, so their points and games are
+        already there.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, destination, display_name, accept_terms]
+              properties:
+                channel: { type: string, enum: [phone, email] }
+                destination: { type: string }
+                display_name: { type: string, maxLength: 40 }
+                email: { type: string, format: email }
+                accept_terms: { type: boolean }
+                remember: { type: boolean, default: true }
+                client: { type: string }
+      responses:
+        "201": { $ref: "#/components/responses/Session" }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /auth/logout-everywhere:
+    post:
+      tags: [Identity]
+      operationId: postAuthLogoutEverywhere
+      summary: Sign out on every device
+      responses:
+        "200":
+          description: How many sessions were closed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      signed_out: { type: integer }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /me/devices/{id}:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    delete:
+      tags: [Identity]
+      operationId: deleteMeDevicesById
+      summary: Sign one linked device out
+      responses:
+        "204": { description: That session is closed. }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /me/settings:
+    get:
+      operationId: getMeSettings
+      tags: [Identity]
+      summary: The player's settings
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Theme, goal, Islamic-only, notifications and privacy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Settings" }
+    patch:
+      operationId: patchMeSettings
+      tags: [Identity]
+      summary: Update settings (13)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Settings" }
+      responses:
+        "200":
+          description: The settings as they now stand.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Settings" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /me/onboarding:
+    post:
+      operationId: postMeOnboarding
+      tags: [Identity]
+      summary: Save the onboarding choices (14)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lang: { $ref: "#/components/schemas/Lang" }
+                domain_ids:
+                  type: array
+                  items: { type: integer, format: int64 }
+                daily_goal: { type: integer, minimum: 1, maximum: 20 }
+                reminder_time: { type: string, example: "20:00" }
+      responses:
+        "200":
+          description: The player is set up.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkEnvelope" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /me/devices:
+    get:
+      operationId: getMeDevices
+      tags: [Identity]
+      summary: Linked devices
+      description: Where this account is signed in, as the account menu lists them.
+      responses:
+        "200":
+          description: One row per live session.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        client: { type: string, enum: [web, ios, android] }
+                        user_agent: { type: string }
+                        current: { type: boolean }
+                        since: { type: string, format: date-time }
+                        until: { type: string, format: date-time }
+        "4XX": { $ref: "#/components/responses/Failure" }
+    post:
+      operationId: postMeDevices
+      tags: [Identity]
+      summary: Register a push device (15)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, push_token]
+              properties:
+                platform: { type: string, enum: [ios, android, web] }
+                push_token: { type: string }
+      responses:
+        "204": { description: The device is registered. }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  # ------------------------------------------------------------------ Catalog
+  /domains:
+    get:
+      operationId: getDomains
+      tags: [Catalog]
+      summary: List domains (17)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Scope"
+        - name: q
+          in: query
+          schema: { type: string }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: A page of domains.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Domain" }
+                  - $ref: "#/components/schemas/Paged"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /domains/{id}:
+    parameters: [{ $ref: "#/components/parameters/IntID" }]
+    get:
+      operationId: getDomainsById
+      tags: [Catalog]
+      summary: Domain detail (18)
+      security: []
+      responses:
+        "200":
+          description: One domain.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Domain" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /domains/{id}/categories:
+    parameters: [{ $ref: "#/components/parameters/IntID" }]
+    get:
+      operationId: getDomainsByIdCategories
+      tags: [Catalog]
+      summary: Categories of a domain (19)
+      security: []
+      responses:
+        "200":
+          description: Its published categories, in order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Category" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /categories/{id}:
+    parameters: [{ $ref: "#/components/parameters/IntID" }]
+    get:
+      operationId: getCategoriesById
+      tags: [Catalog]
+      summary: Category detail (20)
+      security: []
+      responses:
+        "200":
+          description: One category with the domain that themes its screens.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/CategoryDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /search:
+    get:
+      operationId: getSearch
+      tags: [Catalog]
+      summary: Search domains and categories (21)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Scope"
+        - name: q
+          in: query
+          schema: { type: string }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: What matched, inside the scope asked for.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      domains:
+                        type: array
+                        items: { $ref: "#/components/schemas/Domain" }
+                      categories:
+                        type: array
+                        items: { $ref: "#/components/schemas/Category" }
+
+  /me/domains:
+    get:
+      operationId: getMeDomains
+      tags: [Catalog]
+      summary: Your domains (114)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: The player's domains, in their own order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Domain" }
+    put:
+      operationId: putMeDomains
+      tags: [Catalog]
+      summary: Replace and reorder your domains (115)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain_ids]
+              properties:
+                domain_ids:
+                  type: array
+                  items: { type: integer, format: int64 }
+                source: { type: string, enum: [onboarding, added] }
+      responses:
+        "200":
+          description: The list as it now stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Domain" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /me/domains/{id}:
+    parameters: [{ $ref: "#/components/parameters/IntID" }]
+    post:
+      operationId: postMeDomainsById
+      tags: [Catalog]
+      summary: Add a domain (116)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Your domains, with it added.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Domain" }
+    delete:
+      operationId: deleteMeDomainsById
+      tags: [Catalog]
+      summary: Remove a domain (117)
+      description: Refused with `last_domain` when it is the only one left.
+      responses:
+        "200":
+          description: Your domains, with it removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Domain" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  # ------------------------------------------------------------------ Questions
+  /daily-question:
+    get:
+      operationId: getDailyQuestion
+      tags: [Questions]
+      summary: Question of the day (22)
+      security: []
+      responses:
+        "200":
+          description: Today's question, from one of the player's domains.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DailyQuestion" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /daily-question/answer:
+    post:
+      operationId: postDailyQuestionAnswer
+      tags: [Questions]
+      summary: Answer the question of the day (23)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [choice]
+              properties:
+                choice: { type: integer, minimum: 0, maximum: 3 }
+      responses:
+        "200":
+          description: Whether it was right, with the explanation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      correct: { type: boolean }
+                      correct_index: { type: integer }
+                      explanation: { type: string }
+                      points: { type: integer }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /questions/{id}/rating:
+    parameters: [{ $ref: "#/components/parameters/IntID" }]
+    put:
+      operationId: putQuestionsByIdRating
+      tags: [Questions]
+      summary: Rate a question (32)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stars]
+              properties:
+                stars: { type: integer, minimum: 1, maximum: 5 }
+                reason: { type: string }
+      responses:
+        "204": { description: The rating is saved. }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /questions/{id}/comments:
+    parameters: [{ $ref: "#/components/parameters/IntID" }]
+    get:
+      operationId: getQuestionsByIdComments
+      tags: [Questions]
+      summary: List comments (33)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Published comments, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Comment" }
+    post:
+      operationId: postQuestionsByIdComments
+      tags: [Questions]
+      summary: Add a comment (34)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, maxLength: 500 }
+      responses:
+        "201":
+          description: The comment.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Comment" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /questions/{id}/reports:
+    parameters: [{ $ref: "#/components/parameters/IntID" }]
+    post:
+      operationId: postQuestionsByIdReports
+      tags: [Questions]
+      summary: Report a problem with a question (35)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  enum: [too_easy, too_hard, unclear, wrong_answer, translation]
+                note: { type: string }
+      responses:
+        "204": { description: The report reaches the moderation queue. }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  # ------------------------------------------------------------------ Games
+  /games:
+    post:
+      operationId: postGames
+      tags: [Games]
+      summary: Start a game (24)
+      description: A quick game is always five questions, whatever the client asks for.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GameStart" }
+      responses:
+        "201":
+          description: The game, with its first question.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Game" }
+        "409":
+          description: The choice holds too few questions (`no_questions`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /games/{id}:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    get:
+      operationId: getGamesById
+      tags: [Games]
+      summary: Game state and current question (25)
+      responses:
+        "200":
+          description: Where the game stands. Reading it starts the question's clock.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Game" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /games/{id}/answers:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postGamesByIdAnswers
+      tags: [Games]
+      summary: Submit an answer (26)
+      description: The server scores it; `time_ms` is a hint, the server's own clock decides.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [position, choice]
+              properties:
+                position: { type: integer }
+                choice: { type: integer, minimum: 0, maximum: 3 }
+                time_ms: { type: integer }
+      responses:
+        "200":
+          description: What that answer was worth.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AnswerResult" }
+        "409":
+          description: That position was already answered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /games/{id}/fifty:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postGamesByIdFifty
+      tags: [Games]
+      summary: Use 50/50 (27)
+      responses:
+        "200":
+          description: The two answers left standing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      keep:
+                        type: array
+                        items: { type: integer }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /games/{id}/skip:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postGamesByIdSkip
+      tags: [Games]
+      summary: Skip a question (28)
+      responses:
+        "204": { description: "The question is skipped, once per game." }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /games/{id}/finish:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postGamesByIdFinish
+      tags: [Games]
+      summary: Finish or abandon (29)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: The final score, written with XP and mastery in one transaction.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      score: { type: integer }
+                      correct: { type: integer }
+                      xp: { type: integer }
+
+  /games/{id}/results:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    get:
+      operationId: getGamesByIdResults
+      tags: [Games]
+      summary: Results and answer review (30)
+      responses:
+        "200":
+          description: The run, question by question.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Results" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /me/games:
+    get:
+      operationId: getMeGames
+      tags: [Games]
+      summary: Game history (31)
+      parameters:
+        - name: mode
+          in: query
+          schema: { type: string, enum: [solo, live, duel, challenge, device] }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Finished games, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HistoryRow" }
+                  - $ref: "#/components/schemas/Paged"
+
+  # ------------------------------------------------------------------ Rooms
+  /rooms:
+    get:
+      operationId: getRooms
+      tags: [Rooms]
+      summary: Open rooms you can join
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Rooms friends have open.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OpenRoom" }
+    post:
+      operationId: postRooms
+      tags: [Rooms]
+      summary: Create a room (36)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoomCreate" }
+      responses:
+        "201": { $ref: "#/components/responses/Room" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /rooms/{code}:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    get:
+      operationId: getRoomsByCode
+      tags: [Rooms]
+      summary: Room and lobby (37)
+      responses:
+        "200": { $ref: "#/components/responses/Room" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: patchRoomsByCode
+      tags: [Rooms]
+      summary: Change room settings (40) — host only
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                question_count: { type: integer, enum: [5, 10, 15, 20] }
+                seconds: { type: integer, enum: [10, 20, 30] }
+                allow_guests: { type: boolean }
+                mode: { type: string, enum: [ffa, teams] }
+      responses:
+        "200": { $ref: "#/components/responses/Room" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /rooms/{code}/join:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    post:
+      operationId: postRoomsByCodeJoin
+      tags: [Rooms]
+      summary: Join with a code (38)
+      responses:
+        "200": { $ref: "#/components/responses/Room" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /rooms/{code}/leave:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    post:
+      operationId: postRoomsByCodeLeave
+      tags: [Rooms]
+      summary: Leave the room (39)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: You are out of the room. }
+
+  /rooms/{code}/ready:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    post:
+      operationId: postRoomsByCodeReady
+      tags: [Rooms]
+      summary: Set ready / not ready (41)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ready: { type: boolean, default: true }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200": { $ref: "#/components/responses/Room" }
+
+  /rooms/{code}/players/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/RoomCode"
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: deleteRoomsByCodePlayersByUserid
+      tags: [Rooms]
+      summary: Remove a player (42) — host only
+      responses:
+        "204": { description: They are out of the room. }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /rooms/{code}/start:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    post:
+      operationId: postRoomsByCodeStart
+      tags: [Rooms]
+      summary: Start the game (43) — host only
+      description: One game for the whole room; every member answers the same questions.
+      responses:
+        "200":
+          description: The game the room will play.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      game_id: { type: string, format: uuid }
+                      question_count: { type: integer }
+                      seconds: { type: integer }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /rooms/{code}/messages:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    get:
+      operationId: getRoomsByCodeMessages
+      tags: [Rooms]
+      summary: Room chat history (44)
+      responses:
+        "200":
+          description: The last lines of the room's chat.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/RoomLine" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: postRoomsByCodeMessages
+      tags: [Rooms]
+      summary: Send to room chat (45)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body: { type: string, maxLength: 200 }
+                upload_id: { type: string, format: uuid }
+                kind: { type: string, enum: [text, image, file, voice] }
+      responses:
+        "204": { description: The line is in the chat. }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /rooms/{code}/standings:
+    parameters:
+      - $ref: "#/components/parameters/RoomCode"
+      - name: position
+        in: query
+        description: The question on screen; omit for the game as a whole.
+        schema: { type: integer }
+    get:
+      operationId: getRoomsByCodeStandings
+      tags: [Rooms]
+      summary: The live board
+      responses:
+        "200":
+          description: Where everyone stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      game_id: { type: string, format: uuid }
+                      position: { type: integer }
+                      answered: { type: integer }
+                      players: { type: integer }
+                      rows:
+                        type: array
+                        items: { $ref: "#/components/schemas/Standing" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /rooms/{code}/podium:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    get:
+      operationId: getRoomsByCodePodium
+      tags: [Rooms]
+      summary: Final ranking (46)
+      responses:
+        "200":
+          description: The podium, with the two sides when the room played in teams.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Podium" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /rooms/{code}/teams/shuffle:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    post:
+      operationId: postRoomsByCodeTeamsShuffle
+      tags: [Rooms]
+      summary: Deal the two sides again (119) — host only
+      responses:
+        "200": { $ref: "#/components/responses/Room" }
+        "409":
+          description: Teams need at least four players (`too_few_for_teams`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /rooms/{code}/teams/move:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    post:
+      operationId: postRoomsByCodeTeamsMove
+      tags: [Rooms]
+      summary: Cross to the other side
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [side]
+              properties:
+                side: { type: integer, enum: [0, 1] }
+      responses:
+        "200": { $ref: "#/components/responses/Room" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /rooms/{code}/again:
+    parameters: [{ $ref: "#/components/parameters/RoomCode" }]
+    post:
+      operationId: postRoomsByCodeAgain
+      tags: [Rooms]
+      summary: Reopen the room for another round
+      responses:
+        "200": { $ref: "#/components/responses/Room" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ------------------------------------------------------------------ Duels
+  /duels/queue:
+    get:
+      operationId: getDuelsQueue
+      tags: [Duels]
+      summary: Am I still searching?
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200": { $ref: "#/components/responses/DuelState" }
+    post:
+      operationId: postDuelsQueue
+      tags: [Duels]
+      summary: Find an opponent (47)
+      description: Joins the queue, and pairs at once when somebody was already waiting.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                domain_id: { type: integer, format: int64 }
+      responses:
+        "200": { $ref: "#/components/responses/DuelState" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteDuelsQueue
+      tags: [Duels]
+      summary: Stop searching (48)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: You are out of the queue. }
+
+  /duels/{id}:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    get:
+      operationId: getDuelsById
+      tags: [Duels]
+      summary: Duel state and result (49)
+      description: The id is the game id both sides play.
+      responses:
+        "200":
+          description: Both sides and the head-to-head.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Duel" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /duels/{id}/opponent:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    get:
+      operationId: getDuelsByIdOpponent
+      tags: [Duels]
+      summary: The other side, for the score bar
+      responses:
+        "200":
+          description: The opponent as the bar draws them.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Opponent" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /me/duel-ratings:
+    get:
+      operationId: getMeDuelRatings
+      tags: [Duels]
+      summary: My ratings per domain (50)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: One line per domain duelled in, best rating first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/DuelRating" }
+
+  # ------------------------------------------------------------------ Challenges
+  /challenges:
+    get:
+      operationId: getChallenges
+      tags: [Challenges]
+      summary: List challenges (51)
+      parameters:
+        - name: box
+          in: query
+          schema: { type: string, enum: [received, sent, finished], default: received }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: One box of the Challenges screen.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Challenge" }
+                  - $ref: "#/components/schemas/Paged"
+    post:
+      operationId: postChallenges
+      tags: [Challenges]
+      summary: Create a challenge (53)
+      description: The questions are frozen here, so every player answers the same list.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChallengeCreate" }
+      responses:
+        "201":
+          description: The challenge.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Challenge" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /challenges/stats:
+    get:
+      operationId: getChallengesStats
+      tags: [Challenges]
+      summary: Won / lost / draw counts (52)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: How many sit in each box.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      received: { type: integer }
+                      sent: { type: integer }
+                      finished: { type: integer }
+
+  /challenges/{id}:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    get:
+      operationId: getChallengesById
+      tags: [Challenges]
+      summary: Challenge detail (54)
+      description: |
+        While the challenge is open, every `score` but the viewer's own is `null` —
+        the rule the whole module exists to keep.
+      responses:
+        "200":
+          description: The challenge as this player may see it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ChallengeDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteChallengesById
+      tags: [Challenges]
+      summary: Cancel a sent challenge (57)
+      responses:
+        "204": { description: The challenge is called off. }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /challenges/{id}/accept:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postChallengesByIdAccept
+      tags: [Challenges]
+      summary: Accept and play (55)
+      responses:
+        "201":
+          description: The game dealt from the challenge's frozen questions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      game_id: { type: string, format: uuid }
+                      question_count: { type: integer }
+                      seconds: { type: integer }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /challenges/{id}/decline:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postChallengesByIdDecline
+      tags: [Challenges]
+      summary: Decline (56)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: You are out of this challenge. }
+
+  /challenges/{id}/remind:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postChallengesByIdRemind
+      tags: [Challenges]
+      summary: Remind the opponents (58)
+      responses:
+        "200":
+          description: How many were nudged.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      reminded: { type: integer }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /challenges/{id}/rematch:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postChallengesByIdRematch
+      tags: [Challenges]
+      summary: Play again (59)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "201":
+          description: A new challenge with the same players and settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Challenge" }
+
+  /challenges/{id}/close:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postChallengesByIdClose
+      tags: [Challenges]
+      summary: Close early (118) — creator only
+      description: Allowed only when nobody is mid-game; players who never started are removed.
+      responses:
+        "200":
+          description: The challenge, now closed, with its standings.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ChallengeDetail" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /challenges/{id}/link:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postChallengesByIdLink
+      tags: [Challenges]
+      summary: Create the share link (60)
+      description: The link lasts 24 hours and lets whoever opens it join, guests included.
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "201":
+          description: The link.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      code: { type: string }
+                      challenge_id: { type: string, format: uuid }
+                      expires_at: { type: string, format: date-time }
+                      path: { type: string }
+
+  /challenge-links/{code}:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getChallengeLinksByCode
+      tags: [Challenges]
+      summary: Open a shared challenge link (60)
+      description: Opening it joins the challenge when there is room.
+      responses:
+        "200":
+          description: The challenge you just joined.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Challenge" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /challenges/random-opponent:
+    post:
+      operationId: postChallengesRandomOpponent
+      tags: [Challenges]
+      summary: Pick a random opponent (61)
+      description: A friend first, otherwise somebody you have already shared a game with.
+      responses:
+        "200":
+          description: A real player to challenge.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user_id: { type: string, format: uuid }
+                      name: { type: string }
+                      username: { type: string }
+                      level: { type: integer }
+        "404":
+          description: Nobody to pick yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /local-rounds:
+    post:
+      operationId: postLocalRounds
+      tags: [Challenges]
+      summary: Start a pass-the-device round (62)
+      description: Two to ten names on one phone; every turn is scored on the server.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/ChallengeCreate"
+                - type: object
+                  properties:
+                    locals:
+                      type: array
+                      items: { type: string }
+                    teams: { type: boolean }
+      responses:
+        "201":
+          description: The round, at its first question.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DeviceState" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /local-rounds/{id}:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    get:
+      operationId: getLocalRoundsById
+      tags: [Challenges]
+      summary: Where a pass-the-device round has got to
+      responses:
+        "200":
+          description: Whose turn it is, and what the table may see.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DeviceState" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /local-rounds/{id}/results:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    get:
+      operationId: getLocalRoundsByIdResults
+      tags: [Challenges]
+      summary: The podium of a pass-the-device round
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Final standings on the phone.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      questions: { type: integer }
+                      teams: { type: boolean }
+                      totals:
+                        type: array
+                        items: { type: integer }
+                      winner: { type: integer }
+                      diff: { type: integer }
+                      players:
+                        type: array
+                        items: { $ref: "#/components/schemas/DevicePlayer" }
+
+  # ------------------------------------------------------------------ Social
+  /friends:
+    get:
+      operationId: getFriends
+      tags: [Social]
+      summary: List friends (63)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Friends, online first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Friend" }
+
+  /friends/{userId}:
+    parameters: [{ $ref: "#/components/parameters/UserID" }]
+    delete:
+      operationId: deleteFriendsByUserid
+      tags: [Social]
+      summary: Remove a friend (64)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: You are no longer friends. }
+
+  /friend-requests:
+    get:
+      operationId: getFriendRequests
+      tags: [Social]
+      summary: Requests received and sent (65)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Both directions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      received:
+                        type: array
+                        items: { $ref: "#/components/schemas/FriendRequest" }
+                      sent:
+                        type: array
+                        items: { $ref: "#/components/schemas/FriendRequest" }
+    post:
+      operationId: postFriendRequests
+      tags: [Social]
+      summary: Send a request (66)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+      responses:
+        "204": { description: The request is on its way. }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /friend-requests/{id}/accept:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postFriendRequestsByIdAccept
+      tags: [Social]
+      summary: Accept a request (67)
+      responses:
+        "204": { description: You are friends. }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /friend-requests/{id}/decline:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postFriendRequestsByIdDecline
+      tags: [Social]
+      summary: Decline a request (68)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: The request is closed. }
+
+  /users/search:
+    get:
+      operationId: getUsersSearch
+      tags: [Social]
+      summary: Find people (69)
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Players whose name or handle matches.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Person" }
+
+  /users/{username}:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getUsersByUsername
+      tags: [Social]
+      summary: Public profile (70)
+      security: []
+      responses:
+        "200":
+          description: What a player shows the world.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PublicProfile" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /users-suggestions:
+    get:
+      operationId: getUsersSuggestions
+      tags: [Social]
+      summary: People you played with (71)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Players met in rooms, duels and challenges.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Person" }
+
+  /blocks:
+    post:
+      operationId: postBlocks
+      tags: [Social]
+      summary: Block someone (72)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: They can no longer reach you. }
+
+  /blocks/{userId}:
+    parameters: [{ $ref: "#/components/parameters/UserID" }]
+    delete:
+      operationId: deleteBlocksByUserid
+      tags: [Social]
+      summary: Unblock (73)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: The block is lifted. }
+
+  /invites:
+    post:
+      operationId: postInvites
+      tags: [Social]
+      summary: Create an invite link (74)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "201":
+          description: A link that brings a friend into the app.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      code: { type: string }
+                      url: { type: string }
+
+  # ------------------------------------------------------------------ Messages
+  /conversations:
+    get:
+      operationId: getConversations
+      tags: [Messages]
+      summary: The inbox (75)
+      parameters:
+        - name: tab
+          in: query
+          schema: { type: string, enum: [people, groups, rooms], default: people }
+        - name: q
+          in: query
+          schema: { type: string }
+        - { $ref: "#/components/parameters/Page" }
+        - { $ref: "#/components/parameters/PerPage" }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: One page of a tab of the inbox, pinned threads first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  page:
+                    type: object
+                    properties:
+                      page: { type: integer }
+                      per_page: { type: integer }
+                      total: { type: integer }
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ConversationRow" }
+    post:
+      operationId: postConversations
+      tags: [Messages]
+      summary: Start a conversation or a group (76)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string, format: uuid, description: One person. }
+                user_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+                group: { type: boolean }
+                title: { type: string, maxLength: 60 }
+      responses:
+        "201":
+          description: The thread.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      kind: { type: string, enum: [direct, group, room, system] }
+                      title: { type: string }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /conversations/{id}:
+    parameters: [{ $ref: "#/components/parameters/ThreadID" }]
+    get:
+      operationId: getConversationsById
+      tags: [Messages]
+      summary: Conversation detail (77)
+      description: Opening a thread marks it read. A room code may stand in for the id.
+      responses:
+        "200":
+          description: The head and the messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      conversation: { $ref: "#/components/schemas/ConversationHead" }
+                      messages:
+                        type: array
+                        items: { $ref: "#/components/schemas/Message" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: patchConversationsById
+      tags: [Messages]
+      summary: Pin, mute or rename (78)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pinned: { type: boolean }
+                muted: { type: boolean }
+                title: { type: string, maxLength: 60 }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: The thread is marked. }
+    delete:
+      operationId: deleteConversationsById
+      tags: [Messages]
+      summary: Delete for me (81)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: The thread is out of your inbox. }
+
+  /conversations/{id}/read:
+    parameters: [{ $ref: "#/components/parameters/ThreadID" }]
+    post:
+      operationId: postConversationsByIdRead
+      tags: [Messages]
+      summary: Mark as read (79)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: Read up to now. }
+
+  /conversations/{id}/unread:
+    parameters: [{ $ref: "#/components/parameters/ThreadID" }]
+    post:
+      operationId: postConversationsByIdUnread
+      tags: [Messages]
+      summary: Mark as unread (80)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: Back in the badge. }
+
+  /conversations/{id}/messages:
+    parameters: [{ $ref: "#/components/parameters/ThreadID" }]
+    get:
+      operationId: getConversationsByIdMessages
+      tags: [Messages]
+      summary: Messages (82)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: The thread, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Message" }
+    post:
+      operationId: postConversationsByIdMessages
+      tags: [Messages]
+      summary: Send a message (83)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body: { type: string, maxLength: 2000 }
+                reply_to: { type: string, format: uuid }
+                upload_id: { type: string, format: uuid }
+                kind: { type: string, enum: [text, image, file, voice] }
+      responses:
+        "200":
+          description: The thread as it now stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Message" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /conversations/{id}/members:
+    parameters: [{ $ref: "#/components/parameters/ThreadID" }]
+    get:
+      tags: [Messages]
+      operationId: getConversationsByIdMembers
+      summary: Who is in a group
+      description: |
+        The members panel: everybody in the group, who started it, and the friends
+        who could still be added.
+      responses:
+        "200":
+          description: The group and its people.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/GroupMembers" }
+        "4XX": { $ref: "#/components/responses/Failure" }
+    post:
+      tags: [Messages]
+      operationId: postConversationsByIdMembers
+      summary: Add people to a group
+      description: Anybody in the group may add a friend; a blocked player cannot be added.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_ids]
+              properties:
+                user_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The group as it now stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/GroupMembers" }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /conversations/{id}/members/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/ThreadID"
+      - $ref: "#/components/parameters/UserID"
+    delete:
+      tags: [Messages]
+      operationId: deleteConversationsByIdMembersByUserid
+      summary: Remove somebody from a group
+      description: |
+        Only the player who started the group may remove somebody else. Pointing it
+        at yourself is the same as leaving.
+      responses:
+        "204": { description: They are out of the group. }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /conversations/{id}/leave:
+    parameters: [{ $ref: "#/components/parameters/ThreadID" }]
+    post:
+      tags: [Messages]
+      operationId: postConversationsByIdLeave
+      summary: Leave a group
+      description: The group carries on without you; if you started it, the next member takes it on.
+      responses:
+        "204": { description: You are out of the group. }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /conversations/{id}/challenge:
+    parameters: [{ $ref: "#/components/parameters/ThreadID" }]
+    post:
+      tags: [Messages]
+      operationId: postConversationsByIdChallenge
+      summary: Post a challenge into a thread
+      description: |
+        The card says what the round is and opens it; it never carries anybody's
+        score, the same rule the challenge screens keep (CH-09).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id]
+              properties:
+                challenge_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The thread, with the card in it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Message" }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /challenges-shareable:
+    get:
+      tags: [Messages]
+      operationId: getChallengesShareable
+      summary: Rounds the composer may post
+      description: Every challenge this player is in that is still open.
+      responses:
+        "200":
+          description: What can be put into a thread.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        challenge_id: { type: string, format: uuid }
+                        title: { type: string }
+                        questions: { type: integer }
+                        score_to_beat: { type: integer }
+        "4XX": { $ref: "#/components/responses/Failure" }
+
+  /conversations-candidates:
+    get:
+      operationId: getConversationsCandidates
+      tags: [Messages]
+      summary: Who you may write to
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Friends for a member; for a guest, the guests they played with.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Person" }
+
+  /conversations-unread-count:
+    get:
+      operationId: getConversationsUnreadCount
+      tags: [Messages]
+      summary: The inbox badge
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: How many threads are unread.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      unread: { type: integer }
+
+  /messages/{id}:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    delete:
+      operationId: deleteMessagesById
+      tags: [Messages]
+      summary: Delete a message (84)
+      parameters:
+        - name: scope
+          in: query
+          description: "`everyone` takes it back for both sides; otherwise it is hidden for you."
+          schema: { type: string, enum: [me, everyone] }
+      responses:
+        "204": { description: The message is gone. }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /messages/{id}/reports:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postMessagesByIdReports
+      tags: [Messages]
+      summary: Report a message (85)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+                note: { type: string }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: The report reaches moderation. }
+
+  /uploads:
+    post:
+      operationId: postUploads
+      tags: [Messages]
+      summary: Upload a file, image or voice note (86)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201":
+          description: The upload, to attach to a message.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      kind: { type: string, enum: [image, file, voice] }
+                      name: { type: string }
+                      bytes: { type: integer }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  # ------------------------------------------------------------------ Notifications
+  /notifications:
+    get:
+      operationId: getNotifications
+      tags: [Notifications]
+      summary: List notifications (87)
+      parameters:
+        - name: unread
+          in: query
+          schema: { type: boolean }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Notification" }
+
+  /notifications/read:
+    post:
+      operationId: postNotificationsRead
+      tags: [Notifications]
+      summary: Mark some or all as read (88)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                all: { type: boolean }
+                ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: They are read. }
+
+  /notifications/unread-count:
+    get:
+      operationId: getNotificationsUnreadCount
+      tags: [Notifications]
+      summary: Badge count (89)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: How many are unread.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      unread: { type: integer }
+
+  # ------------------------------------------------------------------ Progress
+  /me/progress:
+    get:
+      operationId: getMeProgress
+      tags: [Progress]
+      summary: XP, level, streak and the daily goal (90)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Where the player stands today.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Progress" }
+
+  /me/mastery:
+    get:
+      operationId: getMeMastery
+      tags: [Progress]
+      summary: Mastery across your domains (91)
+      parameters:
+        - name: sort
+          in: query
+          schema: { type: string, enum: [mastery, name, played] }
+        - name: q
+          in: query
+          schema: { type: string }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: One line per domain.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Mastery" }
+                  - $ref: "#/components/schemas/Paged"
+
+  /me/mastery/domains/{id}:
+    parameters: [{ $ref: "#/components/parameters/IntID" }]
+    get:
+      operationId: getMeMasteryDomainsById
+      tags: [Progress]
+      summary: Mastery by category in a domain (92)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: One line per category.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Mastery" }
+
+  /me/achievements:
+    get:
+      operationId: getMeAchievements
+      tags: [Progress]
+      summary: Achievements and progress (93)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Every achievement, with how far the player is.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Achievement" }
+
+  /me/activity:
+    get:
+      operationId: getMeActivity
+      tags: [Progress]
+      summary: Twelve weeks of activity (94)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: One entry per day with games played.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        day: { type: string, format: date }
+                        games: { type: integer }
+                        points: { type: integer }
+
+  /leaderboards:
+    get:
+      operationId: getLeaderboards
+      tags: [Progress]
+      summary: Leaderboard (95)
+      security: []
+      parameters:
+        - name: period
+          in: query
+          schema: { type: string, enum: [week, month, all], default: week }
+        - name: scope
+          in: query
+          schema: { type: string, enum: [global, friends], default: global }
+        - name: domain_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: The board, and the viewer's own standing when they have one.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/LeaderboardRow" }
+                  - $ref: "#/components/schemas/Paged"
+
+  # ------------------------------------------------------------------ Sets
+  /sets:
+    get:
+      operationId: getSets
+      tags: [Sets]
+      summary: My sets (96)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Ready sets and drafts.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Set" }
+                  - $ref: "#/components/schemas/Paged"
+    post:
+      operationId: postSets
+      tags: [Sets]
+      summary: Create a set (97)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 40 }
+                main_lang: { $ref: "#/components/schemas/Lang" }
+      responses:
+        "201":
+          description: The new set; an empty name becomes "Untitled set".
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Set" }
+        "403":
+          description: Guests cannot write sets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /sets/{id}:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    get:
+      operationId: getSetsById
+      tags: [Sets]
+      summary: A set with its questions (98)
+      responses:
+        "200":
+          description: The set and every question in it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      set: { $ref: "#/components/schemas/Set" }
+                      questions:
+                        type: array
+                        items: { $ref: "#/components/schemas/SetQuestion" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: patchSetsById
+      tags: [Sets]
+      summary: Rename, change main language (99)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 40 }
+                main_lang: { $ref: "#/components/schemas/Lang" }
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: The set is renamed. }
+    delete:
+      operationId: deleteSetsById
+      tags: [Sets]
+      summary: Delete a set (100)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: The set is gone. }
+
+  /sets/{id}/questions:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postSetsByIdQuestions
+      tags: [Sets]
+      summary: Add a question (101)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetQuestionInput" }
+      responses:
+        "201":
+          description: The question's id.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: integer, format: int64 }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /sets/{id}/questions/{qid}:
+    parameters:
+      - $ref: "#/components/parameters/UuidID"
+      - $ref: "#/components/parameters/QuestionID"
+    patch:
+      operationId: patchSetsByIdQuestionsByQid
+      tags: [Sets]
+      summary: Edit a question (102)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetQuestionInput" }
+      responses:
+        "204": { description: The question is saved. }
+        "422": { $ref: "#/components/responses/Invalid" }
+    delete:
+      operationId: deleteSetsByIdQuestionsByQid
+      tags: [Sets]
+      summary: Delete a question (103)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "204": { description: The question is gone. }
+
+  /sets/{id}/questions/{qid}/duplicate:
+    parameters:
+      - $ref: "#/components/parameters/UuidID"
+      - $ref: "#/components/parameters/QuestionID"
+    post:
+      operationId: postSetsByIdQuestionsByQidDuplicate
+      tags: [Sets]
+      summary: Duplicate a question (104)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "201":
+          description: The copy's id.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: integer, format: int64 }
+
+  /sets/{id}/suggest:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postSetsByIdSuggest
+      tags: [Sets]
+      summary: Suggest the set to the bank (105)
+      description: Needs five questions; staff review it before anything is published.
+      responses:
+        "204": { description: The set is with the reviewers. }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  # ------------------------------------------------------------------ Support
+  /support/topics:
+    get:
+      operationId: getSupportTopics
+      tags: [Support]
+      summary: Topics and their fields (106)
+      security: []
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: The six topics of the picker.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string }
+                        label: { type: string }
+                        icon: { type: string }
+
+  /support/tickets:
+    get:
+      operationId: getSupportTickets
+      tags: [Support]
+      summary: My tickets (108)
+      responses:
+        "4XX": { $ref: "#/components/responses/Failure" }
+        "200":
+          description: Your tickets, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Ticket" }
+    post:
+      operationId: postSupportTickets
+      tags: [Support]
+      summary: Send a message (107)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic, subject, body]
+              properties:
+                topic:
+                  type: string
+                  enum: [question, account, report_user, bug, suggestion, other]
+                subject: { type: string, maxLength: 80 }
+                body: { type: string, maxLength: 2000 }
+                email: { type: string, format: email, description: Required when signed out. }
+      responses:
+        "201":
+          description: The ticket.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Ticket" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /support/tickets/{id}:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    get:
+      operationId: getSupportTicketsById
+      tags: [Support]
+      summary: Ticket thread (109)
+      responses:
+        "200":
+          description: The ticket and its messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      ticket: { $ref: "#/components/schemas/Ticket" }
+                      messages:
+                        type: array
+                        items: { $ref: "#/components/schemas/TicketMessage" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /support/tickets/{id}/messages:
+    parameters: [{ $ref: "#/components/parameters/UuidID" }]
+    post:
+      operationId: postSupportTicketsByIdMessages
+      tags: [Support]
+      summary: Reply to a ticket (110)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, maxLength: 2000 }
+      responses:
+        "204": { description: The reply is on the thread. }
+        "422": { $ref: "#/components/responses/Invalid" }
+
 components:
   securitySchemes:
-    bearerKey:
+    bearerAuth:
       type: http
       scheme: bearer
-      description: Minted with `sirajctl apikey new`. Shown once, stored only as a hash.
+      description: The token from `/auth/guest`, `/auth/login` or `/auth/register`.
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PerPage:
+      name: per_page
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 50 }
+    Scope:
+      name: scope
+      in: query
+      description: "`mine` stays inside the player's domains; `all` is the whole catalog."
+      schema: { type: string, enum: [mine, all] }
+    IntID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    UuidID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ThreadID:
+      name: id
+      in: path
+      required: true
+      description: A conversation id, or a room code for a room's chat.
+      schema: { type: string }
+    QuestionID:
+      name: qid
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    UserID:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RoomCode:
+      name: code
+      in: path
+      required: true
+      description: The six-character room code.
+      schema: { type: string, example: 7KQ4M2 }
+
   responses:
-    Error:
-      description: Something the caller has to change
+    Session:
+      description: A token and the account it belongs to.
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema:
+            type: object
+            properties:
+              data: { $ref: "#/components/schemas/Session" }
+    Room:
+      description: The room and its lobby.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: "#/components/schemas/Room" }
+    DuelState:
+      description: Whether this player is searching, and the game once they are paired.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: "#/components/schemas/DuelState" }
+    BadRequest:
+      description: The request could not be read.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Unauthorized:
+      description: No token, or one that is over.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: Signed in, but not allowed to do this.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    NotFound:
+      description: No such thing, or not yours to see.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Conflict:
+      description: The rule of the screen refuses it; the code says which.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Invalid:
+      description: One or more fields are wrong; `fields` names them.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Failure:
+      description: |
+        The call was refused. `error.code` says which rule or which mistake —
+        `unauthorized`, `forbidden`, `not_found`, a conflict code, or the field
+        errors of an invalid body.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Unavailable:
+      description: The server cannot serve the request right now.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
   schemas:
-    Error:
+    Lang:
+      type: string
+      enum: [ar, en, fr]
+
+    OkEnvelope:
+      type: object
+      properties:
+        data: { type: object }
+
+    ErrorEnvelope:
       type: object
       required: [error]
       properties:
-        error: { type: string }
-    TaxonomyRef:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: A stable machine-readable code.
+              examples: [not_found, unauthorized, no_questions, last_domain, challenge_closed]
+            message: { type: string }
+            fields:
+              type: object
+              additionalProperties: { type: string }
+
+    Paged:
       type: object
-      required: [slug, name, icon]
       properties:
+        page:
+          type: object
+          properties:
+            page: { type: integer }
+            per_page: { type: integer }
+            total: { type: integer }
+
+    Config:
+      type: object
+      properties:
+        languages:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { $ref: "#/components/schemas/Lang" }
+              name: { type: string }
+              dir: { type: string, enum: [ltr, rtl] }
+        default_language: { $ref: "#/components/schemas/Lang" }
+        quick_game_length: { type: integer }
+        min_set_questions: { type: integer }
+        question_counts:
+          type: array
+          items: { type: integer }
+        timer_seconds:
+          type: array
+          items: { type: integer }
+        max_room_players: { type: integer }
+        max_device_players: { type: integer }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [guest, member] }
+        role: { type: string, enum: [player, translator, moderator, support, admin] }
+        display_name: { type: string }
+        username: { type: [string, "null"] }
+        lang: { $ref: "#/components/schemas/Lang" }
+        level: { type: integer }
+        xp: { type: integer }
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: When a guest session ends; null for a member.
+
+    Session:
+      type: object
+      properties:
+        token: { type: string }
+        expires_at: { type: string, format: date-time }
+        user: { $ref: "#/components/schemas/User" }
+
+    Settings:
+      type: object
+      properties:
+        theme: { type: string, enum: [light, dark, system] }
+        daily_goal: { type: integer, minimum: 1, maximum: 20 }
+        reminder_time: { type: [string, "null"], example: "20:00" }
+        islamic_only:
+          type: boolean
+          description: When on, general domains are hidden everywhere for this player.
+        notify: { type: object, additionalProperties: { type: boolean } }
+        privacy: { type: object, additionalProperties: true }
+
+    Domain:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
         slug: { type: string }
-        name: { type: string, description: Resolved for the asked locale, falling back to Arabic }
+        name: { type: string }
+        description: { type: string }
+        family: { type: string, enum: [islamic, general] }
         icon: { type: string }
-    Question:
+        color: { type: string }
+        motif: { type: string }
+        is_featured: { type: boolean }
+        is_new: { type: boolean }
+        is_mine: { type: boolean }
+        category_count: { type: integer }
+        question_count: { type: integer }
+
+    Category:
       type: object
-      required: [id, category, domain, difficulty, points, prompt, choices, correct_index, explanation, locale]
       properties:
-        id:            { type: integer }
-        category:      { $ref: "#/components/schemas/TaxonomyRef" }
-        domain:        { $ref: "#/components/schemas/TaxonomyRef" }
-        difficulty:    { type: integer, minimum: 1, maximum: 3 }
-        points:        { type: integer }
-        prompt:        { type: string }
-        choices:       { type: array, items: { type: string } }
+        id: { type: integer, format: int64 }
+        domain_id: { type: integer, format: int64 }
+        slug: { type: string }
+        name: { type: string }
+        icon: { type: string }
+        color: { type: string }
+        question_count: { type: integer }
+
+    CategoryDetail:
+      allOf:
+        - $ref: "#/components/schemas/Category"
+        - type: object
+          properties:
+            domain:
+              type: object
+              properties:
+                id: { type: integer, format: int64 }
+                slug: { type: string }
+                name: { type: string }
+                family: { type: string, enum: [islamic, general] }
+                is_mine: { type: boolean }
+
+    PlayQuestion:
+      type: object
+      description: A question as it is played. The correct answer never travels with it.
+      properties:
+        position: { type: integer }
+        id: { type: integer, format: int64 }
+        body: { type: string }
+        answers:
+          type: array
+          items: { type: string }
+          minItems: 4
+          maxItems: 4
+        domain_id: { type: integer, format: int64 }
+        domain_name: { type: string }
+        domain_color: { type: string }
+        category_id: { type: integer, format: int64 }
+        category_name: { type: string }
+        difficulty: { type: integer, minimum: 1, maximum: 3 }
+        points: { type: integer }
+        in_language:
+          type: boolean
+          description: False when the player is reading a translation fallback.
+
+    DailyQuestion:
+      allOf:
+        - $ref: "#/components/schemas/PlayQuestion"
+        - type: object
+          properties:
+            answered: { type: boolean }
+            day: { type: string, format: date }
+
+    GameStart:
+      type: object
+      properties:
+        domain_id: { type: integer, format: int64 }
+        category_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        all_mine: { type: boolean, description: Draw from every domain the player follows. }
+        node_id:
+          type: integer
+          format: int64
+          description: >-
+            A node of the universal hierarchy to play from, at any depth. Takes the
+            place of domain_id and category_ids when given.
+        node_scope:
+          type: string
+          enum: [direct, subtree, both]
+          default: both
+          description: >-
+            How much of the branch counts — the content on the node itself, everything
+            below it, or the whole branch. Anything else is read as `both`.
+        kind: { type: string, enum: [quick, custom, mix, no_timer] }
+        difficulty: { type: integer, minimum: 0, maximum: 3 }
+        question_count: { type: integer, enum: [5, 10, 15, 20] }
+        seconds_per_question: { type: integer, enum: [10, 20, 30] }
+
+    Game:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        mode: { type: string, enum: [solo, live, duel, challenge, device] }
+        status: { type: string, enum: [lobby, playing, finished, abandoned] }
+        question_count: { type: integer }
+        seconds_per_question: { type: integer }
+        position: { type: integer }
+        score: { type: integer }
+        correct: { type: integer }
+        fifty_used: { type: boolean }
+        skip_used: { type: boolean }
+        done: { type: boolean }
+        question: { $ref: "#/components/schemas/PlayQuestion" }
+
+    AnswerResult:
+      type: object
+      properties:
+        correct: { type: boolean }
+        timed_out: { type: boolean }
+        points: { type: integer }
+        correct_index: { type: integer }
+        explanation: { type: string }
+        source: { type: string }
+        score: { type: integer }
+        last: { type: boolean }
+
+    Results:
+      type: object
+      properties:
+        score: { type: integer }
+        correct: { type: integer }
+        total: { type: integer }
+        xp: { type: integer }
+        accuracy: { type: integer }
+        average_ms: { type: integer }
+        by_domain:
+          type: array
+          items:
+            type: object
+            properties:
+              domain_id: { type: integer, format: int64 }
+              name: { type: string }
+              color: { type: string }
+              correct: { type: integer }
+              total: { type: integer }
+        review:
+          type: array
+          items:
+            type: object
+            properties:
+              position: { type: integer }
+              question_id: { type: integer, format: int64 }
+              body: { type: string }
+              answers:
+                type: array
+                items: { type: string }
+              chosen: { type: [integer, "null"] }
+              correct_index: { type: integer }
+              correct: { type: boolean }
+              explanation: { type: string }
+              time_ms: { type: integer }
+
+    HistoryRow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        mode: { type: string }
+        score: { type: integer }
+        correct: { type: integer }
+        total: { type: integer }
+        domain_name: { type: string }
+        domain_color: { type: string }
+        finished_at: { type: string, format: date-time }
+
+    RoomCreate:
+      type: object
+      properties:
+        domain_id: { type: integer, format: int64 }
+        category_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        node_id:
+          type: integer
+          format: int64
+          description: A node of the universal hierarchy to draw the round from.
+        node_scope:
+          type: string
+          enum: [direct, subtree, both]
+          default: both
+          description: How much of the branch the round draws from.
+        difficulty: { type: integer }
+        question_count: { type: integer, enum: [5, 10, 15, 20] }
+        seconds: { type: integer, enum: [10, 20, 30] }
+        max_players: { type: integer, minimum: 2, maximum: 12 }
+        chat_enabled: { type: boolean, default: true }
+        mode: { type: string, enum: [ffa, teams] }
+
+    Room:
+      type: object
+      properties:
+        code: { type: string }
+        status: { type: string, enum: [open, playing, closed] }
+        host_id: { type: string, format: uuid }
+        is_host: { type: boolean }
+        max_players: { type: integer }
+        chat_enabled: { type: boolean }
+        is_guest_room: { type: boolean }
+        settings:
+          type: object
+          properties:
+            domain_id: { type: integer, format: int64 }
+            category_ids:
+              type: array
+              items: { type: integer, format: int64 }
+            difficulty: { type: integer }
+            question_count: { type: integer }
+            seconds: { type: integer }
+            mode: { type: string, enum: [ffa, teams] }
+            allow_guests: { type: boolean }
+        players:
+          type: array
+          items:
+            type: object
+            properties:
+              user_id: { type: string, format: uuid }
+              name: { type: string }
+              level: { type: integer }
+              is_host: { type: boolean }
+              is_ready: { type: boolean }
+              is_guest: { type: boolean }
+              is_me: { type: boolean }
+        ready_count: { type: integer }
+        player_count: { type: integer }
+        teams:
+          type: array
+          description: Two sides of user ids, when the room plays in teams.
+          items:
+            type: array
+            items: { type: string, format: uuid }
+        game_id: { type: string, format: uuid }
+
+    OpenRoom:
+      type: object
+      properties:
+        code: { type: string }
+        host_id: { type: string, format: uuid }
+        host: { type: string }
+        players: { type: integer }
+        max_players: { type: integer }
+        teams: { type: boolean }
+        domain_id: { type: integer, format: int64 }
+
+    RoomLine:
+      type: object
+      properties:
+        author: { type: string }
+        body: { type: string }
+        kind: { type: string }
+        system: { type: boolean }
+        file_name: { type: string }
+        file_size: { type: integer }
+        file_url: { type: string }
+        duration: { type: integer }
+        at: { type: string, format: date-time }
+
+    Standing:
+      type: object
+      properties:
+        rank: { type: integer }
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        score: { type: integer }
+        correct: { type: integer }
+        answered: { type: integer }
+        done: { type: boolean }
+        is_me: { type: boolean }
+        is_guest: { type: boolean }
+        team: { type: integer, description: "0 or 1 in a team room, -1 otherwise." }
+        streak: { type: integer }
+        xp: { type: integer }
+        avg_ms: { type: integer }
+        best_ms: { type: integer }
+        answered_this: { type: boolean }
+        correct_this: { type: boolean }
+        gain: { type: integer }
+
+    Podium:
+      type: object
+      properties:
+        code: { type: string }
+        game_id: { type: string, format: uuid }
+        questions: { type: integer }
+        teams: { type: boolean }
+        team_totals:
+          type: array
+          items: { type: integer }
+        winner: { type: integer }
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/Standing" }
+
+    DuelState:
+      type: object
+      properties:
+        searching: { type: boolean }
+        game_id: { type: [string, "null"], format: uuid }
+        rating: { type: integer }
+        wins: { type: integer }
+        losses: { type: integer }
+        questions: { type: integer }
+        seconds: { type: integer }
+
+    Opponent:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        level: { type: integer }
+        score: { type: integer }
+        done: { type: boolean }
+        answered: { type: boolean }
+        rating: { type: integer }
+        wins: { type: integer }
+        losses: { type: integer }
+        results:
+          type: array
+          items: { type: boolean }
+
+    Duel:
+      type: object
+      properties:
+        game_id: { type: string, format: uuid }
+        me:
+          type: object
+          properties:
+            rating: { type: integer }
+            wins: { type: integer }
+            losses: { type: integer }
+        opponent: { $ref: "#/components/schemas/Opponent" }
+        head_to_head:
+          type: object
+          properties:
+            wins: { type: integer }
+            losses: { type: integer }
+            draws: { type: integer }
+
+    DuelRating:
+      type: object
+      properties:
+        domain_id: { type: integer, format: int64 }
+        domain_slug: { type: string }
+        domain_name: { type: string }
+        color: { type: string }
+        icon: { type: string }
+        rating: { type: integer }
+        wins: { type: integer }
+        losses: { type: integer }
+        draws: { type: integer }
+
+    ChallengeCreate:
+      type: object
+      properties:
+        friend_ids:
+          type: array
+          items: { type: string, format: uuid }
+        locals:
+          type: array
+          description: Names sharing one phone (pass-the-device).
+          items: { type: string }
+        source: { type: string, enum: [bank, set, written], default: bank }
+        set_id: { type: string, format: uuid }
+        domain_id: { type: integer, format: int64 }
+        category_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        difficulty: { type: integer }
+        question_count: { type: integer, enum: [5, 10, 15] }
+        seconds: { type: integer, enum: [10, 20, 30] }
+        message: { type: string, maxLength: 140 }
+        days: { type: integer, enum: [1, 3, 7], description: "0 = no deadline." }
+
+    ChallengePlayer:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        level: { type: integer }
+        is_me: { type: boolean }
+        status: { type: string, enum: [pending, playing, played, declined, removed] }
+        score:
+          type: [integer, "null"]
+          description: Null while the challenge is open and the line is not the viewer's.
+        rank: { type: integer }
+        result: { type: string, enum: ["", won, lost, draw] }
+
+    Challenge:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        creator: { type: string }
+        creator_id: { type: string, format: uuid }
+        mine: { type: boolean }
+        status: { type: string, enum: [open, closed, cancelled] }
+        my_status: { type: string }
+        my_result: { type: string }
+        questions: { type: integer }
+        difficulty: { type: integer }
+        message: { type: string }
+        category: { type: string }
+        icon: { type: string }
+        color: { type: string }
+        deadline_at: { type: [string, "null"], format: date-time }
+        played: { type: integer }
+        total: { type: integer }
+        closed: { type: boolean }
+        players:
+          type: array
+          items: { $ref: "#/components/schemas/ChallengePlayer" }
+
+    ChallengeDetail:
+      allOf:
+        - $ref: "#/components/schemas/Challenge"
+        - type: object
+          properties:
+            is_host: { type: boolean }
+            playing: { type: integer }
+            not_started: { type: integer }
+            can_close: { type: boolean }
+            blocker: { type: string }
+            will_remove:
+              type: array
+              items: { type: string }
+            my_rank: { type: integer }
+            won: { type: boolean }
+            tied: { type: boolean }
+            me:
+              type: object
+              description: The viewer's own line — the one score they may see early.
+              properties:
+                status: { type: string }
+                score: { type: [integer, "null"] }
+                rank: { type: integer }
+                result: { type: string }
+            removed:
+              type: array
+              items: { $ref: "#/components/schemas/ChallengePlayer" }
+            ranked:
+              type: array
+              items: { $ref: "#/components/schemas/ChallengePlayer" }
+            winner: { $ref: "#/components/schemas/ChallengePlayer" }
+
+    DevicePlayer:
+      type: object
+      properties:
+        player_id: { type: string, format: uuid }
+        name: { type: string }
+        score: { type: integer }
+        correct: { type: integer }
+        team: { type: integer }
+        answered: { type: boolean }
+        right: { type: boolean }
+        gain: { type: integer }
+        time_ms: { type: integer }
+        now: { type: boolean, description: Whose turn it is. }
+        choice: { type: [integer, "null"] }
+
+    DeviceState:
+      type: object
+      properties:
+        game_id: { type: string, format: uuid }
+        position: { type: integer }
+        questions: { type: integer }
+        revealed: { type: boolean, description: True once everyone has answered this question. }
+        done: { type: boolean }
+        fastest: { type: string }
+        teams: { type: boolean }
+        totals:
+          type: array
+          items: { type: integer }
+        gains:
+          type: array
+          items: { type: integer }
+        turn:
+          type: [object, "null"]
+          properties:
+            player_id: { type: string, format: uuid }
+            name: { type: string }
+        players:
+          type: array
+          items: { $ref: "#/components/schemas/DevicePlayer" }
+
+    Person:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        username: { type: string }
+        level: { type: integer }
+        online: { type: boolean }
+        guest: { type: boolean }
+        note: { type: string }
+
+    Friend:
+      allOf:
+        - $ref: "#/components/schemas/Person"
+        - type: object
+          properties:
+            doing:
+              type: string
+              description: What they are doing right now, if anything.
+            since: { type: string, format: date-time }
+
+    FriendRequest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        username: { type: string }
+        level: { type: integer }
+        at: { type: string, format: date-time }
+
+    PublicProfile:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        username: { type: string }
+        level: { type: integer }
+        xp: { type: integer }
+        joined: { type: string, format: date-time }
+        games: { type: integer }
+        accuracy: { type: integer }
+        is_friend: { type: boolean }
+        domains:
+          type: array
+          items: { $ref: "#/components/schemas/Domain" }
+
+    ConversationRow:
+      type: object
+      properties:
+        id: { type: string }
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        preview: { type: string }
+        at: { type: [string, "null"], format: date-time }
+        unread: { type: integer }
+        online: { type: boolean }
+        pinned: { type: boolean }
+        muted: { type: boolean }
+        guest: { type: boolean }
+        group: { type: boolean }
+        room: { type: boolean }
+        system: { type: boolean }
+        members: { type: integer }
+        room_code: { type: string }
+
+    GroupMembers:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        i_am_owner: { type: boolean }
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              user_id: { type: string, format: uuid }
+              name: { type: string }
+              online: { type: boolean }
+              guest: { type: boolean }
+              owner: { type: boolean }
+              is_me: { type: boolean }
+        can_add:
+          type: array
+          description: Friends who are not in the group yet.
+          items: { $ref: "#/components/schemas/Person" }
+
+    ConversationHead:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        user_id: { type: string, format: uuid }
+        presence: { type: string }
+        online: { type: boolean }
+        group: { type: boolean }
+        room: { type: boolean }
+        system: { type: boolean }
+        guest: { type: boolean }
+        people: { type: string }
+        room_code: { type: string }
+        can_reply: { type: boolean }
+
+    Message:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [text, file, image, voice, challenge, system] }
+        body: { type: string }
+        at: { type: [string, "null"], format: date-time }
+        mine: { type: boolean }
+        from: { type: string }
+        deleted: { type: boolean }
+        read: { type: boolean }
+        system: { type: boolean }
+        quote: { type: string }
+        quote_who: { type: string }
+        file_name: { type: string }
+        file_size: { type: integer }
+        file_url: { type: string }
+        duration: { type: integer }
+        title: { type: string }
+        line: { type: string }
+        challenge_id: { type: string }
+
+    Notification:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        kind:
+          type: string
+          enum:
+            [friend_request, friend_accepted, challenge_received,
+             challenge_participant_finished, challenge_results_ready, challenge_removed,
+             message, room_invite, duel_result, question_approved, question_rejected,
+             question_sent_back, support_reply, achievement, streak_reminder, system]
+        title: { type: string }
+        body: { type: string }
+        link: { type: string }
+        read: { type: boolean }
+        at: { type: string, format: date-time }
+
+    Progress:
+      type: object
+      properties:
+        xp: { type: integer }
+        level: { type: integer }
+        level_floor: { type: integer }
+        level_ceiling: { type: integer }
+        daily_goal: { type: integer }
+        games_today: { type: integer }
+        points_today: { type: integer }
+        games_total: { type: integer }
+        points_total: { type: integer }
+        streak: { type: integer }
+        best_streak: { type: integer }
+        duels_won: { type: integer }
+
+    Mastery:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        slug: { type: string }
+        icon: { type: string }
+        color: { type: string }
+        mastery: { type: integer, minimum: 0, maximum: 100 }
+        answered: { type: integer }
+        correct: { type: integer }
+
+    Achievement:
+      type: object
+      properties:
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        icon: { type: string }
+        color: { type: string }
+        target: { type: integer }
+        progress: { type: integer }
+        unlocked: { type: boolean }
+        unlocked_at: { type: [string, "null"], format: date-time }
+
+    LeaderboardRow:
+      type: object
+      properties:
+        rank: { type: integer }
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        username: { type: string }
+        level: { type: integer }
+        points: { type: integer }
+        games: { type: integer }
+        is_me: { type: boolean }
+
+    Set:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        main_lang: { $ref: "#/components/schemas/Lang" }
+        question_count: { type: integer }
+        plays: { type: integer }
+        ready: { type: boolean, description: True at five questions or more. }
+        complete: { type: boolean }
+        missing: { type: integer }
+        updated_at: { type: string }
+
+    SetQuestionText:
+      type: object
+      properties:
+        body: { type: string }
+        answers:
+          type: array
+          items: { type: string }
+          minItems: 4
+          maxItems: 4
+        explanation: { type: string }
+
+    SetQuestion:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        category_id: { type: integer, format: int64 }
+        difficulty: { type: integer }
+        points: { type: integer }
+        correct_index: { type: integer }
+        main_lang: { $ref: "#/components/schemas/Lang" }
+        text:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/SetQuestionText" }
+
+    SetQuestionInput:
+      type: object
+      required: [category_id, correct_index, main_lang, text]
+      properties:
+        category_id: { type: integer, format: int64 }
+        difficulty: { type: integer, minimum: 1, maximum: 3 }
+        points: { type: integer }
         correct_index: { type: integer, minimum: 0, maximum: 3 }
-        explanation:   { type: string }
-        locale:        { type: string }
-    QuestionPage:
+        main_lang: { $ref: "#/components/schemas/Lang" }
+        text:
+          type: object
+          description: One entry per language written, keyed by `ar`, `en` or `fr`.
+          additionalProperties: { $ref: "#/components/schemas/SetQuestionText" }
+
+    Comment:
       type: object
-      required: [data, total]
       properties:
-        data:        { type: array, items: { $ref: "#/components/schemas/Question" } }
-        next_cursor: { type: string, description: Present only when a full page came back }
-        total:       { type: integer }
+        id: { type: string, format: uuid }
+        body: { type: string }
+        author: { type: string }
+        author_id: { type: string, format: uuid }
+        mine: { type: boolean }
+        at: { type: string, format: date-time }
+
+    Ticket:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string }
+        topic: { type: string }
+        subject: { type: string }
+        status: { type: string, enum: [open, waiting, resolved, closed] }
+        created_at: { type: string }
+
+    TicketMessage:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        body: { type: string }
+        from_staff: { type: boolean }
+        author: { type: string }
+        at: { type: string, format: date-time }

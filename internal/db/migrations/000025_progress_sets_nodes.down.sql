@@ -1,0 +1,10 @@
+DROP TRIGGER IF EXISTS set_questions_node ON set_questions;
+DROP TRIGGER IF EXISTS user_category_stats_node ON user_category_stats;
+DROP FUNCTION IF EXISTS set_questions_follow_category;
+DROP FUNCTION IF EXISTS stats_follow_category;
+DROP INDEX IF EXISTS set_questions_node;
+DROP INDEX IF EXISTS question_sets_node;
+DROP INDEX IF EXISTS user_category_stats_node;
+ALTER TABLE set_questions   DROP COLUMN IF EXISTS node_id;
+ALTER TABLE question_sets   DROP COLUMN IF EXISTS node_id;
+ALTER TABLE user_category_stats DROP COLUMN IF EXISTS node_id;

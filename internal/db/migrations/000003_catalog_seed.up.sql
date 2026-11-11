@@ -1,0 +1,7 @@
+-- No seed content. The catalog (domains and categories) is real content: staff create
+-- it in the admin console (A04, A05), in the three languages.
+--
+-- This file used to insert the six sample domains and the twenty-three categories of
+-- the v2 prototype. They were removed so that no database — development, staging or
+-- production — ever carries invented content. It stays in place, empty, because the
+-- migration version was already applied on existing databases.

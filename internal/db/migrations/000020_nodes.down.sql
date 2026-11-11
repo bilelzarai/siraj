@@ -1,0 +1,13 @@
+DROP INDEX IF EXISTS questions_node;
+ALTER TABLE questions  DROP COLUMN IF EXISTS node_id;
+ALTER TABLE categories DROP COLUMN IF EXISTS node_id;
+ALTER TABLE domains    DROP COLUMN IF EXISTS node_id;
+DROP TRIGGER IF EXISTS nodes_updated_at ON nodes;
+DROP TRIGGER IF EXISTS nodes_subtree ON nodes;
+DROP TRIGGER IF EXISTS nodes_place_before ON nodes;
+DROP FUNCTION IF EXISTS nodes_move_subtree;
+DROP FUNCTION IF EXISTS nodes_place;
+DROP TABLE IF EXISTS node_translations;
+DROP TABLE IF EXISTS nodes;
+DROP TYPE IF EXISTS node_status;
+DROP TYPE IF EXISTS node_visibility;

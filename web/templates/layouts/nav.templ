@@ -1,0 +1,301 @@
+package layouts
+
+import (
+	"fmt"
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+)
+
+// TopNav is the neutral shell's top bar: logo, sections, language, theme, account (BR-01).
+templ TopNav(v *view.Ctx) {
+	<header class="topnav">
+		<div class="topnav-in">
+			<a class="brand" href="/" aria-label={ v.Tr("app.name") }>
+				<span class="brand-mark">
+					@components.Lamp()
+				</span>
+				<span class="brand-name">{ v.Tr("app.name") }</span>
+			</a>
+			<nav class="navlinks" aria-label={ v.Tr("nav.main") }>
+				for _, item := range view.Nav() {
+					// The label is hidden on a narrow window, so the link says what it
+					// is in its tooltip and to a screen reader either way.
+					<a
+						class="navlink"
+						href={ templ.URL("/" + item.Section) }
+						title={ v.Tr(item.Label) }
+						if v.ActiveNav() == item.Section {
+							aria-current="page"
+						}
+					>
+						if item.Section == "messages" {
+							@components.IconClass(item.Icon, "flip")
+						} else {
+							@components.Icon(item.Icon)
+						}
+						<span>{ v.Tr(item.Label) }</span>
+						if v.Locked(item.Section) {
+							@components.IconClass("lock", "i-sm lock")
+						} else {
+							<span class="nav-count" id={ "nav-count-" + item.Section }>
+								@components.Count(v.Count(item.Section), "gold")
+							</span>
+						}
+					</a>
+				}
+			</nav>
+			<div class="nav-tools">
+				if v.IsGuest() {
+					<div class="signin-cta hide-sm">
+						<a class="btn btn-sm btn-ghost" href="/signin">{ v.Tr("action.signin") }</a>
+						<a class="btn btn-sm btn-primary" href="/signup">{ v.Tr("action.signup") }</a>
+					</div>
+				}
+				if !v.SignedIn() {
+					<div class="signin-cta hide-sm">
+						<a class="btn btn-sm btn-ghost" href="/signin">{ v.Tr("action.signin") }</a>
+						<a class="btn btn-sm btn-primary" href="/signup">{ v.Tr("action.signup") }</a>
+					</div>
+				}
+				@LangMenu(v)
+				@ThemeMenu(v)
+				if v.SignedIn() {
+					@AccountMenu(v)
+				}
+			</div>
+		</div>
+	</header>
+}
+
+// LangMenu switches the interface and the questions at once (LG-01, LG-03).
+templ LangMenu(v *view.Ctx) {
+	<div class="menu-wrap" x-data="sjOverlay">
+		<button type="button" class="tool" x-on:click="toggle()" x-bind:aria-expanded="open" aria-label={ v.Tr("lang.label") }>
+			@components.Icon("globe")
+			<span>{ i18n.Short[v.Lang] }</span>
+		</button>
+		<div class="menu" role="menu" x-show="open" x-on:click.outside="hide()" x-cloak>
+			for _, code := range i18n.Langs {
+				<form method="post" action="/settings/language" class="contents">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<input type="hidden" name="lang" value={ code }/>
+					<input type="hidden" name="back" value={ v.BackTo() }/>
+					<button
+						type="submit"
+						class={ "mi", templ.KV("on", v.Lang == code) }
+						role="menuitemradio"
+						aria-checked={ fmt.Sprint(v.Lang == code) }
+						lang={ code }
+					>
+						<span class="mi-label">{ i18n.Native[code] }</span>
+						if v.Lang == code {
+							@components.IconClass("check", "i-sm")
+						} else {
+							<span class="muted mi-code">{ i18n.Short[code] }</span>
+						}
+					</button>
+				</form>
+			}
+		</div>
+	</div>
+}
+
+// ThemeMenu is light / dark / match my device (BR-04). Alpine paints the page at once,
+// the form stores the choice (user_settings.theme for members, a cookie otherwise).
+templ ThemeMenu(v *view.Ctx) {
+	<div class="menu-wrap" x-data="sjOverlay">
+		<button type="button" class="tool theme-tool" x-on:click="toggle()" x-bind:aria-expanded="open" aria-label={ v.Tr("theme.label") }>
+			if v.Theme == "light" {
+				@components.Icon("sun")
+			} else if v.Theme == "dark" {
+				@components.Icon("moon")
+			} else {
+				@components.Icon("monitor")
+			}
+		</button>
+		<div class="menu" role="menu" x-show="open" x-on:click.outside="hide()" x-cloak>
+			for _, t := range []struct {
+				Key  string
+				Icon string
+			}{{"light", "sun"}, {"dark", "moon"}, {"system", "monitor"}} {
+				<button
+					type="button"
+					class={ "mi", templ.KV("on", v.Theme == t.Key) }
+					role="menuitemradio"
+					aria-checked={ fmt.Sprint(v.Theme == t.Key) }
+					hx-post="/settings/theme"
+					hx-vals={ fmt.Sprintf(`{"theme":"%s"}`, t.Key) }
+					hx-swap="none"
+					x-on:click={ fmt.Sprintf(`document.documentElement.%s; hide()`, themeScript(t.Key)) }
+				>
+					@components.Icon(t.Icon)
+					{ v.Tr("theme." + t.Key) }
+				</button>
+			}
+		</div>
+	</div>
+}
+
+// themeScript paints the choice before the request comes back.
+func themeScript(theme string) string {
+	if theme == "system" {
+		return `removeAttribute("data-theme")`
+	}
+	return `setAttribute("data-theme","` + theme + `")`
+}
+
+// AccountMenu holds the screens that are not in the main navigation (RL-03 locks guests out).
+templ AccountMenu(v *view.Ctx) {
+	<div class="menu-wrap" x-data="sjOverlay">
+		<button
+			type="button"
+			class="avatar-btn"
+			style={ fmt.Sprintf("--p:%d", v.XPPercent()) }
+			x-on:click="toggle()"
+			x-bind:aria-expanded="open"
+			aria-label={ v.Tr("nav.account") }
+		>
+			@components.Avatar(v, "")
+			if !v.IsGuest() {
+				<span class="lvl-badge num">{ fmt.Sprint(v.Level) }</span>
+			}
+		</button>
+		<div class="menu wide" role="menu" x-show="open" x-on:click.outside="hide()" x-cloak>
+			<div class="mh">
+				<b>{ v.Name() }</b>
+				<div class="muted mh-sub">
+					if v.IsGuest() {
+						{ v.Tr("guest.progress_note") }
+					} else {
+						{ "@" + v.Username } · { v.Tr("nav.level") } { fmt.Sprint(v.Level) }
+					}
+				</div>
+			</div>
+			if v.IsGuest() {
+				<a class="mi" href="/signup">
+					@components.Icon("star")
+					{ v.Tr("action.signup") }
+				</a>
+				<a class="mi" href="/signin">
+					@components.Icon("user")
+					{ v.Tr("action.signin") }
+				</a>
+			} else {
+				<a class="mi" href="/profile">
+					@components.Icon("user")
+					{ v.Tr("nav.profile") }
+				</a>
+				<a class="mi" href="/notifications">
+					@components.Icon("bell")
+					<span class="mi-label">{ v.Tr("nav.notifications") }</span>
+					<span class="nav-count" id="nav-count-notifs">
+						@components.Count(v.Counts.Notifs, "gold")
+					</span>
+				</a>
+				<a class="mi" href="/history">
+					@components.Icon("history")
+					{ v.Tr("nav.history") }
+				</a>
+				<a class="mi" href="/friends">
+					@components.Icon("users")
+					{ v.Tr("nav.friends") }
+				</a>
+				<a class="mi" href="/my-questions">
+					@components.Icon("pen")
+					{ v.Tr("nav.my_questions") }
+				</a>
+			}
+			<a class="mi" href="/support">
+				@components.Icon("mail")
+				{ v.Tr("nav.support") }
+			</a>
+			<a class="mi" href="/settings">
+				@components.Icon("sliders")
+				{ v.Tr("nav.settings") }
+			</a>
+			if v.IsStaff() {
+				<div class="divider"></div>
+				<a class="mi" href="/admin">
+					@components.Icon("shield")
+					{ v.Tr("nav.admin") }
+				</a>
+			}
+			<div class="divider"></div>
+			<form method="post" action="/signout">
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button type="submit" class="mi danger">
+					@components.IconClass("logout", "flip")
+					if v.IsGuest() {
+						{ v.Tr("guest.leave") }
+					} else {
+						{ v.Tr("action.signout") }
+					}
+				</button>
+			</form>
+		</div>
+	</div>
+}
+
+// TabBar is the phone navigation: Home, Play, Challenges, Messages, Ranks (NF-01).
+templ TabBar(v *view.Ctx) {
+	<nav class="tabbar" aria-label={ v.Tr("nav.main") }>
+		for _, item := range view.Nav() {
+			if item.Tab {
+				<a
+					class="tab"
+					href={ templ.URL("/" + item.Section) }
+					if v.ActiveNav() == item.Section {
+						aria-current="page"
+					}
+				>
+					<span class="pill">
+						if v.Locked(item.Section) {
+							@components.Icon("lock")
+						} else if item.Section == "messages" {
+							@components.IconClass(item.Icon, "flip")
+						} else {
+							@components.Icon(item.Icon)
+						}
+						<span class="nav-count" id={ "pill-count-" + item.Section }>
+							@components.Count(v.Count(item.Section), "gold")
+						</span>
+					</span>
+					if item.Section == "leaderboard" {
+						{ v.Tr("nav.ranks") }
+					} else {
+						{ v.Tr(item.Label) }
+					}
+				</a>
+			}
+		}
+	</nav>
+}
+
+// NavBadges is every count on the navigation at once, as out-of-band swaps. The event
+// stream says what changed; this repaints the numbers wherever they are shown, and
+// nothing else on the screen moves (MS-01, CH-11).
+templ NavBadges(v *view.Ctx) {
+	for _, item := range view.Nav() {
+		if !v.Locked(item.Section) {
+			<span class="nav-count" id={ "nav-count-" + item.Section } hx-swap-oob="true">
+				@components.Count(v.Count(item.Section), "gold")
+			</span>
+			<span class="nav-count" id={ "pill-count-" + item.Section } hx-swap-oob="true">
+				@components.Count(v.Count(item.Section), "gold")
+			</span>
+		}
+	}
+	<span class="nav-count" id="nav-count-notifs" hx-swap-oob="true">
+		@components.Count(v.Counts.Notifs, "gold")
+	</span>
+}
+
+// Live is the one connection the shell keeps open, and the one element that reacts to
+// it: every signal re-asks for the navigation counts. Screens that show more than a
+// number listen for their own topic (see web/assets/js/live.ts).
+templ Live(v *view.Ctx) {
+	if v.SignedIn() {
+		<div id="live" hx-get="/nav/badges" hx-trigger="sj:live from:body" hx-swap="none" aria-hidden="true"></div>
+	}
+}

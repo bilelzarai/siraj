@@ -1,0 +1,15 @@
+DROP TRIGGER IF EXISTS questions_count_after ON questions;
+DROP FUNCTION IF EXISTS refresh_category_question_count();
+DROP TABLE IF EXISTS daily_answers;
+DROP TABLE IF EXISTS daily_questions;
+DROP TABLE IF EXISTS question_duplicates;
+DROP TABLE IF EXISTS question_reports;
+DROP TABLE IF EXISTS comment_reports;
+DROP TABLE IF EXISTS question_comments;
+DROP TABLE IF EXISTS question_ratings;
+DROP TABLE IF EXISTS question_reviews;
+DROP TABLE IF EXISTS question_revisions;
+DROP TABLE IF EXISTS question_translations;
+DROP TABLE IF EXISTS questions;
+DROP TYPE IF EXISTS review_decision;
+DROP TYPE IF EXISTS question_status;

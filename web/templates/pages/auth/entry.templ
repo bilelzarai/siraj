@@ -1,0 +1,1220 @@
+package auth
+
+import (
+	"fmt"
+	"strings"
+
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// The V5 entry flow: one screen, two panels. The dark half sells the app; the light
+// half is whichever step the player is on — sign in, create account, the six-digit
+// code, or naming a brand-new account.
+//
+// Everything is server-rendered and posts back into the same slot, so the flow works
+// with htmx and without it (NF-02). Alpine does only what a page cannot: formatting
+// a number as it is typed, moving between code boxes, and counting the resend down.
+
+// Country is one line of the picker.
+type Country struct {
+	Code   string
+	Name   string
+	Dial   string
+	Digits []int
+}
+
+// Entry is everything the panel needs, whichever step it shows.
+type Entry struct {
+	// Step is signin | create | code | newaccount | welcome.
+	Step string
+	// Channel is phone or email.
+	Channel string
+	Country string
+	Phone   string
+	Email   string
+	// Password mode on the email tab (AU-02: a code by default, a password for
+	// whoever prefers one).
+	UsePassword bool
+	Remember    bool
+	Countries   []Country
+
+	// The code step.
+	Destination string
+	Masked      string
+	ResendIn    int
+	CodeLength  int
+	ByCall      bool
+	// DevCode is shown only in development, where no gateway sends the message.
+	DevCode string
+
+	// Creating marks the whole "Create account" flow, code step included, so the
+	// steps bar and the way back know which of the two the player is in.
+	Creating    bool
+	AcceptTerms bool
+	// GuestName is what this browser is called now: the display name's placeholder.
+	GuestName string
+
+	// The returning player, and the new account.
+	Name        string
+	Level       int32
+	Streak      int
+	MovedPoints int
+
+	// GuestPoints is the chip at the top: what this browser has earned so far.
+	GuestPoints int
+	Google      bool
+	Apple       bool
+
+	Errors map[string]string
+	Error  string
+	// Toast is the line the screen announces after a step (sent, signed in…).
+	Toast string
+}
+
+func (e Entry) Err(name string) string { return e.Errors[name] }
+
+func (e Entry) creating() bool { return e.Step == "create" || e.Creating }
+
+// Entry is the page: the shell, both panels, and the step inside the right one.
+templ EntryPage(v *view.Ctx, d Entry) {
+	@layouts.Focus(v, v.Tr(titleKey(d))) {
+		<div class="entry">
+			@EntryCard(v, d)
+		</div>
+		// Where the guest welcome and the room code open (screens 19–23).
+		<div id="entry-overlay"></div>
+	}
+}
+
+func titleKey(d Entry) string {
+	switch d.Step {
+	case "create":
+		return "entry.create_title"
+	case "code":
+		return "entry.code_title"
+	case "newaccount":
+		return "entry.new_title"
+	case "welcome":
+		return "entry.welcome_title"
+	}
+	return "entry.signin_title"
+}
+
+// entryVisual is the dark half: the promise, the question of the day, the streak
+// card and a room that is waiting. At phone width it shrinks to a header.
+templ entryVisual(v *view.Ctx, d Entry) {
+	<aside class="entry-visual" aria-hidden="true">
+		<a class="brand" href="/">
+			<span class="brand-mark">
+				@components.Lamp()
+			</span>
+			<span class="brand-name">{ v.Tr("app.name") }</span>
+		</a>
+		<div class="entry-pitch">
+			<h2>
+				if d.Step == "code" {
+					{ v.Tr("entry.pitch_code") }
+				} else if d.Step == "newaccount" {
+					{ v.Tr("entry.pitch_almost") }
+				} else if d.creating() {
+					{ v.Tr("entry.pitch_create") }
+				} else {
+					{ v.Tr("entry.pitch") }
+				}
+			</h2>
+			<p>
+				if d.Step == "code" {
+					{ v.Tr("entry.pitch_code_sub") }
+				} else if d.Step == "newaccount" {
+					{ v.Tr("entry.pitch_almost_sub") }
+				} else if d.creating() {
+					{ v.Tr("entry.pitch_create_sub") }
+				} else {
+					{ v.Tr("entry.pitch_sub") }
+				}
+			</p>
+		</div>
+		if d.Step == "code" || d.Step == "newaccount" || d.Step == "welcome" {
+			@entryCodeArt(v, d)
+		} else if d.creating() {
+			@entryCreateArt(v, d)
+		} else {
+			@entryHomeArt(v, d)
+		}
+	</aside>
+}
+
+templ entryHomeArt(v *view.Ctx, d Entry) {
+	<div class="entry-art">
+		<div class="art-card art-qotd">
+			<span class="art-eyebrow">{ v.Tr("entry.art_eyebrow") }</span>
+			<p>{ v.Tr("entry.art_question") }</p>
+			<span class="art-answer">
+				{ v.Tr("entry.art_answer") }
+				<b>+120</b>
+			</span>
+		</div>
+		<div class="art-card art-streak">
+			<b>12</b>
+			<span>{ v.Tr("entry.art_streak", "n", 12) }</span>
+			<span class="art-dots" aria-hidden="true">
+				for i := 0; i < 7; i++ {
+					<i class={ templ.KV("on", i < 6) }></i>
+				}
+			</span>
+		</div>
+		<span class="art-room">
+			<i class="dot"></i>
+			{ v.Tr("entry.art_room", "name", "Youssef", "n", 4) }
+		</span>
+	</div>
+}
+
+// entryCreateArt is what the gold panel shows while an account is being made: what
+// a free account is for, and the two ways back into it.
+templ entryCreateArt(v *view.Ctx, d Entry) {
+	<div class="entry-art">
+		<div class="art-card art-free">
+			<span class="art-eyebrow">{ v.Tr("entry.free_account") }</span>
+			<ul>
+				for _, key := range []string{"entry.free_streak", "entry.free_challenge", "entry.free_climb"} {
+					<li>
+						<span class="tick" aria-hidden="true">
+							@components.IconClass("check", "i-sm")
+						</span>
+						{ v.Tr(key) }
+					</li>
+				}
+			</ul>
+		</div>
+		<span class="art-room art-ways">
+			@components.IconClass("lock", "i-sm")
+			{ v.Tr("entry.password_and_code") }
+		</span>
+	</div>
+}
+
+templ entryCodeArt(v *view.Ctx, d Entry) {
+	<div class="entry-art">
+		<div class="art-card art-sms">
+			<span class="art-eyebrow">{ v.Tr("app.name") } · SMS</span>
+			<p>
+				if d.DevCode != "" {
+					{ v.Tr("entry.art_sms", "code", d.DevCode) }
+				} else {
+					{ v.Tr("entry.art_sms_generic") }
+				}
+			</p>
+		</div>
+		if d.GuestPoints > 0 {
+			<div class="art-card art-points">
+				<span>{ v.Tr("entry.playing_as_guest") }</span>
+				<b>{ fmt.Sprintf("+%d", d.GuestPoints) }</b>
+			</div>
+		}
+	</div>
+}
+
+// EntryCard is both halves: a step swaps the whole card, because the panel on the
+// left belongs to the step as much as the form on the right does — it is dark while
+// a player signs in and gold while an account is being made.
+templ EntryCard(v *view.Ctx, d Entry) {
+	<div class="entry-card" id="entry-card" data-step={ d.Step } data-creating={ fmt.Sprintf("%t", d.creating()) }>
+		@entryVisual(v, d)
+		<div class="entry-form">
+			@EntryForm(v, d)
+		</div>
+	</div>
+}
+
+// EntryForm is the right half on its own, so a step can be swapped into the page.
+templ EntryForm(v *view.Ctx, d Entry) {
+	switch d.Step {
+		case "code":
+			@stepCode(v, d)
+		case "newaccount":
+			@stepNewAccount(v, d)
+		case "welcome":
+			@stepWelcome(v, d)
+		default:
+			@stepStart(v, d)
+	}
+	@entryFoot(v, d)
+}
+
+// stepStart is screens 01–07: sign in or create an account, by phone or by email.
+templ stepStart(v *view.Ctx, d Entry) {
+	<div class="entry-mode" role="tablist" aria-label={ v.Tr("entry.signin_title") }>
+		<a
+			href="/signin"
+			hx-get="/signin"
+			hx-target="#entry-card"
+			hx-swap="outerHTML"
+			hx-push-url="true"
+			class={ templ.KV("on", !d.creating()) }
+			aria-selected={ fmt.Sprintf("%t", !d.creating()) }
+		>{ v.Tr("entry.sign_in") }</a>
+		<a
+			href="/signup"
+			hx-get="/signup"
+			hx-target="#entry-card"
+			hx-swap="outerHTML"
+			hx-push-url="true"
+			class={ templ.KV("on", d.creating()) }
+			aria-selected={ fmt.Sprintf("%t", d.creating()) }
+		>{ v.Tr("entry.create_account") }</a>
+	</div>
+	if d.creating() {
+		@entrySteps(v, 1)
+	}
+	if d.GuestPoints > 0 {
+		<span class="points-chip">
+			<b>{ fmt.Sprint(d.GuestPoints) }</b>
+			{ v.Tr("entry.points_come_with_you") }
+		</span>
+	}
+	<h1>
+		if d.creating() {
+			{ v.Tr("entry.join_title") }
+		} else {
+			{ v.Tr("entry.welcome_title") }
+		}
+	</h1>
+	<p class="sub">
+		if d.creating() {
+			{ v.Tr("entry.create_sub") }
+		} else {
+			{ v.Tr("entry.signin_sub") }
+		}
+	</p>
+	if d.Error != "" {
+		<p class="form-error" role="alert">
+			@components.Icon("alert")
+			{ d.Error }
+		</p>
+	}
+	<form
+		class="entry-step"
+		method="post"
+		action={ templ.SafeURL(startAction(d)) }
+		hx-post={ startAction(d) }
+		hx-target="#entry-card"
+		hx-swap="outerHTML"
+		x-data={ fmt.Sprintf("sjPhone('%s', '%s', %t)", d.Country, d.Channel, d.creating()) }
+		x-on:submit="if (!ready()) $event.preventDefault()"
+		x-on:sj-password="pwOk = $event.detail.ok"
+		data-countries={ countriesJSON(d.Countries) }
+	>
+		<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+		<input type="hidden" name="channel" x-model="channel"/>
+		<div class="seg-tabs" role="tablist">
+			<button
+				type="button"
+				role="tab"
+				class={ templ.KV("on", d.Channel != "phone") }
+				x-bind:aria-selected="channel === 'email'"
+				x-on:click="channel = 'email'"
+				x-bind:class="{ on: channel === 'email' }"
+			>
+				@components.Icon("mail")
+				{ v.Tr("entry.email") }
+			</button>
+			<button
+				type="button"
+				role="tab"
+				class={ templ.KV("on", d.Channel == "phone") }
+				x-bind:aria-selected="channel === 'phone'"
+				x-on:click="channel = 'phone'"
+				x-bind:class="{ on: channel === 'phone' }"
+			>
+				@components.Icon("phone")
+				{ v.Tr("entry.phone") }
+			</button>
+		</div>
+		<div class="channel" x-show="channel === 'phone'" x-cloak>
+			<div class="field">
+				<label class="label" for="entry-phone">{ v.Tr("entry.phone_number") }</label>
+				<div class={ "phone-row", templ.KV("has-error", d.Err("phone") != "") }>
+					<div class="country" x-data="{ open: false }" x-on:keydown.escape="open = false">
+						// A dialling code reads left to right in every language (screen 24).
+						<button type="button" class="country-btn" dir="ltr" x-on:click="open = !open" x-bind:aria-expanded="open">
+							<span class="cc" x-text="country"></span>
+							<b x-text="dial"></b>
+							@components.IconClass("chevronD", "i-sm")
+						</button>
+						<input type="hidden" name="country" x-model="country"/>
+						<ul class="country-list" x-show="open" x-cloak x-on:click.outside="open = false" role="listbox">
+							for _, c := range d.Countries {
+								<li>
+									<button
+										type="button"
+										role="option"
+										dir="ltr"
+										x-on:click={ fmt.Sprintf("pick('%s'); open = false", c.Code) }
+									>
+										<span class="cc">{ c.Code }</span>
+										<span class="name">{ c.Name }</span>
+										<span class="dial">{ c.Dial }</span>
+									</button>
+								</li>
+							}
+						</ul>
+					</div>
+					<input
+						class="input"
+						id="entry-phone"
+						name="phone"
+						type="tel"
+						inputmode="tel"
+						autocomplete="tel"
+						dir="ltr"
+						value={ d.Phone }
+						x-model="phone"
+						x-on:input="format()"
+						x-bind:placeholder="placeholder"
+					/>
+					<span class="ok" x-show="valid" x-cloak>
+						@components.Icon("check-circle")
+					</span>
+				</div>
+				if d.Err("phone") != "" {
+					<p class="field-error">{ d.Err("phone") }</p>
+				}
+			</div>
+		</div>
+		<div class="channel" x-show="channel === 'email'" x-cloak>
+			<div class="field">
+				<label class="label" for="entry-email">{ v.Tr("entry.email") }</label>
+				<div class={ "input-icon", templ.KV("has-error", d.Err("email") != "") }>
+					@components.Icon("mail")
+					<input
+						class="input"
+						id="entry-email"
+						name="email"
+						type="email"
+						autocomplete="email"
+						dir="ltr"
+						value={ d.Email }
+						x-model="email"
+						placeholder={ v.Tr("auth.email_placeholder") }
+					/>
+				</div>
+				if d.Err("email") != "" {
+					<p class="field-error">{ d.Err("email") }</p>
+				}
+			</div>
+			if !d.creating() {
+				<div class="seg-tabs sm">
+					<button type="button" class={ templ.KV("on", !d.UsePassword) } x-on:click="password = false" x-bind:class="{ on: !password }">{ v.Tr("entry.email_me_code") }</button>
+					<button type="button" class={ templ.KV("on", d.UsePassword) } x-on:click="password = true" x-bind:class="{ on: password }">{ v.Tr("entry.use_password") }</button>
+				</div>
+				<input type="hidden" name="use_password" x-model="password"/>
+				<div class="channel" x-show="password" x-cloak>
+					<div class="field">
+						<div class="row">
+							<label class="label" for="entry-password">{ v.Tr("auth.password") }</label>
+							<span class="spacer"></span>
+							<a
+								class="link-sm"
+								href="/forgot-password"
+								hx-get="/forgot-password?ns=popup"
+								hx-target="#entry-overlay"
+								hx-swap="innerHTML"
+							>{ v.Tr("auth.forgot") }</a>
+						</div>
+						<div class={ "input-icon", templ.KV("has-error", d.Err("password") != "") } x-data="{ show: false }">
+							@components.Icon("lock")
+							<input
+								class="input"
+								id="entry-password"
+								name="password"
+								x-bind:type="show ? 'text' : 'password'"
+								autocomplete="current-password"
+							/>
+							<button
+								type="button"
+								class="reveal icon"
+								x-on:click="show = !show"
+								x-bind:aria-label={ revealLabel(v) }
+								aria-label={ v.Tr("entry.show") }
+							>
+								@components.IconClass("eye", "i-sm")
+							</button>
+						</div>
+						if d.Err("password") != "" {
+							<p class="field-error">{ d.Err("password") }</p>
+						}
+					</div>
+				</div>
+			}
+		</div>
+		if d.creating() {
+			<input type="hidden" name="creating" value="1"/>
+			@detailsFields(v, d)
+		} else {
+			<label class="check-row">
+				<input type="checkbox" name="remember" value="1" checked?={ d.Remember }/>
+				<span>{ v.Tr("entry.keep_signed_in") }</span>
+			</label>
+		}
+		<button class="btn btn-primary btn-lg" type="submit" x-bind:disabled="!ready()">
+			<span x-text="submitLabel()">
+				if d.creating() {
+					{ v.Tr("entry.create_my_account") }
+				} else if d.Channel == "phone" {
+					{ v.Tr("entry.text_me_code") }
+				} else {
+					{ v.Tr("entry.send_me_code") }
+				}
+			</span>
+			<span class="go" aria-hidden="true">
+				@components.IconClass("arrowR", "flip")
+			</span>
+		</button>
+		<p class="hint" x-text="hint()">
+			if d.creating() {
+				{ v.Tr("entry.hint_create_phone") }
+			} else {
+				{ v.Tr("entry.hint_signin_phone") }
+			}
+		</p>
+		<p class="entry-switch">
+			if d.creating() {
+				{ v.Tr("entry.have_account") }
+				<a href="/signin" hx-get="/signin" hx-target="#entry-card" hx-swap="outerHTML" hx-push-url="true">{ v.Tr("entry.sign_in") }</a>
+			} else {
+				{ v.Tr("entry.new_here") }
+				<a href="/signup" hx-get="/signup" hx-target="#entry-card" hx-swap="outerHTML" hx-push-url="true">{ v.Tr("entry.create_account") }</a>
+			}
+		</p>
+		<span
+			class="sr-only"
+			data-labels
+			data-text-code={ v.Tr("entry.text_me_code") }
+			data-send-code={ v.Tr("entry.send_me_code") }
+			data-sign-in={ v.Tr("entry.sign_in") }
+			data-create-account={ v.Tr("entry.create_my_account") }
+			data-hint-signin-phone={ v.Tr("entry.hint_signin_phone") }
+			data-hint-signin-email={ v.Tr("entry.hint_signin_email") }
+			data-hint-create-phone={ v.Tr("entry.hint_create_phone") }
+			data-hint-create-email={ v.Tr("entry.hint_create_email") }
+			data-hint-password={ v.Tr("entry.hint_password") }
+		></span>
+	</form>
+	if d.Google || d.Apple {
+		<div class="or"><span>{ v.Tr("entry.or") }</span></div>
+		<div class="sso">
+			if d.Google {
+				<form method="post" action="/auth/google">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-wide" type="submit">Google</button>
+				</form>
+			}
+			if d.Apple {
+				<form method="post" action="/auth/apple">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-wide" type="submit">Apple</button>
+				</form>
+			}
+		</div>
+	}
+	<a
+		class="btn btn-ghost-gold btn-wide"
+		href="/guest"
+		hx-get="/guest?ns=popup"
+		hx-target="#entry-overlay"
+		hx-swap="innerHTML"
+	>{ v.Tr("entry.keep_playing_guest") }</a>
+	<a
+		class="room-link"
+		href="/rooms/join"
+		hx-get="/rooms/join?ns=popup"
+		hx-target="#entry-overlay"
+		hx-swap="innerHTML"
+	>{ v.Tr("entry.have_room_code") }</a>
+}
+
+// entrySteps is the design's "1 · Your details → 2 · Verify": the bar that says how
+// far the new account has come. Done steps are green, the one in hand is gold.
+templ entrySteps(v *view.Ctx, at int) {
+	<ol class="entry-steps" aria-label={ v.Tr("entry.steps_label") }>
+		<li class={ templ.KV("done", at > 1), templ.KV("on", at == 1) } aria-current={ current(at == 1) }>
+			<i aria-hidden="true"></i>
+			<span><b>1</b> · { v.Tr("entry.step_details") }</span>
+		</li>
+		<li class={ templ.KV("on", at == 2) } aria-current={ current(at == 2) }>
+			<i aria-hidden="true"></i>
+			<span><b>2</b> · { v.Tr("entry.step_verify") }</span>
+		</li>
+	</ol>
+}
+
+func current(on bool) string {
+	if on {
+		return "step"
+	}
+	return "false"
+}
+
+// detailsFields is the rest of "Your details": the name other players will see, the
+// password with its five checks, and the terms. The screen keeps the button locked
+// until all three are good; `signupDetails` in the service decides the same thing
+// again, because the screen is only a courtesy (NF-04).
+templ detailsFields(v *view.Ctx, d Entry) {
+	<div class="field">
+		<label class="label" for="entry-name">{ v.Tr("entry.display_name") }</label>
+		<input
+			class={ "input", templ.KV("has-error", d.Err("display_name") != "") }
+			id="entry-name"
+			name="display_name"
+			value={ d.Name }
+			maxlength="40"
+			autocomplete="nickname"
+			placeholder={ d.GuestName }
+			x-model="name"
+		/>
+		if d.Err("display_name") != "" {
+			<p class="field-error">{ d.Err("display_name") }</p>
+		}
+	</div>
+	<div
+		class="field"
+		x-data={ fmt.Sprintf("sjPassword('%s', '%s', '%s')", v.Tr("entry.pw_weak"), v.Tr("entry.pw_medium"), v.Tr("entry.pw_strong")) }
+	>
+		<div class={ "notch-field", templ.KV("has-error", d.Err("password") != "") } x-bind:class="{ ['s-' + strength()]: true, filled: value.length > 0 }">
+			<label class="notch" for="entry-new-password">{ v.Tr("auth.password") }</label>
+			<input
+				class="input"
+				id="entry-new-password"
+				name="password"
+				x-bind:type="show ? 'text' : 'password'"
+				autocomplete="new-password"
+				x-model="value"
+				x-on:input="$dispatch('sj-password', { ok: strong() })"
+			/>
+			<button
+				type="button"
+				class="reveal"
+				x-on:click="show = !show"
+				x-bind:aria-label={ revealLabel(v) }
+				aria-label={ v.Tr("entry.show") }
+			>
+				@components.IconClass("eye", "i-sm")
+			</button>
+		</div>
+		<div class="pw-meter" x-bind:class="'s-' + strength()" x-show="value.length > 0" x-cloak>
+			<div class="row">
+				<span>{ v.Tr("entry.password_strength") }</span>
+				<span class="spacer"></span>
+				<b x-text="word()"></b>
+			</div>
+			<div class="bar"><i x-bind:style="'inline-size:' + percent() + '%'"></i></div>
+		</div>
+		<ul class="pw-checks idle" x-bind:class="{ idle: value.length === 0 }" aria-live="polite">
+			for _, rule := range passwordRules {
+				<li x-bind:class={ fmt.Sprintf("{ on: checks.%s }", rule.Key) }>
+					<span class="tick" aria-hidden="true">
+						@components.IconClass("check-circle", "i-sm")
+					</span>
+					{ v.Tr(rule.Key2) }
+				</li>
+			}
+		</ul>
+		if d.Err("password") != "" {
+			<p class="field-error">{ d.Err("password") }</p>
+		}
+	</div>
+	<label class="check-row">
+		<input type="checkbox" name="accept_terms" value="1" checked?={ d.AcceptTerms } x-model="terms"/>
+		<span>
+			@templ.Raw(v.Tr("entry.accept_terms", "terms", `<a href="/terms">`+v.Tr("entry.terms")+`</a>`, "privacy", `<a href="/privacy">`+v.Tr("entry.privacy")+`</a>`))
+		</span>
+	</label>
+	if d.Err("accept_terms") != "" {
+		<p class="field-error">{ d.Err("accept_terms") }</p>
+	}
+}
+
+// passwordRules is the five checks, in the order the design prints them.
+var passwordRules = []struct{ Key, Key2 string }{
+	{"length", "entry.pw_length"},
+	{"upper", "entry.pw_upper"},
+	{"lower", "entry.pw_lower"},
+	{"digit", "entry.pw_digit"},
+	{"symbol", "entry.pw_symbol"},
+}
+
+// revealLabel is the eye button's label, which changes with what it will do. It is
+// built here because templ reads { } as text inside a quoted attribute, not as Go.
+func revealLabel(v *view.Ctx) string {
+	return fmt.Sprintf("show ? %q : %q", v.Tr("entry.hide"), v.Tr("entry.show"))
+}
+
+func startAction(d Entry) string {
+	if d.creating() {
+		return "/signup"
+	}
+	return "/signin"
+}
+
+// stepCode is screens 08–11: six boxes, the resend timer and the way back.
+templ stepCode(v *view.Ctx, d Entry) {
+	<div class="entry-head">
+		<a
+			class="back"
+			href={ templ.URL(startAction(d)) }
+			hx-get={ startAction(d) }
+			hx-target="#entry-card"
+			hx-swap="outerHTML"
+		>
+			@components.IconClass("arrowL", "flip")
+			if d.Channel == "phone" {
+				{ v.Tr("entry.change_number") }
+			} else {
+				{ v.Tr("entry.change_email") }
+			}
+		</a>
+		<span class="spacer"></span>
+		if !d.Creating {
+			<span class="step-of">{ v.Tr("entry.step_of", "n", 2, "total", 2) }</span>
+		}
+	</div>
+	if d.Creating {
+		@entrySteps(v, 2)
+	}
+	<h1>
+		if d.Creating {
+			{ v.Tr("entry.verify_title") }
+		} else {
+			{ v.Tr("entry.enter_code") }
+		}
+	</h1>
+	<p class="sub">
+		if d.ByCall {
+			{ v.Tr("entry.sent_by_call", "to", d.Destination) }
+		} else if d.Channel == "phone" {
+			{ v.Tr("entry.sent_by_sms", "to", d.Destination) }
+		} else {
+			{ v.Tr("entry.sent_by_email", "to", d.Destination) }
+		}
+	</p>
+	<form
+		class="entry-step"
+		method="post"
+		action="/signin/code"
+		hx-post="/signin/code"
+		hx-target="#entry-card"
+		hx-swap="outerHTML"
+		x-data={ fmt.Sprintf("sjCode(%d, %d)", d.CodeLength, d.ResendIn) }
+		x-on:submit="fill()"
+	>
+		<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+		<input type="hidden" name="channel" value={ d.Channel }/>
+		<input type="hidden" name="country" value={ d.Country }/>
+		<input type="hidden" name="phone" value={ d.Phone }/>
+		<input type="hidden" name="email" value={ d.Email }/>
+		<input type="hidden" name="remember" value={ checkedValue(d.Remember) }/>
+		<input type="hidden" name="creating" value={ checkedValue(d.Creating) }/>
+		<input type="hidden" name="code" x-ref="out" x-model="code"/>
+		<div class={ "code-boxes", templ.KV("has-error", d.Err("code") != "") } dir="ltr">
+			for i := 0; i < d.CodeLength; i++ {
+				<input
+					class="code-box"
+					type="text"
+					inputmode="numeric"
+					maxlength="1"
+					autocomplete={ otpAutocomplete(i) }
+					aria-label={ v.Tr("entry.digit", "n", i+1) }
+					x-ref={ fmt.Sprintf("d%d", i) }
+					x-on:input={ fmt.Sprintf("onInput(%d, $event)", i) }
+					x-on:keydown={ fmt.Sprintf("onKey(%d, $event)", i) }
+					x-on:paste={ fmt.Sprintf("onPaste(%d, $event)", i) }
+					if i == 0 {
+						autofocus
+					}
+				/>
+			}
+		</div>
+		if d.Err("code") != "" {
+			<p class="field-error" role="alert">
+				@components.Icon("alert")
+				{ d.Err("code") }
+			</p>
+		}
+		<div class="row resend">
+			// The timer, and the button that replaces it when the timer runs out. Both
+			// submit a form that lives outside this one: a form inside a form is not
+			// HTML, and the browser throws the inner one away.
+			<span x-show="left > 0" x-cloak>
+				{ v.Tr("entry.resend_in") }
+				<b x-text="clock()"></b>
+			</span>
+			<button class="link-btn" type="submit" form="resend-code" x-show="left === 0" x-cloak>
+				{ v.Tr("entry.resend_now") }
+			</button>
+			<span class="spacer"></span>
+			if d.Channel == "phone" {
+				<button
+					class="link-btn gold"
+					type="submit"
+					form="call-me"
+				>{ v.Tr("entry.call_me") }</button>
+			}
+		</div>
+		<button class="btn btn-primary btn-lg" type="submit">
+			{ v.Tr("entry.verify") }
+			<span class="go" aria-hidden="true">
+				@components.IconClass("arrowR", "flip")
+			</span>
+		</button>
+	</form>
+	// The two forms the links above submit, kept out of the one with the digits in it.
+	@resendForm(v, d, "resend-code", false)
+	if d.Channel == "phone" {
+		@resendForm(v, d, "call-me", true)
+	}
+	if d.DevCode != "" {
+		<p class="hint dev-code">{ v.Tr("entry.dev_code", "code", d.DevCode) }</p>
+	}
+}
+
+// resendForm is "Send a new code" and "Call me instead": the same post, one of them
+// asking for the telephone rather than the text.
+templ resendForm(v *view.Ctx, d Entry, id string, call bool) {
+	<form
+		id={ id }
+		method="post"
+		action="/signin/resend"
+		hx-post="/signin/resend"
+		hx-target="#entry-card"
+		hx-swap="outerHTML"
+		hidden
+	>
+		<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+		<input type="hidden" name="channel" value={ d.Channel }/>
+		<input type="hidden" name="country" value={ d.Country }/>
+		<input type="hidden" name="phone" value={ d.Phone }/>
+		<input type="hidden" name="email" value={ d.Email }/>
+		<input type="hidden" name="creating" value={ checkedValue(d.Creating) }/>
+		if call {
+			<input type="hidden" name="call" value="1"/>
+		}
+	</form>
+}
+
+func otpAutocomplete(i int) string {
+	if i == 0 {
+		return "one-time-code"
+	}
+	return "off"
+}
+
+func checkedValue(on bool) string {
+	if on {
+		return "1"
+	}
+	return ""
+}
+
+// stepNewAccount is screen 12: the number is proven and free, so we ask for a name.
+templ stepNewAccount(v *view.Ctx, d Entry) {
+	<div class="entry-head">
+		<a class="back" href="/signin" hx-get="/signin" hx-target="#entry-card" hx-swap="outerHTML">
+			@components.IconClass("arrowL", "flip")
+			{ v.Tr("action.back") }
+		</a>
+		<span class="spacer"></span>
+		<span class="step-of">{ v.Tr("entry.last_step") }</span>
+	</div>
+	<p class="verified">
+		@components.Icon("check-circle")
+		{ v.Tr("entry.verified") } · <b dir="ltr">{ d.Destination }</b>
+	</p>
+	<h1>{ v.Tr("entry.new_here_title") }</h1>
+	<p class="sub">{ v.Tr("entry.new_here_sub", "what", d.Destination) }</p>
+	if d.Error != "" {
+		<p class="form-error" role="alert">
+			@components.Icon("alert")
+			{ d.Error }
+		</p>
+	}
+	<form
+		class="entry-step"
+		method="post"
+		action="/signin/complete"
+		hx-post="/signin/complete"
+		hx-target="#entry-card"
+		hx-swap="outerHTML"
+	>
+		<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+		<input type="hidden" name="channel" value={ d.Channel }/>
+		<input type="hidden" name="destination" value={ d.Destination }/>
+		<input type="hidden" name="remember" value={ checkedValue(d.Remember) }/>
+		<div class="field">
+			<label class="label" for="entry-name">{ v.Tr("entry.display_name") }</label>
+			<input
+				class={ "input", templ.KV("has-error", d.Err("display_name") != "") }
+				id="entry-name"
+				name="display_name"
+				value={ d.Name }
+				maxlength="40"
+				autocomplete="nickname"
+				autofocus
+			/>
+			if d.Err("display_name") != "" {
+				<p class="field-error">{ d.Err("display_name") }</p>
+			}
+		</div>
+		if d.Channel == "phone" {
+			<div class="field">
+				<label class="label" for="entry-recovery">
+					{ v.Tr("entry.email") }
+					<span class="opt">· { v.Tr("entry.for_recovery") }</span>
+				</label>
+				<input
+					class={ "input", templ.KV("has-error", d.Err("email") != "") }
+					id="entry-recovery"
+					name="email"
+					type="email"
+					dir="ltr"
+					value={ d.Email }
+					placeholder={ v.Tr("auth.email_placeholder") }
+				/>
+				if d.Err("email") != "" {
+					<p class="field-error">{ d.Err("email") }</p>
+				}
+			</div>
+		}
+		<label class="check-row">
+			<input type="checkbox" name="accept_terms" value="1" checked?={ d.Errors["accept_terms"] == "" }/>
+			<span>
+				@templ.Raw(v.Tr("entry.accept_terms", "terms", `<a href="/terms">`+v.Tr("entry.terms")+`</a>`, "privacy", `<a href="/privacy">`+v.Tr("entry.privacy")+`</a>`))
+			</span>
+		</label>
+		if d.Err("accept_terms") != "" {
+			<p class="field-error">{ d.Err("accept_terms") }</p>
+		}
+		if d.GuestPoints > 0 {
+			<p class="points-note">
+				<b>{ fmt.Sprintf("+%d", d.GuestPoints) }</b>
+				{ v.Tr("entry.points_added") }
+			</p>
+		}
+		<button class="btn btn-primary btn-lg" type="submit">
+			{ v.Tr("entry.create_account") }
+			<span class="go" aria-hidden="true">
+				@components.IconClass("arrowR", "flip")
+			</span>
+		</button>
+	</form>
+}
+
+// stepWelcome is screen 14: the number has an account, and the guest points moved.
+templ stepWelcome(v *view.Ctx, d Entry) {
+	<div class="entry-head">
+		<span class="spacer"></span>
+		<span class="step-of">{ v.Tr("entry.verified") }</span>
+	</div>
+	<h1>{ v.Tr("entry.welcome_back", "name", d.Name) }</h1>
+	<p class="sub">{ v.Tr("entry.signin_sub") }</p>
+	<div class="who">
+		<span class="avatar lg">{ initials(d.Name) }</span>
+		<div>
+			<b>{ d.Name }</b>
+			<span>{ v.Tr("entry.level_streak", "level", d.Level, "days", d.Streak) }</span>
+		</div>
+		@components.Icon("check-circle")
+	</div>
+	if d.MovedPoints > 0 {
+		<p class="points-note">
+			<b>{ fmt.Sprintf("+%d", d.MovedPoints) }</b>
+			{ v.Tr("entry.points_added") }
+		</p>
+	}
+	<a class="btn btn-primary btn-lg" href="/home">
+		{ v.Tr("entry.continue") }
+		<span class="go" aria-hidden="true">
+			@components.IconClass("arrowR", "flip")
+		</span>
+	</a>
+}
+
+// entryFoot is the language picker and the two links every step carries.
+templ entryFoot(v *view.Ctx, d Entry) {
+	<div class="entry-foot">
+		// The pill the design draws, not the browser's own dropdown: a button and a
+		// small menu, the same pair the top navigation uses.
+		<div class="menu-wrap lang-pick" x-data="sjOverlay">
+			<button
+				type="button"
+				class="lang-btn"
+				x-on:click="toggle()"
+				x-bind:aria-expanded="open"
+				aria-haspopup="menu"
+				aria-label={ v.Tr("settings.language") }
+			>
+				@components.IconClass("globe", "i-sm")
+				<span>{ upperLang(v.Lang) }</span>
+				@components.IconClass("chevronD", "i-sm")
+			</button>
+			<div class="menu up" role="menu" x-show="open" x-on:click.outside="hide()" x-cloak>
+				for _, code := range []string{"ar", "en", "fr"} {
+					<form method="post" action="/settings/language" class="contents">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<input type="hidden" name="lang" value={ code }/>
+						// The language is changed from where the player stands, and
+						// that is where they stay.
+						<input type="hidden" name="back" value={ v.Path }/>
+						<button
+							type="submit"
+							class={ "mi", templ.KV("on", v.Lang == code) }
+							role="menuitemradio"
+							aria-checked={ fmt.Sprintf("%t", v.Lang == code) }
+							lang={ code }
+						>
+							<span class="mi-label">{ langName(code) }</span>
+							if v.Lang == code {
+								@components.IconClass("check", "i-sm")
+							} else {
+								<span class="muted mi-code">{ upperLang(code) }</span>
+							}
+						</button>
+					</form>
+				}
+			</div>
+		</div>
+		<span class="spacer"></span>
+		<a href="/terms">{ v.Tr("entry.terms") }</a>
+		<a href="/privacy">{ v.Tr("entry.privacy") }</a>
+	</div>
+}
+
+// countriesJSON hands the picker's rules to the field that formats the number.
+func countriesJSON(list []Country) string {
+	out := make([]string, 0, len(list))
+	for _, c := range list {
+		digits := make([]string, 0, len(c.Digits))
+		for _, n := range c.Digits {
+			digits = append(digits, fmt.Sprint(n))
+		}
+		out = append(out, fmt.Sprintf(`{"code":%q,"dial":%q,"digits":[%s]}`,
+			c.Code, c.Dial, strings.Join(digits, ",")))
+	}
+	return "[" + strings.Join(out, ",") + "]"
+}
+
+// langName is each language written in itself, as the menu shows it.
+func langName(code string) string {
+	switch code {
+	case "ar":
+		return "العربية"
+	case "fr":
+		return "Français"
+	}
+	return "English"
+}
+
+func upperLang(code string) string {
+	switch code {
+	case "ar":
+		return "AR"
+	case "fr":
+		return "FR"
+	}
+	return "EN"
+}
+
+func initials(name string) string {
+	for _, r := range name {
+		return string([]rune{r})
+	}
+	return "?"
+}
+
+// GuestPopup is screen 19: the guest welcome, over the entry screen rather than as a
+// page of its own. What a guest may and may not do is said plainly, so nobody finds
+// out by being refused later (RL-03).
+templ GuestPopup(v *view.Ctx, d Entry) {
+	<div id="entry-overlay" x-data="sjOverlay" x-init="show()">
+		<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+		<div class="ov pop" role="dialog" aria-modal="true" x-show="open" x-trap="open" x-on:keydown.escape.window="hide()">
+			<form method="post" action="/guest" class="pop-body">
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<input type="hidden" name="then" value="/home"/>
+				<div class="pop-head">
+					<span class="brand-mark sm">
+						@components.Lamp()
+					</span>
+					<div>
+						<h2>{ v.Tr("entry.guest_welcome") }</h2>
+						<p>{ v.Tr("entry.guest_sub") }</p>
+					</div>
+					<a class="icon-btn sm" href="/signin" x-on:click.prevent="hide()" aria-label={ v.Tr("action.close") }>
+						@components.Icon("x")
+					</a>
+				</div>
+				<div class="field">
+					<label class="label" for="guest-name">{ v.Tr("entry.guest_name") }</label>
+					<input class={ "input", templ.KV("has-error", d.Err("name") != "") } id="guest-name" name="name" value={ d.Name } maxlength="40" autofocus/>
+					if d.Err("name") != "" {
+						<p class="field-error">{ d.Err("name") }</p>
+					}
+				</div>
+				<div class="guest-table">
+					<div>
+						<span class="yes">{ v.Tr("entry.guest_open") }</span>
+						<ul>
+							<li>{ v.Tr("entry.guest_solo") }</li>
+							<li>{ v.Tr("entry.guest_rooms") }</li>
+							<li>{ v.Tr("entry.guest_duels") }</li>
+						</ul>
+					</div>
+					<div>
+						<span>{ v.Tr("entry.guest_needs") }</span>
+						<ul>
+							<li>{ v.Tr("entry.guest_streak") }</li>
+							<li>{ v.Tr("entry.guest_friends") }</li>
+							<li>{ v.Tr("entry.guest_rankings") }</li>
+						</ul>
+					</div>
+				</div>
+				<button class="btn btn-primary btn-lg" type="submit">
+					{ v.Tr("entry.start_playing") }
+					<span class="go" aria-hidden="true">
+						@components.IconClass("arrowR", "flip")
+					</span>
+				</button>
+				<p class="hint">{ v.Tr("entry.guest_stays") }</p>
+				<a class="room-link" href="/signup" hx-get="/signup" hx-target="#entry-card" hx-swap="outerHTML" x-on:click="hide()">
+					{ v.Tr("entry.create_instead") }
+				</a>
+			</form>
+		</div>
+	</div>
+}
+
+// ForgotPopup is "Forgot password?" over the entry screen rather than a page of its
+// own: the same card "Join a room" opens in, so the player never loses their place.
+templ ForgotPopup(v *view.Ctx, email, problem string, sent bool) {
+	<div id="entry-overlay" x-data="sjOverlay" x-init="show()">
+		<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+		<div class="ov pop" role="dialog" aria-modal="true" x-show="open" x-trap="open" x-on:keydown.escape.window="hide()">
+			<form method="post" action="/forgot-password" class="pop-body" hx-post="/forgot-password" hx-target="#entry-overlay" hx-swap="innerHTML" novalidate>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<input type="hidden" name="from" value="entry"/>
+				<div class="pop-head">
+					<span class="brand-mark sm">
+						@components.Lamp()
+					</span>
+					<div>
+						<h2>{ v.Tr("auth.forgot.title") }</h2>
+						if sent {
+							<p>{ v.Tr("auth.forgot.sent") }</p>
+						} else {
+							<p>{ v.Tr("auth.forgot.body") }</p>
+						}
+					</div>
+					<a class="icon-btn sm" href="/signin" x-on:click.prevent="hide()" aria-label={ v.Tr("action.close") }>
+						@components.Icon("x")
+					</a>
+				</div>
+				if sent {
+					<p class="points-note">
+						@components.Icon("mail")
+						<b dir="ltr">{ email }</b>
+					</p>
+					<a class="btn btn-primary btn-lg" href="/signin" x-on:click.prevent="hide()">
+						{ v.Tr("action.signin") }
+						<span class="go" aria-hidden="true">
+							@components.IconClass("arrowR", "flip")
+						</span>
+					</a>
+				} else {
+					<div class="field">
+						<label class="label" for="forgot-email">{ v.Tr("auth.email") }</label>
+						<div class={ "input-icon", templ.KV("has-error", problem != "") }>
+							@components.Icon("mail")
+							<input
+								class="input"
+								id="forgot-email"
+								name="email"
+								type="email"
+								autocomplete="email"
+								dir="ltr"
+								value={ email }
+								placeholder={ v.Tr("auth.email_placeholder") }
+								autofocus
+							/>
+						</div>
+						if problem != "" {
+							<p class="field-error" role="alert">
+								@components.Icon("alert")
+								{ problem }
+							</p>
+						}
+					</div>
+					<button class="btn btn-primary btn-lg" type="submit">
+						{ v.Tr("action.next") }
+						<span class="go" aria-hidden="true">
+							@components.IconClass("arrowR", "flip")
+						</span>
+					</button>
+				}
+			</form>
+		</div>
+	</div>
+}
+
+// JoinPopup is screens 21–23: a room code and the name the player will wear.
+templ JoinPopup(v *view.Ctx, d Entry, code, problem string) {
+	<div id="entry-overlay" x-data="sjOverlay" x-init="show()">
+		<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+		<div class="ov pop" role="dialog" aria-modal="true" x-show="open" x-trap="open" x-on:keydown.escape.window="hide()">
+			<form method="post" action="/rooms/join" class="pop-body" hx-post="/rooms/join" hx-target="#entry-overlay" hx-swap="innerHTML">
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<input type="hidden" name="from" value="entry"/>
+				<div class="pop-head">
+					<div>
+						<h2>{ v.Tr("rooms.join_title") }</h2>
+					</div>
+					<a class="icon-btn sm" href="/signin" x-on:click.prevent="hide()" aria-label={ v.Tr("action.close") }>
+						@components.Icon("x")
+					</a>
+				</div>
+				<div class="field">
+					<label class="label" for="join-code">{ v.Tr("rooms.code") }</label>
+					<input
+						class={ "input code-input", templ.KV("has-error", problem != "") }
+						id="join-code"
+						name="code"
+						value={ code }
+						maxlength="6"
+						autocapitalize="characters"
+						autocomplete="off"
+						dir="ltr"
+						autofocus
+					/>
+					<span class="help">{ v.Tr("rooms.code_help") }</span>
+				</div>
+				<div class="field">
+					<label class="label" for="join-name">{ v.Tr("entry.appear_as") }</label>
+					<input class="input" id="join-name" name="name" value={ d.Name } maxlength="40"/>
+				</div>
+				if problem != "" {
+					<p class="field-error" role="alert">
+						@components.Icon("alert")
+						{ problem }
+					</p>
+				}
+				<button class="btn btn-primary btn-lg" type="submit">
+					{ v.Tr("rooms.join") }
+					<span class="go" aria-hidden="true">
+						@components.IconClass("arrowR", "flip")
+					</span>
+				</button>
+			</form>
+		</div>
+	</div>
+}

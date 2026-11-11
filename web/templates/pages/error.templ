@@ -1,0 +1,30 @@
+// Package pages holds one templ page per prototype screen (docs/02-SCREENS.md).
+package pages
+
+import (
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// NotFound is the 404 page. It uses the plain shell so it works for visitors too.
+templ NotFound(v *view.Ctx) {
+	@layouts.Focus(v, v.Tr("error.not_found.title")) {
+		<div class="page narrow">
+			@components.Empty("alert", v.Tr("error.not_found.title"), v.Tr("error.not_found.body")) {
+				<a class="btn btn-primary" href="/">{ v.Tr("nav.home") }</a>
+			}
+		</div>
+	}
+}
+
+// ServerError is the 500 page.
+templ ServerError(v *view.Ctx) {
+	@layouts.Focus(v, v.Tr("error.title")) {
+		<div class="page narrow">
+			@components.Empty("alert", v.Tr("error.title"), v.Tr("error.body")) {
+				<a class="btn btn-primary" href="/">{ v.Tr("nav.home") }</a>
+			}
+		</div>
+	}
+}

@@ -1,0 +1,1408 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// RoomMember is one player in the lobby (P14).
+type RoomMember struct {
+	ID       string
+	Name     string
+	Initials string
+	Color    string
+	Host     bool
+	Ready    bool
+	IsMe     bool
+	Guest    bool
+	Level    int32
+	// Team is 0 for Team A, 1 for Team B, -1 while the room plays for itself.
+	Team int32
+}
+
+// RoomData backs P14 the lobby and P16 the podium.
+type RoomData struct {
+	Code     string
+	Link     string
+	Host     bool
+	Members  []RoomMember
+	Max      int32
+	Ready    int
+	Chat     bool
+	Playing  bool
+	GameID   string
+	Settings string
+	HostName string
+	// Signature is what this block is showing right now; the poll sends it back and
+	// the server answers "nothing changed" instead of a new copy (RM-02).
+	Signature string
+	Lines     []ChatLine
+	ChatAt    string
+	MyReady   bool
+	Problem   string
+	// Mode is how the room will play: "ffa" or "teams". CanTeams is false while the
+	// room is too small to take sides, which is what greys the switch (RM-05).
+	Mode     string
+	CanTeams bool
+	Sides    [2][]RoomMember
+	MyTeam   int32
+	// The Room settings panel of P14 (RM-01).
+	ShortLink   string
+	QR          templ.Component
+	DomainName  string
+	DomainColor string
+	Count       int32
+	Seconds     int32
+	AllowGuests bool
+	GuestRoom   bool
+}
+
+// Teams says whether the lobby should draw the two sides instead of the slot grid.
+func (d RoomData) Teams() bool { return d.Mode == "teams" && d.CanTeams }
+
+// OpenRoomCard is one line of "Open rooms from friends" on P13 (RM-02).
+type OpenRoomCard struct {
+	Code     string
+	HostName string
+	Title    string
+	Initials string
+	Color    string
+	Meta     string
+}
+
+// JoinData backs P13: the code, the name you will wear in the room, the two ways to
+// host one of your own, and the rooms your friends are already waiting in.
+type JoinData struct {
+	Code    string
+	Problem string
+	Name    string
+	Rooms   []OpenRoomCard
+	Guest   bool
+}
+
+// RoomJoin is prototype screen 13 (RM-02, RM-03): the six characters a friend sent
+// you on the left, and the two ways into a room of your own on the right.
+templ RoomJoin(v *view.Ctx, d JoinData) {
+	@layouts.App(v, v.Tr("play.join_code")) {
+		<div class="page join-page">
+			<a class="btn btn-ghost btn-sm back-link" href="/play">
+				@components.IconClass("arrowL", "flip")
+				{ v.Tr("play.title") }
+			</a>
+			<div class="cols">
+				<section class="card pad join-card col-main">
+					<span class="eyebrow">{ v.Tr("play.live_room") }</span>
+					<h1>{ v.Tr("play.join_code") }</h1>
+					<p class="muted">{ v.Tr("rooms.join_intro") }</p>
+					<form
+						method="post"
+						action="/rooms/join"
+						class="stack push-top"
+						x-data="sjRoomCode"
+						x-on:submit="clean()"
+					>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<div class="field">
+							<label class="sr-only" for="code">{ v.Tr("rooms.code") }</label>
+							// One real field under six boxes: the player types as the design
+							// draws it, and a browser without JavaScript still sees an input.
+							<div class="code-boxes" x-on:click="$refs.code.focus()">
+								<input
+									class="code-field"
+									id="code"
+									name="code"
+									value={ d.Code }
+									maxlength="7"
+									inputmode="latin"
+									autocomplete="off"
+									autocapitalize="characters"
+									spellcheck="false"
+									placeholder={ v.Tr("rooms.code_placeholder") }
+									required
+									x-ref="code"
+									x-on:input="clean()"
+									x-on:keyup="clean()"
+									x-on:click="clean()"
+								/>
+								<div class="boxes" aria-hidden="true">
+									for i := 0; i < 6; i++ {
+										<span
+											class="box"
+											x-text={ fmt.Sprintf("chars[%d]", i) }
+											x-bind:class={ fmt.Sprintf("{ on: at === %d }", i) }
+										></span>
+									}
+								</div>
+							</div>
+							if d.Problem != "" {
+								<span class="err">{ d.Problem }</span>
+							}
+						</div>
+						<div class="field">
+							<label class="label" for="room-name">{ v.Tr("rooms.your_name") }</label>
+							<input
+								class="input"
+								id="room-name"
+								name="name"
+								value={ d.Name }
+								maxlength="20"
+								autocomplete="off"
+								disabled?={ !d.Guest }
+							/>
+							if !d.Guest {
+								<span class="help">{ v.Tr("rooms.name_from_profile") }</span>
+							}
+						</div>
+						<button class="btn btn-primary btn-lg btn-block" type="submit" x-bind:disabled="!ready">
+							{ v.Tr("rooms.join") }
+						</button>
+						<p class="help center-text">{ v.Tr("rooms.guests_can_join") }</p>
+					</form>
+				</section>
+				<aside class="col-side stack gap-md">
+					<section class="card pad stack gap-sm">
+						<h2>{ v.Tr("rooms.host_your_own") }</h2>
+						<p class="muted">{ v.Tr("rooms.host_your_own_sub") }</p>
+						<div class="mode-pick">
+							<a class="mp" href="/rooms/new?mode=ffa">
+								<b>{ v.Tr("rooms.mode_ffa") }</b>
+								<span class="help">{ v.Tr("rooms.mode_ffa_sub") }</span>
+							</a>
+							<a class="mp" href="/rooms/new?mode=teams">
+								<b>{ v.Tr("rooms.mode_teams") }</b>
+								<span class="help">
+									<span class="ta tink">{ v.Tr("rooms.team_a") }</span>
+									{ " " + v.Tr("challenges.vs") + " " }
+									<span class="tb tink">{ v.Tr("rooms.team_b") }</span>
+								</span>
+							</a>
+						</div>
+					</section>
+					if len(d.Rooms) > 0 {
+						<section class="card">
+							<div class="card-head pad-head">
+								<h2>{ v.Tr("rooms.friends_rooms") }</h2>
+							</div>
+							<ul class="list">
+								for _, r := range d.Rooms {
+									<li class="li">
+										@components.PersonAvatar(r.Initials, r.Color, "sm", false)
+										<span class="grow min0">
+											<b class="block">{ r.Title }</b>
+											<span class="help">{ r.Meta }</span>
+										</span>
+										<span class="code num s">{ r.Code }</span>
+										<a class="btn btn-sm" href={ templ.URL("/rooms/" + r.Code) }>{ v.Tr("rooms.join_short") }</a>
+									</li>
+								}
+							</ul>
+						</section>
+					}
+				</aside>
+			</div>
+		</div>
+	}
+}
+
+// RoomLobby is prototype screen 14 (RM-02). It refreshes itself so the list of
+// players stays current without a socket.
+templ RoomLobby(v *view.Ctx, d RoomData) {
+	@layouts.App(v, v.Tr("rooms.lobby")) {
+		<div class="page lobby-page" id="lobby">
+			if d.Playing {
+				<div class="banner info">
+					<div class="grow">{ v.Tr("rooms.in_progress") }</div>
+					<a class="btn btn-primary btn-sm" href={ templ.URL("/rooms/" + d.Code + "/play") }>{ v.Tr("rooms.join_game") }</a>
+				</div>
+			}
+			<div class="cols">
+				<div class="col-main stack gap-md">
+					@roomCodeCard(v, d)
+					@RoomLive(v, d)
+				</div>
+				<aside class="col-side stack gap-md">
+					@RoomSettings(v, d)
+					if d.Chat {
+						@RoomChat(v, d.Code, d.Lines, d.ChatAt)
+					}
+				</aside>
+			</div>
+		</div>
+	}
+}
+
+// roomCodeCard is the top of P14: the six characters big enough to read across a
+// room, the link under them, the square a phone can point at, and the two ways to
+// pass it on (RM-01).
+templ roomCodeCard(v *view.Ctx, d RoomData) {
+	<section class="card pad room-card">
+		<div class="grow min0 stack gap-xs">
+			<span class="eyebrow">{ v.Tr("rooms.code_share") }</span>
+			<span class="code num big" aria-label={ spaced(d.Code) }>{ spaced(d.Code) }</span>
+			<span class="help">{ d.ShortLink }{ " · " }{ d.Settings }</span>
+		</div>
+		if d.QR != nil {
+			<div class="qr-box">
+				@d.QR
+			</div>
+		}
+		<div class="stack gap-sm room-card-acts">
+			<button class="btn btn-sm" type="button" x-data={ copyData(d.Link) } x-on:click="copy()">
+				@components.IconClass("link", "i-sm")
+				{ v.Tr("rooms.copy_link") }
+			</button>
+			<a class="btn btn-sm" href="/friends">
+				@components.IconClass("users", "i-sm")
+				{ v.Tr("rooms.invite_friends") }
+			</a>
+		</div>
+	</section>
+}
+
+// RoomSettings is the panel beside the players: what the room will play, whether
+// guests may come in, and the one button that starts it. Only the host can move any
+// of it; everyone else reads the same numbers (RM-01, RM-02).
+templ RoomSettings(v *view.Ctx, d RoomData) {
+	<section
+		class="card pad stack gap-md room-settings"
+		id="room-settings"
+		hx-get={ "/rooms/" + d.Code + "/settings-panel" }
+		hx-trigger="sj:live:rooms from:body, every 15s"
+		hx-swap="outerHTML"
+	>
+		<h2>{ v.Tr("rooms.settings") }</h2>
+		<form
+			class="stack gap-sm"
+			method="post"
+			action={ templ.SafeURL("/rooms/" + d.Code + "/settings") }
+			x-data
+			x-on:change="$el.requestSubmit()"
+		>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<div class="set-line">
+				<span>{ v.Tr("rooms.domain") }</span>
+				if d.DomainName != "" {
+					<span class="dom-chip dscope" style={ domStyle(d.DomainColor) }>{ d.DomainName }</span>
+				} else {
+					<b>{ v.Tr("setup.all_my_domains") }</b>
+				}
+			</div>
+			<div class="set-line">
+				<label for="room-count">{ v.Tr("setup.number_of_questions") }</label>
+				if d.Host {
+					<select class="select sm" id="room-count" name="count">
+						for _, n := range []int32{5, 10, 15, 20} {
+							<option value={ fmt.Sprint(n) } selected?={ d.Count == n }>{ fmt.Sprint(n) }</option>
+						}
+					</select>
+				} else {
+					<b class="num">{ fmt.Sprint(d.Count) }</b>
+				}
+			</div>
+			<div class="set-line">
+				<label for="room-seconds">{ v.Tr("rooms.time_each") }</label>
+				if d.Host {
+					<select class="select sm" id="room-seconds" name="seconds">
+						for _, n := range []int32{10, 20, 30} {
+							<option value={ fmt.Sprint(n) } selected?={ d.Seconds == n }>{ v.Tr("setup.timer.seconds", "n", n) }</option>
+						}
+					</select>
+				} else {
+					<b class="num">{ v.Tr("setup.timer.seconds", "n", d.Seconds) }</b>
+				}
+			</div>
+			<div class="set-line">
+				<span>{ v.Tr("rooms.guests_allowed") }</span>
+				if d.GuestRoom {
+					<span class="badge">{ v.Tr("rooms.guest_room") }</span>
+				} else if d.Host {
+					<label class="toggle">
+						<input type="checkbox" name="allow_guests" value="1" checked?={ d.AllowGuests }/>
+						<span class="track" aria-hidden="true"></span>
+						<span class="sr-only">{ v.Tr("rooms.guests_allowed") }</span>
+					</label>
+				} else if d.AllowGuests {
+					@components.Icon("check")
+				} else {
+					@components.Icon("x")
+				}
+			</div>
+			<noscript>
+				<button class="btn btn-sm" type="submit">{ v.Tr("action.save") }</button>
+			</noscript>
+		</form>
+		if d.Host {
+			<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/start") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button class="btn btn-primary btn-lg btn-block" type="submit" disabled?={ len(d.Members) < 2 }>
+					{ v.Tr("rooms.start") }
+				</button>
+			</form>
+			<p class="help center-text">
+				{ v.Tr("rooms.needs_players", "n", 2) + " " + v.Tr("rooms.n_ready", "n", d.Ready) }
+			</p>
+		} else {
+			<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/ready") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<input type="hidden" name="ready" value={ fmt.Sprint(!d.MyReady) }/>
+				<button class={ "btn btn-lg btn-block", templ.KV("btn-primary", !d.MyReady) } type="submit">
+					if d.MyReady {
+						{ v.Tr("rooms.not_ready_action") }
+					} else {
+						{ v.Tr("rooms.im_ready") }
+					}
+				</button>
+			</form>
+			<p class="help center-text">{ v.Tr("rooms.host_starts", "name", d.HostName) }</p>
+		}
+		<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/leave") }>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<button class="btn btn-ghost btn-block" type="submit">{ v.Tr("rooms.leave") }</button>
+		</form>
+	</section>
+}
+
+// domStyle hands a domain's own colour to the block that wears it. The value comes
+// from the catalog, never from a template (BR-02).
+func domStyle(color string) string {
+	if color == "" {
+		return ""
+	}
+	return "--d:" + color
+}
+
+// RoomLive is the part of the lobby that changes while people arrive: who is in, and
+// which side they are on. It asks for itself every few seconds and swaps in place, so
+// nothing else on the screen is repainted (RM-02).
+templ RoomLive(v *view.Ctx, d RoomData) {
+	<section
+		class="card pad stack gap-md"
+		id="room-live"
+		hx-get={ "/rooms/" + d.Code + "/players?at=" + d.Signature }
+		hx-trigger="sj:live:rooms from:body, every 15s"
+		hx-swap="outerHTML"
+	>
+		<div class="row wrap gap-sm">
+			<h2>{ v.Tr("rooms.players_count", "n", len(d.Members)) }</h2>
+			<span class="spacer"></span>
+			@roomModeSwitch(v, d)
+		</div>
+		if d.Teams() {
+			@roomSides(v, d)
+		} else {
+			<div class="slots">
+				for _, m := range d.Members {
+					<div class="slot">
+						@components.PersonAvatar(m.Initials, m.Color, "", false)
+						<div class="grow min0">
+							<div class="nm">{ m.Name }</div>
+							<div class="rd">{ memberNote(v, m) }</div>
+						</div>
+						if d.Host && !m.IsMe {
+							<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/kick") }>
+								<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+								<input type="hidden" name="player" value={ m.ID }/>
+								<button class="icon-btn sm" type="submit" aria-label={ v.Tr("action.remove") + " " + m.Name }>
+									@components.IconClass("x", "i-sm")
+								</button>
+							</form>
+						}
+					</div>
+				}
+				for i := len(d.Members); i < int(d.Max); i++ {
+					<div class="slot empty">{ v.Tr("rooms.waiting_for_player") }</div>
+				}
+			</div>
+		}
+		if d.Problem != "" {
+			<p class="err">{ d.Problem }</p>
+		}
+	</section>
+}
+
+// memberNote is the line under a player's name: the host is the host, you are you,
+// everyone else is their level, and a guest says so (RM-02).
+func memberNote(v *view.Ctx, m RoomMember) string {
+	switch {
+	case m.Host && m.IsMe:
+		return v.Tr("rooms.host") + " · " + v.Tr("home.you")
+	case m.Host:
+		return v.Tr("rooms.host")
+	case m.Guest:
+		return v.Tr("guest.badge")
+	case m.IsMe:
+		return v.Tr("home.you")
+	}
+	return v.Tr("friends.level", "level", m.Level)
+}
+
+// roomModeSwitch is the lobby's "everyone for themselves / teams" control (RM-05).
+// Only the host can move it; everyone else reads it. Teams need four players, so
+// below that the switch says so instead of pretending it works.
+templ roomModeSwitch(v *view.Ctx, d RoomData) {
+	<div class="row gap-sm">
+		if d.Host {
+			<form class="seg" method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/mode") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button class="seg-item" type="submit" name="mode" value="ffa" aria-pressed={ pressed(d.Mode != "teams") }>
+					@components.IconClass("swords", "i-sm")
+					{ v.Tr("rooms.mode_ffa") }
+				</button>
+				<button
+					class="seg-item"
+					type="submit"
+					name="mode"
+					value="teams"
+					aria-pressed={ pressed(d.Mode == "teams") }
+					disabled?={ !d.CanTeams && d.Mode != "teams" }
+				>
+					@components.IconClass("shieldT", "i-sm")
+					{ v.Tr("rooms.mode_teams") }
+				</button>
+			</form>
+		} else {
+			<span class="badge">
+				if d.Mode == "teams" {
+					@components.IconClass("shieldT", "i-sm")
+					{ v.Tr("rooms.mode_teams") }
+				} else {
+					@components.IconClass("swords", "i-sm")
+					{ v.Tr("rooms.mode_ffa") }
+				}
+			</span>
+		}
+		if d.Mode == "teams" && !d.CanTeams {
+			<span class="help">{ v.Tr("rooms.teams_need", "n", 4) }</span>
+		}
+	</div>
+}
+
+// roomSides is the lobby in team mode: Team A against Team B, each with its players,
+// a way to cross over and — for the host — a way to deal them again (RM-05).
+templ roomSides(v *view.Ctx, d RoomData) {
+	<div class="teams">
+		for k, side := range d.Sides {
+			<section class={ "team", teamClass(k) }>
+				<div class="row">
+					<b class="tname">{ v.Tr(teamKey(k)) }</b>
+					<span class="spacer"></span>
+					<span class="help">{ v.Tr("rooms.team_players", "n", len(side)) }</span>
+				</div>
+				<ul class="team-list">
+					for _, m := range side {
+						<li>
+							@components.PersonAvatar(m.Initials, m.Color, "sm", false)
+							<span class="grow min0 t">{ m.Name }</span>
+							<span class="help">{ memberNote(v, m) }</span>
+						</li>
+					}
+					if len(side) == 0 {
+						<li class="help">{ v.Tr("rooms.team_empty") }</li>
+					}
+				</ul>
+				<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/teams/move") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<input type="hidden" name="team" value={ fmt.Sprint(k) }/>
+					<button class="btn btn-block" type="submit" disabled?={ d.MyTeam == int32(k) }>
+						{ v.Tr("rooms.move_here") }
+					</button>
+				</form>
+			</section>
+		}
+		if d.Host {
+			<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/teams/shuffle") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button class="btn btn-sm" type="submit">{ v.Tr("rooms.shuffle_teams") }</button>
+			</form>
+		}
+	</div>
+}
+
+// teamClass and teamKey keep Team A orange and Team B blue everywhere (BR-06).
+func teamClass(k int) string {
+	if k == 1 {
+		return "b"
+	}
+	return "a"
+}
+
+func teamKey(k int) string {
+	if k == 1 {
+		return "rooms.team_b"
+	}
+	return "rooms.team_a"
+}
+
+func pressed(on bool) string {
+	if on {
+		return "true"
+	}
+	return "false"
+}
+
+// ChatLine is one line of the room's chat: a player speaking, or the room saying who
+// arrived (RM-05).
+type ChatLine struct {
+	Author string
+	Body   string
+	System bool
+	Me     bool
+	// What was attached to the line, when it was a file rather than words (MS-02).
+	FileName string
+	FileURL  string
+}
+
+// RoomChat is the lobby's conversation. It asks for itself every few seconds and the
+// server answers "nothing new" unless there is, so the panel never redraws for
+// nothing (RM-05).
+templ RoomChat(v *view.Ctx, code string, lines []ChatLine, at string) {
+	<section
+		class="card chat"
+		id="room-chat"
+		hx-get={ "/rooms/" + code + "/chat?at=" + at }
+		hx-trigger="sj:live:rooms from:body, every 15s"
+		hx-swap="outerHTML"
+	>
+		<div class="card-head pad-head">
+			<h2>{ v.Tr("rooms.chat") }</h2>
+		</div>
+		<div class="chat-body" x-init="$el.scrollTop = $el.scrollHeight">
+			<p class="sys">{ v.Tr("rooms.chat_created") }</p>
+			for _, line := range lines {
+				if line.System {
+					<p class="sys">{ v.Tr("rooms.chat_joined", "name", line.Author) }</p>
+				} else {
+					<p class={ "msg", templ.KV("mine", line.Me) }>
+						<b>{ line.Author }</b>
+						if line.FileURL != "" {
+							<a class="chat-file" href={ templ.URL(line.FileURL) } download>
+								@components.IconClass("clip", "i-sm")
+								{ line.FileName }
+							</a>
+						}
+						if line.Body != "" {
+							{ " " }
+							{ line.Body }
+						}
+					</p>
+				}
+			}
+		</div>
+		<form
+			class="chat-foot"
+			method="post"
+			action={ templ.SafeURL("/rooms/" + code + "/chat") }
+			hx-post={ "/rooms/" + code + "/chat" }
+			hx-target="#room-chat"
+			hx-swap="outerHTML"
+			x-on:htmx:after-request="$el.reset()"
+		>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<label class="sr-only" for="chat-body">{ v.Tr("rooms.chat_placeholder") }</label>
+			<input
+				class="input"
+				id="chat-body"
+				name="body"
+				maxlength="200"
+				autocomplete="off"
+				placeholder={ v.Tr("rooms.chat_placeholder") }
+			/>
+			<button class="btn btn-primary" type="submit" aria-label={ v.Tr("messages.send") }>
+				@components.Icon("send")
+			</button>
+		</form>
+	</section>
+}
+
+// RoomNext is what sits under a question once it has been answered: who the room is
+// still waiting for, and then the few seconds before the next one — long enough to
+// rate the question or report it (RM-03).
+templ RoomNext(v *view.Ctx, code string, gameID string, position int32, done int, total int, ready bool) {
+	<div
+		id="room-next"
+		class="room-next"
+		if !ready {
+			hx-get={ fmt.Sprintf("/rooms/%s/next?at=%d", code, position) }
+			hx-trigger="sj:live:rooms from:body, every 15s"
+			hx-target="this"
+			hx-swap="outerHTML"
+		}
+	>
+		if ready {
+			<form
+				method="post"
+				action={ templ.SafeURL("/games/" + gameID + "/next") }
+				hx-post={ "/games/" + gameID + "/next" }
+				hx-target="#game-main"
+				hx-swap="outerHTML"
+				x-data="{ left: 5 }"
+				x-init="const t = setInterval(() => { if (--left <= 0) { clearInterval(t); $el.requestSubmit(); } }, 1000)"
+			>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button class="btn btn-primary" type="submit">
+					<span x-text={ fmt.Sprintf("`%s`", v.Tr("rooms.next_in", "n", "${left}")) }>{ v.Tr("game.next") }</span>
+					@components.IconClass("chevR", "flip")
+				</button>
+			</form>
+		} else {
+			<span class="help">{ v.Tr("rooms.waiting_for", "n", total-done) }</span>
+		}
+	</div>
+}
+
+// spaced writes a room code the way it is read out loud: 5V9 2DM.
+func spaced(code string) string {
+	if len(code) != 6 {
+		return code
+	}
+	return code[:3] + " " + code[3:]
+}
+
+// RoomStanding is one player of a shared game: their place, their score and what the
+// question on screen has just done to it (RM-04, RM-05, RM-07).
+type RoomStanding struct {
+	Name     string
+	Initials string
+	Color    string
+	Score    int32
+	Correct  int32
+	Done     bool
+	IsMe     bool
+	Guest    bool
+	Rank     int
+	// Team is 0, 1, or -1 when the room plays for itself.
+	Team int32
+	// The question on screen.
+	Answered bool
+	Revealed bool
+	CorrectThis bool
+	Gain     int32
+	// Share is this player's score as a percentage of the leader's, for the bar the
+	// design draws under each name.
+	Share int
+	ID    string
+	AvgMs int32
+	Streak int32
+}
+
+// ArenaData is the live state of a room around one question: the ranking in everyone
+// for themselves, the two totals and the tug bar in teams (RM-04, RM-05).
+type ArenaData struct {
+	Code     string
+	Teams    bool
+	Rows     []RoomStanding
+	Sides    [2][]RoomStanding
+	Totals   [2]int32
+	Gains    [2]int32
+	ShareA   int
+	Lead     int
+	Diff     int32
+	Answered int
+	Total    int
+	Position int32
+	Revealed bool
+}
+
+// RoomArena is the full-width bar over the question of a team game: Team A against
+// Team B, what each has just gained, and the tug bar between them. It is empty in
+// everyone-for-themselves, where the ranking lives in the side panel instead.
+templ RoomArena(v *view.Ctx, d ArenaData) {
+	<div
+		id="room-arena"
+		hx-get={ fmt.Sprintf("/rooms/%s/arena?at=%d", d.Code, d.Position-1) }
+		hx-trigger="sj:live:rooms from:body, every 15s"
+		hx-swap="outerHTML"
+	>
+		if d.Teams {
+			<section class="arena ar-teams" aria-live="polite">
+				<div class="ar-head">
+					<span class="ar-mode">
+						@components.IconClass("shieldT", "i-sm")
+						{ fmt.Sprintf("%s · %d v %d", v.Tr("rooms.mode_teams"), len(d.Sides[0]), len(d.Sides[1])) }
+					</span>
+					<span class="ar-note">
+						<span class="num">{ v.Tr("rooms.answered_count", "n", d.Answered, "total", d.Total) }</span>
+						<span class="ar-prog" aria-hidden="true">
+							<i style={ barWidth(d.Answered, d.Total) }></i>
+						</span>
+					</span>
+				</div>
+				<div class="tv">
+					@arenaSide(v, d, 0)
+					<div class="tv-mid">
+						<span class="vs-mid">{ v.Tr("challenges.vs") }</span>
+						<span class="tv-lead">
+							if d.Lead < 0 {
+								{ v.Tr("rooms.level_scores") }
+							} else {
+								{ v.Tr(teamKey(d.Lead)) + " +" + fmt.Sprint(d.Diff) }
+							}
+						</span>
+					</div>
+					@arenaSide(v, d, 1)
+				</div>
+				<div
+					class="tug"
+					role="img"
+					aria-label={ fmt.Sprintf("%s %d, %s %d", v.Tr("rooms.team_a"), d.Totals[0], v.Tr("rooms.team_b"), d.Totals[1]) }
+				>
+					<i class="ta" style={ flexBasis(d.ShareA) }></i>
+					<i class="tb" style={ flexBasis(100 - d.ShareA) }></i>
+				</div>
+			</section>
+		}
+	</div>
+}
+
+templ arenaSide(v *view.Ctx, d ArenaData, k int) {
+	<div class={ "tv-side", teamClass(k) }>
+		<div class="tv-top">
+			<span class={ "tv-name", "t" + teamClass(k) }>{ v.Tr(teamKey(k)) }</span>
+			<span class="tv-avs">
+				for _, r := range d.Sides[k] {
+					<span class={ "tv-av", templ.KV("me", r.IsMe) } title={ r.Name }>
+						@components.PersonAvatar(r.Initials, r.Color, "sm", false)
+						@answerMark(v, r)
+					</span>
+				}
+			</span>
+			<span class="tv-total num">{ fmt.Sprint(d.Totals[k]) }</span>
+			if d.Revealed && d.Gains[k] > 0 {
+				<span class="tv-gain num">{ "+" + fmt.Sprint(d.Gains[k]) }</span>
+			}
+		</div>
+	</div>
+}
+
+// answerMark is the dot beside a name: thinking, answered, then right or wrong once
+// the room has seen the answer. Never colour alone — each state carries its icon and
+// its label (BR-06, NF-07).
+templ answerMark(v *view.Ctx, r RoomStanding) {
+	if r.Revealed && r.Answered {
+		if r.CorrectThis {
+			<span class="st ok" title={ v.Tr("game.correct") }>
+				@components.IconClass("check", "i-sm")
+			</span>
+		} else {
+			<span class="st no" title={ v.Tr("game.wrong") }>
+				@components.IconClass("x", "i-sm")
+			</span>
+		}
+	} else if r.Answered {
+		<span class="st done" title={ v.Tr("rooms.answered") }>
+			@components.IconClass("check", "i-sm")
+		</span>
+	} else {
+		<span class="st wait" title={ v.Tr("rooms.thinking") }>
+			<span class="thinking"><i></i><i></i><i></i></span>
+		</span>
+	}
+}
+
+// LiveBoard is the column beside the question (P15): the ranking while everyone plays
+// for themselves, and what this question gave each player once the room is in teams.
+templ LiveBoard(v *view.Ctx, d ArenaData) {
+	<aside
+		class="card pad stack live-board game-side"
+		id="live-board"
+		hx-get={ fmt.Sprintf("/rooms/%s/board?at=%d", d.Code, d.Position-1) }
+		hx-trigger="sj:live:rooms from:body, every 15s"
+		hx-select="#live-board"
+		hx-swap="outerHTML"
+	>
+		<div class="card-head">
+			<h2 class="card-title">
+				if d.Teams {
+					{ v.Tr("rooms.this_question") }
+				} else {
+					{ v.Tr("rooms.live_board") }
+				}
+			</h2>
+			<span class="muted s">
+				if d.Revealed && d.Position > 0 {
+					{ v.Tr("rooms.after_question", "n", d.Position) }
+				} else {
+					{ v.Tr("rooms.answered_count", "n", d.Answered, "total", d.Total) }
+				}
+			</span>
+		</div>
+		<ol class="list flush">
+			for _, r := range d.Rows {
+				<li class={ "li", templ.KV("me", r.IsMe) }>
+					if !d.Teams {
+						<span class={ "rank num", templ.KV("r1", r.Rank == 1) }>{ fmt.Sprint(r.Rank) }</span>
+					}
+					@components.PersonAvatar(r.Initials, r.Color, "sm", false)
+					<span class="grow min0 stack gap-xs">
+						<span class="t">
+							if r.IsMe {
+								{ v.Tr("home.you") }
+							} else {
+								{ r.Name }
+							}
+							if r.Guest {
+								<span class="badge sm">{ v.Tr("guest.badge") }</span>
+							}
+						</span>
+						if !d.Teams {
+							<span class="bar" aria-hidden="true">
+								<i style={ flexBasis(r.Share) }></i>
+							</span>
+						}
+					</span>
+					if d.Teams && d.Revealed {
+						<b class={ "num", templ.KV("gain-ink", r.CorrectThis) }>
+							if r.CorrectThis {
+								{ "+" + fmt.Sprint(r.Gain) }
+							} else {
+								{ "0" }
+							}
+						</b>
+					} else {
+						<span class="stack end gap-xs">
+							<b class="num">{ fmt.Sprint(r.Score) }</b>
+							<span class={ "s", templ.KV("ok-ink", r.Answered), templ.KV("muted", !r.Answered) }>
+								if r.Answered {
+									{ v.Tr("rooms.answered") }
+								} else {
+									{ v.Tr("rooms.thinking") }
+								}
+							</span>
+						</span>
+					}
+				</li>
+			}
+		</ol>
+	</aside>
+}
+
+// barWidth and flexBasis keep the percentages out of the templates' class lists.
+func barWidth(done, total int) string {
+	if total <= 0 {
+		return "--v:0%"
+	}
+	return fmt.Sprintf("--v:%d%%", done*100/total)
+}
+
+func flexBasis(pct int) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return fmt.Sprintf("flex-basis:%d%%;width:%d%%", pct, pct)
+}
+
+// RoomAward is one of the three cards the design puts under a team result: the most
+// points, the fastest hand and the longest run of right answers (RM-07).
+type RoomAward struct {
+	Key      string
+	Name     string
+	Initials string
+	Color    string
+	Detail   string
+}
+
+// RoomResult backs P16, the podium. One struct for both shapes: a winner and a
+// podium when everyone played for themselves, two team cards when the room took
+// sides (RM-07).
+type RoomResult struct {
+	Code      string
+	Host      bool
+	GameID    string
+	Questions int
+	Rows      []RoomStanding
+	// Teams and what each side ended on.
+	Teams  bool
+	Sides  [2][]RoomStanding
+	Totals [2]int32
+	// Winner is the winning side, or -1 on a draw.
+	Winner int
+	Diff   int32
+	MyTeam int32
+	Awards []RoomAward
+	// MVP is the best score of the whole room, named on the winner's card.
+	MVP string
+	// Mine is the viewer's own line, for the "Your game" card beside the table.
+	Mine     RoomStanding
+	HasMine  bool
+	MyXP     int32
+	MyBestMs int32
+	DomainName string
+	// CanAddFriends is false for a guest: a guest can message other guests instead
+	// (RM-08, §4 of 03-BACKEND-CHANGES).
+	CanAddFriends bool
+	// Device marks a round played on one phone: the same podium, with its own two
+	// ways out and no room to go back to (DV-05).
+	Device bool
+}
+
+// RoomPodium is prototype screen 16 (RM-07).
+templ RoomPodium(v *view.Ctx, d RoomResult) {
+	@layouts.App(v, v.Tr("rooms.podium")) {
+		<div class="page mid res-page results-page" x-data={ podiumConfetti(d) }>
+			if d.Teams {
+				@teamHero(v, d)
+				if len(d.Awards) > 0 {
+					@roomAwards(v, d)
+				}
+				@roomResultActions(v, d)
+			} else {
+				@ffaHero(v, d)
+				@roomStandings(v, d)
+			}
+		</div>
+	}
+}
+
+// ffaHero is the winner of a room that played for itself: the room line, who took
+// the lamp, where the viewer came, and the three steps (RM-07).
+templ ffaHero(v *view.Ctx, d RoomResult) {
+	<section class="res-hero podium-hero">
+		<span class="eyebrow">{ roomLine(v, d) }</span>
+		if len(d.Rows) > 0 {
+			<h1>
+				if d.Rows[0].IsMe {
+					{ v.Tr("rooms.you_won") }
+				} else {
+					{ v.Tr("rooms.name_wins", "name", d.Rows[0].Name) }
+				}
+			</h1>
+			<p class="sub">{ ffaSubline(v, d) }</p>
+			if len(d.Rows) >= 3 {
+				<div class="podium">
+					@roomPodiumSlot(v, d.Rows, 1)
+					@roomPodiumSlot(v, d.Rows, 0)
+					@roomPodiumSlot(v, d.Rows, 2)
+				</div>
+			}
+		}
+	</section>
+}
+
+// ffaSubline is the line under the headline: where the viewer came, and how far off
+// the winner they were.
+func ffaSubline(v *view.Ctx, d RoomResult) string {
+	if !d.HasMine {
+		return v.Tr("rooms.podium_line", "questions", d.Questions, "players", len(d.Rows))
+	}
+	line := v.Tr("rooms.you_finished_of", "rank", ordinal(v, d.Mine.Rank), "players", len(d.Rows))
+	if d.Mine.Rank > 1 && len(d.Rows) > 0 {
+		line += " " + v.Tr("rooms.points_from_first", "n", d.Rows[0].Score-d.Mine.Score)
+	}
+	return line
+}
+
+// ordinal writes a place the way each language does: 2nd, 2e, and plain digits in
+// Arabic, where the sentence around it carries the order (LG-05).
+func ordinal(v *view.Ctx, n int) string {
+	switch v.Lang {
+	case "fr":
+		if n == 1 {
+			return "1er"
+		}
+		return fmt.Sprintf("%de", n)
+	case "ar":
+		return fmt.Sprint(n)
+	}
+	switch {
+	case n%100 >= 11 && n%100 <= 13:
+		return fmt.Sprintf("%dth", n)
+	case n%10 == 1:
+		return fmt.Sprintf("%dst", n)
+	case n%10 == 2:
+		return fmt.Sprintf("%dnd", n)
+	case n%10 == 3:
+		return fmt.Sprintf("%drd", n)
+	}
+	return fmt.Sprintf("%dth", n)
+}
+
+// roomLine is the small line over every result: which room, which domain, how long.
+func roomLine(v *view.Ctx, d RoomResult) string {
+	parts := []string{}
+	if d.Device {
+		parts = append(parts, v.Tr("round.this_device"))
+	} else {
+		parts = append(parts, v.Tr("rooms.room_code", "code", spaced(d.Code)))
+	}
+	if d.DomainName != "" {
+		parts = append(parts, d.DomainName)
+	}
+	if d.Teams {
+		parts = append(parts, v.Tr("rooms.mode_teams"))
+	}
+	parts = append(parts, v.Tr("rooms.n_questions", "n", d.Questions))
+	return strings.Join(parts, " · ")
+}
+
+// teamHero is the result of a room that took sides: both totals, who won and by how
+// much, and the room's best player (RM-07).
+templ teamHero(v *view.Ctx, d RoomResult) {
+	<section class={ "res-hero teams-hero", winnerClass(d.Winner) }>
+		<span class="eyebrow">{ roomLine(v, d) }</span>
+		<h1>
+			if d.Winner < 0 {
+				{ v.Tr("rooms.draw") }
+			} else {
+				{ v.Tr("rooms.team_wins_score", "team", v.Tr(teamKey(d.Winner)), "high", d.Totals[high(d.Totals)], "low", d.Totals[1-high(d.Totals)]) }
+			}
+		</h1>
+		@teamCards(v, d)
+	</section>
+}
+
+// winnerClass tilts the split background towards whoever won, as the design does.
+func winnerClass(winner int) string {
+	switch winner {
+	case 0:
+		return "won-a"
+	case 1:
+		return "won-b"
+	}
+	return "drawn"
+}
+
+// high is the side with the bigger total, so the headline reads "742 to 655".
+func high(totals [2]int32) int {
+	if totals[1] > totals[0] {
+		return 1
+	}
+	return 0
+}
+
+templ teamResultSide(v *view.Ctx, d RoomResult, k int) {
+	<div class={ "side", "t" + teamClass(k), templ.KV("lost", d.Winner >= 0 && d.Winner != k) }>
+		<span class={ "tv-name", "t" + teamClass(k) }>
+			if d.Winner == k {
+				@components.IconClass("crown", "i-sm")
+			} else {
+				@components.IconClass("shieldT", "i-sm")
+			}
+			{ v.Tr(teamKey(k)) }
+		</span>
+		<span class="big num">{ fmt.Sprint(d.Totals[k]) }</span>
+		<span class="help">{ v.Tr("rooms.team_players", "n", len(d.Sides[k])) }</span>
+	</div>
+}
+
+// teamCards is one card per side: who played for it, what each of them scored, and
+// how the team's points were shared out (RM-07).
+templ teamCards(v *view.Ctx, d RoomResult) {
+	<div class="team-cards">
+		for k, side := range d.Sides {
+			<section class={ "tcard", "t" + teamClass(k), templ.KV("won", d.Winner == k) }>
+				<div class="tcard-h">
+					<span class="tname">{ v.Tr(teamKey(k)) }</span>
+					if d.Winner == k {
+						<span class="badge gold">{ v.Tr("rooms.winner") }</span>
+					}
+					<span class="tot num">{ fmt.Sprint(d.Totals[k]) }</span>
+				</div>
+				<ul class="tmem">
+					for _, r := range side {
+						<li class={ templ.KV("me", r.IsMe) }>
+							@components.PersonAvatar(r.Initials, r.Color, "sm", false)
+							<span class="grow min0 t">
+								if r.IsMe {
+									{ v.Tr("home.you") }
+								} else {
+									{ r.Name }
+								}
+							</span>
+							<span class="num s">{ fmt.Sprintf("%d/%d", r.Correct, d.Questions) }</span>
+							<b class="num">{ fmt.Sprint(r.Score) }</b>
+						</li>
+					}
+				</ul>
+			</section>
+		}
+	</div>
+}
+
+// roomStandings is the design's table under the podium — place, player, how many
+// they got right, how fast they answered and what it came to — beside the viewer's
+// own card and the ways out of the room (RM-07, RM-08).
+templ roomStandings(v *view.Ctx, d RoomResult) {
+	<div class="cols res-cols">
+		<section class="card col-main table-card">
+			<table class="table">
+				<thead>
+					<tr>
+						<th class="num">#</th>
+						<th>{ v.Tr("rooms.player") }</th>
+						<th class="num">{ v.Tr("rooms.correct") }</th>
+						<th class="num">{ v.Tr("rooms.avg_time") }</th>
+						<th class="num">{ v.Tr("rooms.points") }</th>
+					</tr>
+				</thead>
+				<tbody>
+					for i, r := range d.Rows {
+						<tr class={ templ.KV("me", r.IsMe) }>
+							<td class="num">{ fmt.Sprint(i + 1) }</td>
+							<td>
+								<span class="row gap-sm">
+									@components.PersonAvatar(r.Initials, r.Color, "sm", false)
+									<span class="t">
+										if r.IsMe {
+											{ v.Tr("home.you") }
+										} else {
+											{ r.Name }
+										}
+									</span>
+									if r.Guest {
+										<span class="badge sm">{ v.Tr("guest.badge") }</span>
+									}
+									@addPersonButton(v, d, r)
+								</span>
+							</td>
+							<td class="num">{ fmt.Sprintf("%d/%d", r.Correct, d.Questions) }</td>
+							<td class="num">{ v.Tr("rooms.seconds_short", "s", Seconds(r.AvgMs)) }</td>
+							<td class="num b">{ fmt.Sprint(r.Score) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+		<aside class="col-side stack gap-md">
+			if d.HasMine {
+				<section class="card pad stack gap-sm">
+					<h2>{ v.Tr("rooms.your_game") }</h2>
+					<div class="set-line">
+						<span>{ v.Tr("rooms.correct") }</span>
+						<b class="num">{ fmt.Sprintf("%d / %d", d.Mine.Correct, d.Questions) }</b>
+					</div>
+					<div class="set-line">
+						<span>{ v.Tr("rooms.fastest_answer") }</span>
+						<b class="num">{ v.Tr("rooms.seconds_short", "s", Seconds(d.MyBestMs)) }</b>
+					</div>
+					<div class="set-line">
+						<span>{ v.Tr("rooms.xp_earned") }</span>
+						<b class="num gain-ink">{ "+" + fmt.Sprint(d.MyXP) }</b>
+					</div>
+				</section>
+			}
+			@roomResultActions(v, d)
+		</aside>
+	</div>
+}
+
+// addPersonButton is the one thing a result lets you do about someone you just met:
+// add them, or message a guest you played beside (RM-08).
+templ addPersonButton(v *view.Ctx, d RoomResult, r RoomStanding) {
+	if !r.IsMe && r.ID != "" {
+		if r.Guest && v.IsGuest() {
+			<a class="btn btn-sm" href={ templ.URL("/messages?with=" + r.ID) }>{ v.Tr("action.message") }</a>
+		} else if !r.Guest && d.CanAddFriends {
+			<form method="post" action="/friend-requests">
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<input type="hidden" name="to" value={ r.ID }/>
+				<input type="hidden" name="name" value={ r.Name }/>
+				<input type="hidden" name="back" value={ "/rooms/" + d.Code + "/podium" }/>
+				<button class="btn btn-sm" type="submit" aria-label={ v.Tr("friends.add") + " " + r.Name }>
+					@components.IconClass("plus", "i-sm")
+				</button>
+			</form>
+		}
+	}
+}
+
+// roomRow is one line of a standings list: the place, who it was, what they scored,
+// how far behind the winner — and the one thing you can do about them afterwards:
+// add a friend, or message a guest you just met (RM-08).
+templ roomRow(v *view.Ctx, d RoomResult, r RoomStanding, place int) {
+	<li class={ "li", templ.KV("me", r.IsMe) }>
+		<span class={ "rank num", templ.KV("r1", place == 1) }>{ fmt.Sprint(place) }</span>
+		@components.PersonAvatar(r.Initials, r.Color, "sm", false)
+		<span class="grow min0">
+			<span class="t">
+				if r.IsMe {
+					{ v.Tr("home.you") }
+				} else {
+					{ r.Name }
+				}
+			</span>
+			if r.Guest {
+				<span class="badge sm">{ v.Tr("guest.badge") }</span>
+			}
+			if r.Name == d.MVP && d.Teams {
+				<span class="badge gold sm">
+					@components.IconClass("star", "i-sm")
+					{ v.Tr("rooms.mvp_badge") }
+				</span>
+			}
+			if place > 1 && len(d.Rows) > 0 && !d.Teams {
+				<span class="help num">{ "−" + fmt.Sprint(d.Rows[0].Score-r.Score) }</span>
+			}
+		</span>
+		<b class="num">{ v.Tr("rooms.points_short", "n", r.Score) }</b>
+		if !r.IsMe && r.ID != "" {
+			if r.Guest && v.IsGuest() {
+				<a class="btn btn-sm" href={ templ.URL("/messages?with=" + r.ID) }>
+					@components.IconClass("chat", "i-sm flip")
+					{ v.Tr("action.message") }
+				</a>
+			} else if !r.Guest && d.CanAddFriends {
+				<form method="post" action="/friend-requests">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<input type="hidden" name="to" value={ r.ID }/>
+					<input type="hidden" name="name" value={ r.Name }/>
+					<input type="hidden" name="back" value={ "/rooms/" + d.Code + "/podium" }/>
+					<button class="btn btn-sm" type="submit">
+						@components.IconClass("plus", "i-sm")
+						{ v.Tr("friends.add") }
+					</button>
+				</form>
+			}
+		}
+	</li>
+}
+
+// roomAwards is the row of three cards the design closes a team result with.
+templ roomAwards(v *view.Ctx, d RoomResult) {
+	<div class="award-row">
+		for _, a := range d.Awards {
+			<section class="card pad award">
+				<span class="eyebrow">{ v.Tr("rooms.award_" + a.Key) }</span>
+				<div class="row gap-sm">
+					@components.PersonAvatar(a.Initials, a.Color, "sm", false)
+					<span class="min0">
+						<b class="block">{ a.Name }</b>
+						<span class="help">{ a.Detail }</span>
+					</span>
+				</div>
+			</section>
+		}
+	</div>
+}
+
+// roomResultActions is the last row of P16: play the same room again — keeping the
+// teams, as §2 of 03-BACKEND-CHANGES asks — deal the teams again, or walk away.
+templ roomResultActions(v *view.Ctx, d RoomResult) {
+	<div class="row wrap gap-sm center">
+		if d.Device {
+			<form method="post" action="/round/device/again">
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<input type="hidden" name="game" value={ d.GameID }/>
+				<button class="btn btn-primary btn-lg" type="submit">
+					@components.IconClass("tri", "flip")
+					{ v.Tr("round.again_same_players") }
+				</button>
+			</form>
+			<a class="btn btn-lg" href="/challenges/new?who=device">{ v.Tr("round.change_round") }</a>
+			if d.GameID != "" {
+				<a class="btn btn-ghost btn-lg" href={ templ.URL("/games/" + d.GameID + "/results") }>{ v.Tr("rooms.review_mine") }</a>
+			}
+		} else if d.Host {
+			<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/again") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button class="btn btn-primary btn-lg" type="submit">
+					@components.IconClass("tri", "flip")
+					if d.Teams {
+						{ v.Tr("rooms.rematch_same_teams") }
+					} else {
+						{ v.Tr("rooms.play_again_here") }
+					}
+				</button>
+			</form>
+			if d.Teams {
+				<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/teams/shuffle") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-lg" type="submit">
+						@components.IconClass("shuffle", "i-sm")
+						{ v.Tr("rooms.shuffle_teams") }
+					</button>
+				</form>
+			} else {
+				<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/mode") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<input type="hidden" name="mode" value="teams"/>
+					<button class="btn btn-lg" type="submit">
+						@components.IconClass("shieldT", "i-sm")
+						{ v.Tr("rooms.switch_to_teams") }
+					</button>
+				</form>
+			}
+		}
+		if !d.Device {
+			<a class="btn btn-lg" href={ templ.URL("/rooms/" + d.Code) }>{ v.Tr("rooms.back_to_lobby") }</a>
+			if d.GameID != "" {
+				<a class="btn btn-ghost btn-lg" href={ templ.URL("/games/" + d.GameID + "/results") }>{ v.Tr("rooms.review_mine") }</a>
+			}
+			<form method="post" action={ templ.SafeURL("/rooms/" + d.Code + "/leave") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button class="btn btn-ghost btn-lg" type="submit">{ v.Tr("rooms.leave") }</button>
+			</form>
+		}
+	</div>
+}
+
+templ roomPodiumSlot(v *view.Ctx, rows []RoomStanding, i int) {
+	if i < len(rows) {
+		<div class={ "pod", fmt.Sprintf("p%d", i+1) }>
+			@components.PersonAvatar(rows[i].Initials, rows[i].Color, "lg", false)
+			<b>
+				if rows[i].IsMe {
+					{ v.Tr("home.you") }
+				} else {
+					{ rows[i].Name }
+				}
+			</b>
+			<span class="pts num">{ fmt.Sprint(rows[i].Score) }</span>
+			<div class="block">{ fmt.Sprint(i + 1) }</div>
+		</div>
+	} else {
+		<div></div>
+	}
+}
+
+// resultLine joins the verdict and the room's best player into one sentence, so the
+// template never emits a stray separator when there is no MVP to name.
+func resultLine(verdict, mvp, mvpLine string) string {
+	if mvp == "" {
+		return verdict
+	}
+	return verdict + " · " + mvpLine
+}
+
+// Seconds writes a span of milliseconds the way the design reads it: 4.1.
+func Seconds(ms int32) string { return fmt.Sprintf("%.1f", float64(ms)/1000) }
+
+// share is one player's slice of their team's points, never thinner than a sliver so
+// a quiet teammate is still visible on the bar (RM-07).
+func share(score, total int32, members int) int {
+	if total <= 0 {
+		if members == 0 {
+			return 100
+		}
+		return 100 / members
+	}
+	pct := int(score * 100 / total)
+	if pct < 4 {
+		return 4
+	}
+	return pct
+}
+
+func copyData(text string) string {
+	return "{ copy() { navigator.clipboard?.writeText('" + text + "'); window.sjToast?.('" + text + "') } }"
+}
+
+// podiumConfetti fires when the viewer's own side took it (RS-01, motion rules).
+func podiumConfetti(d RoomResult) string {
+	if d.Teams {
+		if d.Winner >= 0 && d.MyTeam == int32(d.Winner) {
+			return "sjConfetti"
+		}
+		return "{}"
+	}
+	if len(d.Rows) > 0 && d.Rows[0].IsMe {
+		return "sjConfetti"
+	}
+	return "{}"
+}

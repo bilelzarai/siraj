@@ -1,0 +1,43 @@
+{
+  "editor.formatOnSave": true,
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "go.toolsManagement.autoUpdate": true,
+  "go.testFlags": [
+    "-count=1"
+  ],
+  "files.associations": {
+    "*.templ": "templ"
+  },
+  "files.exclude": {
+    "tmp": true
+  },
+  "search.exclude": {
+    "internal/db/sqlc": true,
+    "docs/design/assets": true
+  },
+  "sqltools.connections": [
+    {
+      "name": "Sirāj (local)",
+      "driver": "PostgreSQL",
+      "server": "localhost",
+      "port": 5442,
+      "database": "siraj",
+      "username": "siraj",
+      "password": "secret",
+      "previewLimit": 50
+    }
+  ],
+  "rest-client.environmentVariables": {
+    "local": {
+      "base": "http://localhost:8080/api/v1"
+    }
+  },
+  "css.lint.unknownAtRules": "ignore",
+  "scss.lint.unknownAtRules": "ignore",
+  "less.lint.unknownAtRules": "ignore"
+}

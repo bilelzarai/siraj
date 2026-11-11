@@ -1,39 +1,24 @@
-# Every env file, not only `.env`: a `.env.production` or a `.env.bak` holds the
-# same credentials and the bare name matched neither.
 .env
-.env.*
-!.env.example
-/bin/
-/tmp/
-*.log
-data/
-
-# Saved pages and scratch captures that land in the working directory.
-*.html
-!internal/**/*.html
-
-# Editor and OS leavings.
-.idea/
-.vscode/
-*.swp
+tmp/
+bin/
+web/dist/
+!web/dist/.gitkeep
+node_modules/
+*.exe
+*.test
+*.out
 .DS_Store
 
-# Build and coverage output.
-/dist/
-*.out
-coverage.*
-
-# Compiled binaries built into the repository root. bin/ is the one home for
-# build output; anything here is a stray that survives every checkout unnoticed.
-/sirajctl
+# Binaries and runtime state: scripts/app.sh builds into tmp/, the Docker image into
+# /out, and neither belongs in the repo. `server`, `devseed` and `server.pid` were
+# tracked by accident — 41 MB of build output in a source tree.
 /server
+/worker
+/devseed
+/server.pid
+*.pid
+*.log
 
-# An empty directory at the root that shadows internal/i18n/locales, which is
-# where the catalogues actually are. It has been deleted once; this stops it
-# coming back and misfiling the next person's translation keys.
-/locales/
-.neon
-node_modules/
-
-# Build output: the bundler writes it, the binary embeds it.
-static/dist/
+# Runtime data the app writes: UPLOADS_DIR (./var/uploads) and the generated
+# api-docs.html. Content, not source.
+/var/

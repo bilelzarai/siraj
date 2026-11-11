@@ -1,262 +1,126 @@
+// Package config turns environment variables into a typed Config.
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/joho/godotenv"
 )
 
-// Config holds every runtime knob, resolved from the environment.
 type Config struct {
-	Env             string
-	Addr            string
-	BaseURL         string
-	DatabaseURL     string
-	SessionSecret   string
-	SessionLifetime time.Duration
-	SecureCookies   bool
-	DefaultLocale   string
-	Seed            bool
+	Env         string        // development | production
+	HTTPAddr    string        // e.g. :8080
+	DatabaseURL string        // postgres://user:pass@host:5432/db?sslmode=disable
+	SessionTTL  time.Duration // how long a session token stays valid
+	GuestTTL    time.Duration // how long a guest account lives
 
-	// TrustedProxyHops is how many reverse proxies sit in front of this
-	// process. Zero — the default — means the peer address is taken from the
-	// connection and X-Forwarded-For is ignored entirely, because a header
-	// anyone can set must not decide who the rate limiter is throttling.
-	TrustedProxyHops int
+	BaseURL       string // public URL, used in emails and share links
+	ViteDevServer string // http://localhost:5173 in development, empty in production
+	StorageDriver string // local | s3  (decision D-02)
+	UploadsDir    string // where the local driver writes
 
-	// UploadDir is where sent files land. On disk rather than in the database:
-	// a thread of photographs would otherwise turn every backup into a media
-	// library. Empty disables uploads entirely, which is what a deployment
-	// with no writable volume wants.
-	UploadDir      string
-	MaxUploadBytes int64
-	// MaxFilesPerMessage is how many attachments one send may carry. Picking
-	// six photographs and having five arrive is worse than being told five is
-	// the limit, so the number is answered before anything is stored.
-	MaxFilesPerMessage int
+	SMTPAddr       string // host:port of a mail server; empty logs the mails instead
+	MailFrom       string
+	GoogleClientID string // sign in with Google (endpoint 3); empty disables the button
+	AppleClientID  string // sign in with Apple; empty disables the button
+	SMSProvider    string // gateway for the one-time codes; empty logs them instead
 
-	// ViteDevServer is the origin the asset dev server answers on. Empty
-	// everywhere but a developer's laptop, and ignored outright in production:
-	// it widens the content policy, and a policy an environment variable can
-	// relax on a live deployment is not a policy.
-	ViteDevServer string
-
-	SMTP      SMTPConfig
-	Translate TranslateConfig
+	// CORSOrigins are the origins allowed to call /api/v1 from a browser: a mobile
+	// app does not need them, a web client on another host does. Empty means no
+	// cross-origin call is answered; "*" allows any (development only).
+	CORSOrigins []string
 }
 
-// SMTPConfig drives outbound mail. With Host empty the mailer logs instead of
-// sending, so development works with nothing configured.
-type SMTPConfig struct {
-	Host      string
-	Port      int
-	Username  string
-	Password  string
-	FromEmail string
-	FromName  string
-	StartTLS  bool
+func (c Config) IsDev() bool { return c.Env != "production" }
+
+// Load reads .env (if present, without overriding real env vars) and then the environment.
+func Load() (Config, error) {
+	loadDotEnv(".env")
+	c := Config{
+		Env:         get("APP_ENV", "development"),
+		HTTPAddr:    get("HTTP_ADDR", ":8080"),
+		DatabaseURL: get("DATABASE_URL", ""),
+		SessionTTL:  time.Duration(getInt("SESSION_TTL_HOURS", 24*30)) * time.Hour,
+		GuestTTL:    time.Duration(getInt("GUEST_TTL_HOURS", 24)) * time.Hour,
+
+		BaseURL:       get("BASE_URL", "http://localhost:8080"),
+		ViteDevServer: get("VITE_DEV_SERVER", ""),
+		StorageDriver: get("STORAGE_DRIVER", "local"),
+		UploadsDir:    get("UPLOADS_DIR", "./var/uploads"),
+
+		SMTPAddr:       get("SMTP_ADDR", ""),
+		MailFrom:       get("MAIL_FROM", "Siraj <no-reply@siraj.app>"),
+		GoogleClientID: get("GOOGLE_CLIENT_ID", ""),
+		AppleClientID:  get("APPLE_CLIENT_ID", ""),
+		SMSProvider:    get("SMS_PROVIDER", ""),
+		CORSOrigins:    list(get("CORS_ORIGINS", "")),
+	}
+	if c.Env == "production" {
+		c.ViteDevServer = "" // production always serves the built assets
+	}
+	if c.DatabaseURL == "" {
+		return c, fmt.Errorf("DATABASE_URL is not set (copy .env.example to .env)")
+	}
+	return c, nil
 }
 
-func (s SMTPConfig) Enabled() bool { return s.Host != "" && s.FromEmail != "" }
-
-// TranslateConfig selects the machine-translation backend. Provider "none"
-// (the default) means content must be translated by hand.
-type TranslateConfig struct {
-	Provider string // none | claude | libretranslate
-
-	AnthropicKey   string
-	AnthropicModel string
-
-	LibreURL string
-	LibreKey string
+// list splits a comma-separated variable, dropping the blanks around it.
+func list(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
-// Load reads .env (if present) and builds the config, failing loudly on
-// anything that would produce a silently broken server.
-func Load() (*Config, error) {
-	_ = godotenv.Load()
-
-	cfg := &Config{
-		Env:             env("APP_ENV", "development"),
-		Addr:            env("APP_ADDR", ":8080"),
-		BaseURL:         strings.TrimRight(env("BASE_URL", ""), "/"),
-		DatabaseURL:     env("DATABASE_URL", ""),
-		SessionSecret:   env("SESSION_SECRET", ""),
-		SessionLifetime: envDuration("SESSION_LIFETIME", 30*24*time.Hour),
-		SecureCookies:   envBool("SECURE_COOKIES", false),
-		DefaultLocale:   env("DEFAULT_LOCALE", "ar"),
-		// Off by default: loading the question bank is a deliberate one-off
-		// (sirajctl seed), not something a restart should decide.
-		Seed: envBool("SEED_ON_START", false),
-
-		TrustedProxyHops: envInt("TRUSTED_PROXY_HOPS", 0),
-
-		UploadDir:      env("UPLOAD_DIR", "data/uploads"),
-		MaxUploadBytes: int64(envInt("MAX_UPLOAD_MB", 8)) * 1 << 20,
-
-		MaxFilesPerMessage: envInt("MAX_FILES_PER_MESSAGE", 5),
-
-		// The asset dev server, admitted to the content policy in development
-		// only. Read here but ignored outside development on purpose: a policy
-		// that an environment variable can relax on a live deployment is not a
-		// policy.
-		ViteDevServer: env("VITE_DEV_SERVER", ""),
-
-		SMTP: SMTPConfig{
-			Host:      env("SMTP_HOST", ""),
-			Port:      envInt("SMTP_PORT", 587),
-			Username:  env("SMTP_USERNAME", ""),
-			Password:  env("SMTP_PASSWORD", ""),
-			FromEmail: env("SMTP_FROM_EMAIL", ""),
-			FromName:  env("SMTP_FROM_NAME", "Sirāj"),
-			StartTLS:  envBool("SMTP_STARTTLS", true),
-		},
-
-		Translate: TranslateConfig{
-			Provider:       env("TRANSLATE_PROVIDER", "none"),
-			AnthropicKey:   env("ANTHROPIC_API_KEY", ""),
-			AnthropicModel: env("ANTHROPIC_MODEL", "claude-opus-5"),
-			LibreURL:       strings.TrimRight(env("LIBRETRANSLATE_URL", ""), "/"),
-			LibreKey:       env("LIBRETRANSLATE_API_KEY", ""),
-		},
-	}
-
-	if cfg.DatabaseURL == "" {
-		return nil, fmt.Errorf("DATABASE_URL is required")
-	}
-
-	if cfg.BaseURL == "" {
-		// Invite links need an absolute URL; derive a usable default locally.
-		host := cfg.Addr
-		if strings.HasPrefix(host, ":") {
-			host = "localhost" + host
-		}
-		cfg.BaseURL = "http://" + host
-		if cfg.IsProduction() {
-			return nil, fmt.Errorf("BASE_URL is required in production (used for invite links)")
-		}
-	}
-
-	switch cfg.Translate.Provider {
-	case "", "none":
-		cfg.Translate.Provider = "none"
-	case "claude":
-		if cfg.Translate.AnthropicKey == "" {
-			return nil, fmt.Errorf("TRANSLATE_PROVIDER=claude requires ANTHROPIC_API_KEY")
-		}
-	case "libretranslate":
-		if cfg.Translate.LibreURL == "" {
-			return nil, fmt.Errorf("TRANSLATE_PROVIDER=libretranslate requires LIBRETRANSLATE_URL")
-		}
-	default:
-		return nil, fmt.Errorf("unknown TRANSLATE_PROVIDER %q (want none, claude or libretranslate)",
-			cfg.Translate.Provider)
-	}
-
-	// Zero would be a composer whose attach button can never produce a send,
-	// and the ceiling on the request body is derived from this.
-	if cfg.MaxFilesPerMessage < 1 {
-		return nil, fmt.Errorf("MAX_FILES_PER_MESSAGE must be at least 1 (got %d)", cfg.MaxFilesPerMessage)
-	}
-
-	if cfg.TrustedProxyHops < 0 {
-		return nil, fmt.Errorf("TRUSTED_PROXY_HOPS cannot be negative (got %d)", cfg.TrustedProxyHops)
-	}
-
-	if cfg.SessionSecret == "" {
-		if cfg.IsProduction() {
-			return nil, fmt.Errorf("SESSION_SECRET is required in production")
-		}
-		// Dev convenience: a throwaway secret so the server still boots.
-		// Flashes signed before a restart stop verifying, which is fine locally.
-		buf := make([]byte, 32)
-		if _, err := rand.Read(buf); err != nil {
-			return nil, err
-		}
-		cfg.SessionSecret = hex.EncodeToString(buf)
-	} else if len(cfg.SessionSecret) < 32 {
-		// A short secret is worse than no secret: it boots, looks configured,
-		// and is brute-forceable. Refuse it everywhere, not only in production,
-		// so the mistake is caught on the developer's machine.
-		return nil, fmt.Errorf("SESSION_SECRET must be at least 32 characters (got %d)",
-			len(cfg.SessionSecret))
-	}
-
-	if cfg.IsProduction() {
-		// Session cookies without Secure travel in clear over any plain-HTTP
-		// hop. Forgetting one environment variable must not silently downgrade
-		// every session on the deployment.
-		if !cfg.SecureCookies {
-			return nil, fmt.Errorf("SECURE_COOKIES must be true in production; " +
-				"set SECURE_COOKIES=true once the site is served over HTTPS")
-		}
-		if !strings.HasPrefix(cfg.BaseURL, "https://") {
-			return nil, fmt.Errorf("BASE_URL must be https:// in production (got %q); "+
-				"password-reset and invite links are sent by email", cfg.BaseURL)
-		}
-	}
-
-	return cfg, nil
-}
-
-func (c *Config) IsProduction() bool { return c.Env == "production" }
-
-// FilesPerMessage is MaxFilesPerMessage with a floor under it. Load refuses a
-// configured zero, but a Config assembled in code has one by default, and a
-// zero here is a composer whose attach button can never produce a send —
-// every file refused as one too many.
-func (c *Config) FilesPerMessage() int {
-	if c.MaxFilesPerMessage < 1 {
-		return 1
-	}
-	return c.MaxFilesPerMessage
-}
-
-func env(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+func get(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
 	}
-	return fallback
+	return def
 }
 
-func envBool(key string, fallback bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
+func getInt(key string, def int) int {
+	if v, err := strconv.Atoi(get(key, "")); err == nil {
+		return v
 	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return fallback
-	}
-	return b
+	return def
 }
 
-func envInt(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
+// loadDotEnv is a tiny KEY=VALUE reader so the server runs the same from VS Code, air or
+// a terminal. It walks up a few directories, so `go test ./tests/...` finds the same file.
+func loadDotEnv(name string) {
+	path := name
+	for i := 0; i < 4; i++ {
+		if _, err := os.Stat(path); err == nil {
+			break
+		}
+		path = filepath.Join("..", path)
 	}
-	n, err := strconv.Atoi(v)
+	f, err := os.Open(path)
 	if err != nil {
-		return fallback
+		return
 	}
-	return n
-}
-
-func envDuration(key string, fallback time.Duration) time.Duration {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k, v = strings.TrimSpace(k), strings.Trim(strings.TrimSpace(v), `"'`)
+		if _, exists := os.LookupEnv(k); !exists {
+			os.Setenv(k, v)
+		}
 	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return fallback
-	}
-	return d
 }

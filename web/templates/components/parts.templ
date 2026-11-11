@@ -1,0 +1,190 @@
+package components
+
+import (
+	"fmt"
+	"siraj/internal/view"
+)
+
+// Badge is a small label: "New", a level, a count.
+templ Badge(text string, class string) {
+	<span class={ "badge", class }>{ text }</span>
+}
+
+// Count is the number badge on navigation entries (CH-11).
+templ Count(n int, class string) {
+	if n > 0 {
+		<span class={ "count", class }>{ fmt.Sprint(n) }</span>
+	}
+}
+
+// Avatar draws initials in a coloured circle; guests get the guest circle.
+templ Avatar(v *view.Ctx, size string) {
+	if v.IsGuest() {
+		<span class={ "av", "guest", size }>G</span>
+	} else {
+		<span class={ "av", size }>{ v.Initials() }</span>
+	}
+}
+
+// PersonAvatar is another player's avatar.
+templ PersonAvatar(initials string, color string, size string, online bool) {
+	<span class={ "av", size } style={ "--c:" + color }>
+		{ initials }
+		if online {
+			<span class="dot"></span>
+		}
+	</span>
+}
+
+// Empty is the empty state of a list: icon, title, one line, optional action.
+templ Empty(icon string, title string, body string) {
+	<div class="empty">
+		<span class="e-ic">
+			@IconClass(icon, "i-lg")
+		</span>
+		<h3>{ title }</h3>
+		if body != "" {
+			<p class="muted">{ body }</p>
+		}
+		{ children... }
+	</div>
+}
+
+// Pager is page-number paging for lists (domains, mastery, sets): 6 per page + search.
+templ Pager(page int, pages int, hrefFor func(int) string, v *view.Ctx) {
+	if pages > 1 {
+		<nav class="pager" aria-label={ v.Tr("action.next_page") }>
+			@PagerArrow(hrefFor(page-1), "chevL", v.Tr("action.previous_page"), page > 1, nil)
+			<span class="pg-info num">{ fmt.Sprintf("%d / %d", page, pages) }</span>
+			@PagerArrow(hrefFor(page+1), "chevR", v.Tr("action.next_page"), page < pages, nil)
+		</nav>
+	}
+}
+
+// PagerArrow is one end of a pager: a link while there is a page that way, and an
+// inert marker once the list is at that end — never a button that looks alive and
+// lands on the page it is already showing (NF-02). hx carries the htmx attributes of
+// the pagers that swap their list in place; pass nil for a plain link.
+templ PagerArrow(href string, icon string, label string, canMove bool, hx templ.Attributes) {
+	if canMove {
+		<a class="pg" href={ templ.URL(href) } aria-label={ label } { hx... }>
+			@IconClass(icon, "flip")
+		</a>
+	} else {
+		<span class="pg" aria-disabled="true" aria-label={ label }>
+			@IconClass(icon, "flip")
+		</span>
+	}
+}
+
+// Modal is a centred dialog. It is driven by Alpine (x-data="sjOverlay") in the page,
+// so the markup stays server-rendered and htmx can swap its body.
+templ Modal(title string, v *view.Ctx) {
+	<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+	<div
+		class="ov modal"
+		role="dialog"
+		aria-modal="true"
+		x-show="open"
+		x-on:keydown.escape.window="hide()"
+		x-on:keyup.escape.window="hide()"
+		x-trap="open"
+	>
+		<div class="modal-head">
+			<h2>{ title }</h2>
+			<button type="button" class="icon-btn" x-on:click="hide()" aria-label={ v.Tr("action.close") }>
+				@Icon("x")
+			</button>
+		</div>
+		<div class="modal-body">
+			{ children... }
+		</div>
+	</div>
+}
+
+// Drawer slides in from the side (report, comments, question editor, mastery).
+templ Drawer(title string, v *view.Ctx) {
+	<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+	<aside
+		class="ov drawer"
+		role="dialog"
+		aria-modal="true"
+		x-show="open"
+		x-on:keydown.escape.window="hide()"
+		x-on:keyup.escape.window="hide()"
+		x-trap="open"
+	>
+		<div class="dr-head">
+			<h2>{ title }</h2>
+			<button type="button" class="icon-btn" x-on:click="hide()" aria-label={ v.Tr("action.close") }>
+				@Icon("x")
+			</button>
+		</div>
+		<div class="dr-body">
+			{ children... }
+		</div>
+	</aside>
+}
+
+// Stars is the inline 5-star rater after a question (GP-05, RS-03). The values are
+// plain JSON so htmx never has to eval an expression (a strict CSP stays possible).
+templ Stars(questionID int64, value int, v *view.Ctx) {
+	<div class="stars-inline" x-data={ fmt.Sprintf("sjStars(%d)", value) }>
+		<span class="muted">{ v.Tr("game.rate_question") }</span>
+		<div class="stars" role="radiogroup" aria-label={ v.Tr("rate.title") }>
+			for n := 1; n <= 5; n++ {
+				<button
+					type="button"
+					class="star"
+					role="radio"
+					aria-label={ v.Tr("rate.stars", "n", n) }
+					x-bind:aria-checked={ fmt.Sprintf("value === %d", n) }
+					x-bind:class={ fmt.Sprintf("{ on: shown >= %d }", n) }
+					x-on:click={ fmt.Sprintf("pick(%d)", n) }
+					x-on:mouseenter={ fmt.Sprintf("hover = %d", n) }
+					x-on:mouseleave="hover = 0"
+					hx-put={ fmt.Sprintf("/questions/%d/rating", questionID) }
+					hx-vals={ fmt.Sprintf(`{"stars":%d}`, n) }
+					hx-swap="none"
+				>
+					@Icon("star")
+				</button>
+			}
+		</div>
+		<div class="star-reasons" x-show="needsReason" x-cloak>
+			for _, r := range []string{"too_easy", "too_hard", "unclear", "wrong_answer", "translation"} {
+				<button
+					type="button"
+					class="chip-btn"
+					hx-put={ fmt.Sprintf("/questions/%d/rating", questionID) }
+					hx-vals={ fmt.Sprintf(`{"reason":%q}`, r) }
+					hx-include="closest .stars-inline"
+					hx-swap="none"
+				>
+					{ v.Tr("rate.reason." + r) }
+				</button>
+			}
+		</div>
+		// hx-include picks this up, so the reason keeps the stars the player gave.
+		<input type="hidden" name="stars" x-bind:value="value"/>
+	</div>
+}
+
+// ProgressDots show where the player is in a game (GP-03).
+templ ProgressDots(total int, position int, correct []bool) {
+	<div class="dots" aria-hidden="true">
+		for i := 0; i < total; i++ {
+			if i < len(correct) {
+				if correct[i] {
+					<span class="dot good"></span>
+				} else {
+					<span class="dot bad"></span>
+				}
+			} else if i == position {
+				<span class="dot now"></span>
+			} else {
+				<span class="dot"></span>
+			}
+		}
+	</div>
+}

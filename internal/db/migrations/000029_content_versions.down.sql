@@ -1,0 +1,10 @@
+DROP TRIGGER IF EXISTS game_questions_snapshot ON game_questions;
+DROP TRIGGER IF EXISTS content_item_translations_version ON content_item_translations;
+DROP TRIGGER IF EXISTS content_items_version ON content_items;
+DROP FUNCTION IF EXISTS game_questions_freeze;
+DROP FUNCTION IF EXISTS freeze_content_item;
+DROP FUNCTION IF EXISTS content_text_bump_version;
+DROP FUNCTION IF EXISTS content_items_bump_version;
+ALTER TABLE game_questions DROP COLUMN IF EXISTS item_version;
+DROP TABLE IF EXISTS content_item_versions;
+ALTER TABLE content_items DROP COLUMN IF EXISTS version;

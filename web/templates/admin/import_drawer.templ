@@ -1,0 +1,176 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/platform/csvlimit"
+	"siraj/internal/view"
+)
+
+// The CSV drawer (A04, A05, A06): download the file the screen shows, or the empty
+// template, then bring one back. A file is checked before anything is written, and
+// the check is the same code as the write — what the preview says will happen is
+// what happens.
+
+// ImportProblem is one line the file got wrong.
+type ImportProblem struct {
+	Line   int
+	Column string
+	Why    string
+}
+
+// ImportData backs the drawer.
+type ImportData struct {
+	Kind         string // domains | categories | questions
+	Title        string
+	Action       string
+	TemplatePath string
+	ExportPath   string
+	Columns      []string
+	// After a file has been read: what it holds and what it would change.
+	Checked  bool
+	Written  bool
+	Rows     int
+	Created  int
+	Updated  int
+	Problems []ImportProblem
+	Error    string
+}
+
+templ ImportDrawer(v *view.Ctx, d ImportData) {
+	<aside class="drawer" role="dialog" aria-modal="true" aria-hidden="true" style="width:min(680px,100vw)">
+		<form
+			method="post"
+			action={ templ.SafeURL(d.Action) }
+			enctype="multipart/form-data"
+			hx-post={ d.Action }
+			hx-target="#drawer-slot"
+			hx-swap="innerHTML"
+			hx-encoding="multipart/form-data"
+		>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<div class="drawer-head">
+				<div>
+					<h2>{ d.Title }</h2>
+					<p>{ v.Tr("admin.csv_sub") }</p>
+				</div>
+				<button class="icon-btn" type="button" data-close aria-label={ v.Tr("admin.close") }>
+					@Icon("x")
+				</button>
+			</div>
+			<div class="drawer-body">
+				if d.Error != "" {
+					<div class="callout danger">
+						@Icon("alert")
+						<div>{ d.Error }</div>
+					</div>
+				}
+				if d.Written {
+					<div class="callout">
+						@Icon("check-circle")
+						<div>{ v.Tr("admin.csv_written", "created", d.Created, "updated", d.Updated) }</div>
+					</div>
+				}
+				<div class="form-section">
+					<h3>{ v.Tr("admin.csv_get") }</h3>
+					<div class="row" style="gap:8px">
+						<a class="btn" href={ templ.URL(d.TemplatePath) } download>
+							@Icon("download")
+							{ v.Tr("admin.csv_template") }
+						</a>
+						if d.ExportPath != "" {
+							<a class="btn" href={ templ.URL(d.ExportPath) } download>
+								@Icon("download")
+								{ v.Tr("admin.csv_export_current") }
+							</a>
+						}
+					</div>
+					<span class="help">{ v.Tr("admin.csv_roundtrip") }</span>
+				</div>
+				<div class="form-section">
+					<h3>{ v.Tr("admin.csv_columns") }</h3>
+					<div class="lang-strip" style="flex-wrap:wrap">
+						for _, col := range d.Columns {
+							<span class="badge badge-soft no-dot mono">{ col }</span>
+						}
+					</div>
+				</div>
+				<div class="form-section">
+					<h3>{ v.Tr("admin.csv_file") }</h3>
+					<div class="field">
+						<input class="input" type="file" name="file" accept=".csv,text/csv" aria-label={ v.Tr("admin.csv_file") } required/>
+						<span class="help">{ v.Tr("admin.csv_limits", "n", csvlimit.Rows) }</span>
+					</div>
+				</div>
+				if d.Checked {
+					<div class="form-section">
+						<h3>{ v.Tr("admin.csv_report") }</h3>
+						<div class="grid grid-3" style="gap:10px">
+							<div class="kpi" style="padding:12px 14px">
+								<div class="kpi-label">{ v.Tr("admin.csv_rows") }</div>
+								<div class="kpi-value" style="font-size:22px">{ fmt.Sprint(d.Rows) }</div>
+							</div>
+							<div class="kpi" style="padding:12px 14px">
+								<div class="kpi-label">{ v.Tr("admin.csv_new") }</div>
+								<div class="kpi-value" style="font-size:22px">{ fmt.Sprint(d.Created) }</div>
+							</div>
+							<div class="kpi" style="padding:12px 14px">
+								<div class="kpi-label">{ v.Tr("admin.csv_updates") }</div>
+								<div class="kpi-value" style="font-size:22px">{ fmt.Sprint(d.Updated) }</div>
+							</div>
+						</div>
+						if len(d.Problems) > 0 {
+							<div class="table-wrap" style="margin-top:14px">
+								<table class="table">
+									<thead>
+										<tr>
+											<th>{ v.Tr("admin.csv_line") }</th>
+											<th>{ v.Tr("admin.csv_column") }</th>
+											<th>{ v.Tr("admin.csv_problem") }</th>
+										</tr>
+									</thead>
+									<tbody>
+										for _, p := range d.Problems {
+											<tr>
+												<td class="num">{ fmt.Sprint(p.Line) }</td>
+												<td class="mono">{ p.Column }</td>
+												<td>{ p.Why }</td>
+											</tr>
+										}
+									</tbody>
+								</table>
+							</div>
+						} else if !d.Written {
+							<div class="callout" style="margin-top:14px">
+								@Icon("check-circle")
+								<div>{ v.Tr("admin.csv_ready") }</div>
+							</div>
+						}
+					</div>
+				}
+			</div>
+			<div class="drawer-foot">
+				<button class="btn btn-ghost" type="button" data-close>{ v.Tr("admin.close") }</button>
+				<span class="spacer"></span>
+				<button class="btn" type="submit" name="mode" value="check">{ v.Tr("admin.csv_check") }</button>
+				<button class="btn btn-primary" type="submit" name="mode" value="write">{ v.Tr("admin.csv_write") }</button>
+			</div>
+		</form>
+	</aside>
+}
+
+// ImportPage is the upload panel without JavaScript.
+templ ImportPage(v *view.Ctx, s Shell, d ImportData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div>
+				<h1>{ d.Title }</h1>
+				<p class="sub">{ v.Tr("admin.csv_sub") }</p>
+			</div>
+		</div>
+		<div class="panel">
+			<div class="panel-body">
+				@ImportDrawer(v, d)
+			</div>
+		</div>
+	}
+}

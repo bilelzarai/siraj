@@ -1,0 +1,45 @@
+# Local services for development. Start with: docker compose up -d (or make db-up).
+#
+# The project is named siraj-v2 and the volume siraj-v2-pgdata on purpose: the v1 stack
+# on this machine (siraj-game-db, postgres:16) owns the volume "siraj_pgdata" and must not
+# be touched. The host port comes from POSTGRES_PORT in .env (default 5442) because 5432 is
+# often already taken by another PostgreSQL.
+name: siraj-v2
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: siraj-v2-postgres
+    environment:
+      POSTGRES_USER: siraj
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: siraj
+    ports:
+      - "${POSTGRES_PORT:-5442}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql   # PostgreSQL 18 images keep data under /var/lib/postgresql/18
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siraj -d siraj"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # A database browser, off by default: `make db-ui` (or docker compose --profile tools
+  # up -d adminer) opens it on http://localhost:${ADMINER_PORT:-8081}. It talks to the
+  # database over the compose network, so the server name inside it is "postgres".
+  adminer:
+    image: adminer:5
+    container_name: siraj-v2-adminer
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: dracula
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+
+volumes:
+  pgdata:
+    name: siraj-v2-pgdata

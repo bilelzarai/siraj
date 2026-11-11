@@ -1,0 +1,344 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/view"
+)
+
+// InboxTicket is one row of the A03 list.
+type InboxTicket struct {
+	ID       string
+	Number   string
+	Subject  string
+	Preview  string
+	Who      string
+	Topic    string
+	TopicKey string
+	Icon     string
+	Status   string
+	Priority string
+	When     string
+	Mine     bool
+	Active   bool
+}
+
+// TopicChip is one of the topic filters under the inbox search.
+type TopicChip struct {
+	Key   string
+	Label string
+	Count int
+	On    bool
+}
+
+// InboxData backs A03: the four tiles, the ticket list and the open thread.
+type InboxData struct {
+	Open       int
+	Awaiting   int
+	HighPri    int
+	AssignedMe int
+	Status     string
+	Priority   string
+	Assignee   string
+	Query      string
+	Topic      string
+	Tickets    []InboxTicket
+	Topics     []TopicChip
+	Total      int
+	// The inbox fetched a page and printed only the count: a 26th ticket had no
+	// link that reached it.
+	Page  int
+	Pages int
+	Query2 string
+	Thread     *ThreadData
+}
+
+// SupportInbox is prototype screen A03: the inbox on the left, the thread on the right.
+templ SupportInbox(v *view.Ctx, s Shell, d InboxData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div>
+				<h1>{ v.Tr("admin.support") }</h1>
+				<p class="sub">{ v.Tr("admin.support_sub") }</p>
+			</div>
+		</div>
+		<div class="kpis">
+			@supportTileLink(v, d, "inbox", v.Tr("support.status.open"), d.Open, false, "status", "open")
+			@supportTileLink(v, d, "clock", v.Tr("admin.awaiting_reply"), d.Awaiting, false, "status", "waiting")
+			@supportTileLink(v, d, "alert", v.Tr("admin.high_priority"), d.HighPri, d.HighPri > 0, "priority", "high")
+			@supportTileLink(v, d, "users", v.Tr("admin.assigned_to_me"), d.AssignedMe, false, "assignee", "mine")
+		</div>
+		<div class="split inbox-split">
+			<section class="panel inbox-list">
+				<div class="toolbar wrap">
+					<div class="segmented">
+						for _, seg := range []struct {
+							Value string
+							Label string
+						}{{"", v.Tr("admin.all")}, {"open", v.Tr("support.status.open")}, {"waiting", v.Tr("support.status.waiting")}, {"resolved", v.Tr("support.status.resolved")}} {
+							<a href={ templ.URL(inboxHref(d, "status", seg.Value)) } aria-pressed={ fmt.Sprint(d.Status == seg.Value) }>{ seg.Label }</a>
+						}
+					</div>
+					<form method="get" action="/admin/support" class="grow">
+						<input type="hidden" name="status" value={ d.Status }/>
+						<input type="hidden" name="topic" value={ d.Topic }/>
+						<label class="input-icon">
+							<span class="sr-only">{ v.Tr("admin.search") }</span>
+							@IconClass("search", "icon-sm")
+							<input class="input input-sm" type="search" name="q" value={ d.Query } placeholder={ v.Tr("admin.subject_or_username") }/>
+						</label>
+						<label class="input-group">
+							<span class="sr-only">{ v.Tr("admin.priority_label") }</span>
+							<select class="select input-sm" name="priority" onchange="this.form.submit()">
+								for _, o := range []struct{ Value, Key string }{{"", "admin.any_priority"}, {"high", "admin.priority.high"}, {"normal", "admin.priority.normal"}, {"low", "admin.priority.low"}} {
+									<option value={ o.Value } selected?={ d.Priority == o.Value }>{ v.Tr(o.Key) }</option>
+								}
+							</select>
+						</label>
+						<label class="input-group">
+							<span class="sr-only">{ v.Tr("admin.assignee") }</span>
+							<select class="select input-sm" name="assignee" onchange="this.form.submit()">
+								for _, o := range []struct{ Value, Key string }{{"", "admin.anyone"}, {"mine", "admin.assignee_me"}, {"unassigned", "admin.assignee_none"}} {
+									<option value={ o.Value } selected?={ d.Assignee == o.Value }>{ v.Tr(o.Key) }</option>
+								}
+							</select>
+						</label>
+					</form>
+				</div>
+				<div class="topic-chips">
+					for _, t := range d.Topics {
+						<a
+							class={ "chip-a", templ.KV("on", t.On) }
+							href={ templ.URL(inboxHref(d, "topic", t.Key)) }
+							aria-pressed={ fmt.Sprint(t.On) }
+						>
+							{ t.Label }
+							<span class="n num">{ fmt.Sprint(t.Count) }</span>
+						</a>
+					}
+				</div>
+				if len(d.Tickets) == 0 {
+					<div class="empty">
+						<span class="e-ic">
+							@IconClass("inbox", "icon-lg")
+						</span>
+						<h3>{ v.Tr("admin.no_tickets") }</h3>
+						<p class="muted">{ v.Tr("admin.no_tickets_sub") }</p>
+					</div>
+				}
+				<ul class="list">
+					for _, t := range d.Tickets {
+						<li class={ "list-item ticket-row", templ.KV("on", t.Active) }>
+							<a class="grow" href={ templ.URL(inboxHref(d, "t", t.ID)) }>
+								<div class="row">
+									<div class="t">{ t.Subject }</div>
+									<span class="spacer"></span>
+									<span class="when">{ t.When }</span>
+								</div>
+								<div class="s">{ t.Who + " · " + t.Topic }</div>
+								if t.Preview != "" {
+									<div class="s clip">{ t.Preview }</div>
+								}
+								<div class="row tags">
+									if t.Priority == "high" {
+										<span class="badge badge-danger">{ v.Tr("admin.high") }</span>
+									}
+									<span class={ "badge", ticketStatusClass(t.Status) }>{ v.Tr("support.status." + t.Status) }</span>
+									if t.Mine {
+										<span class="badge badge-soft no-dot">{ v.Tr("admin.mine") }</span>
+									}
+								</div>
+							</a>
+						</li>
+					}
+				</ul>
+				<div class="panel-foot">
+					<span class="result-meta">{ v.Tr("admin.n_tickets", "n", d.Total) }</span>
+					if d.Pages > 1 {
+						<nav class="pagination" aria-label={ v.Tr("admin.pages") }>
+							for i := 1; i <= d.Pages; i++ {
+								<a
+									class="page-n"
+									href={ templ.URL(withParam("/admin/support", d.Query2, "page", fmt.Sprint(i))) }
+									aria-current={ ariaPage(i == d.Page) }
+								>{ fmt.Sprint(i) }</a>
+							}
+						</nav>
+					}
+				</div>
+			</section>
+			if d.Thread != nil {
+				@SupportThreadPane(v, *d.Thread)
+			} else {
+				<section class="panel pad empty-pane">
+					<p class="muted">{ v.Tr("admin.pick_a_ticket") }</p>
+				</section>
+			}
+		</div>
+	}
+}
+
+// supportTileLink is a tile that is also the filter it counts: tapping "2 High
+// priority" shows those two (screens 057–060). It marks itself when that filter is
+// the one already on.
+templ supportTileLink(v *view.Ctx, d InboxData, icon, label string, n int, attention bool, key, value string) {
+	<a
+		class={ "kpi", "kpi-link", templ.KV("is-attention", attention), templ.KV("on", inboxHas(d, key, value)) }
+		href={ templ.URL(inboxHref(d, key, inboxToggle(d, key, value))) }
+		aria-pressed={ fmt.Sprint(inboxHas(d, key, value)) }
+	>
+		<div class="kpi-label">
+			@Icon(icon)
+			{ label }
+		</div>
+		<div class="kpi-value">{ fmt.Sprint(n) }</div>
+	</a>
+}
+
+// inboxHas says whether a tile's filter is the one in force, and inboxToggle turns
+// it off again when it is — so a tile is a switch, not a one-way door.
+func inboxHas(d InboxData, key, value string) bool {
+	switch key {
+	case "status":
+		return d.Status == value
+	case "priority":
+		return d.Priority == value
+	case "assignee":
+		return d.Assignee == value
+	}
+	return false
+}
+
+func inboxToggle(d InboxData, key, value string) string {
+	if inboxHas(d, key, value) {
+		return ""
+	}
+	return value
+}
+
+// SupportThreadPane is A03b: the conversation and the reply box.
+templ SupportThreadPane(v *view.Ctx, d ThreadData) {
+	<section class="panel thread-pane">
+		<div class="thread-head">
+			<div class="row">
+				<span class="badge badge-soft no-dot">{ d.Topic }</span>
+				<span class="mono muted">{ d.Number }</span>
+				<span class="spacer"></span>
+				<form method="post" action={ templ.SafeURL("/admin/support/" + d.ID + "/status") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-sm" type="submit" name="status" value="resolved">
+						@IconClass("check", "icon-sm")
+						{ v.Tr("admin.resolve") }
+					</button>
+				</form>
+			</div>
+			<h2>{ d.Subject }</h2>
+			<p class="sub">{ d.Who }</p>
+		</div>
+		<form class="thread-controls" method="post" action={ templ.SafeURL("/admin/support/" + d.ID + "/status") }>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<div class="field">
+				<label class="label" for="st">{ v.Tr("admin.status") }</label>
+				<select class="select input-sm" id="st" name="status" onchange="this.form.submit()">
+					for _, s := range []string{"open", "waiting", "resolved"} {
+						<option value={ s } selected?={ d.Status == s }>{ v.Tr("support.status." + s) }</option>
+					}
+				</select>
+			</div>
+			<div class="field">
+				<label class="label" for="pr">{ v.Tr("admin.priority") }</label>
+				<select class="select input-sm" id="pr" name="priority" onchange="this.form.submit()">
+					for _, p := range []string{"normal", "high"} {
+						<option value={ p } selected?={ d.Priority == p }>{ v.Tr("admin.priority." + p) }</option>
+					}
+				</select>
+			</div>
+			<div class="field">
+				<label class="label" for="as">{ v.Tr("admin.assignee") }</label>
+				<select class="select input-sm" id="as" name="assignee" onchange="this.form.submit()">
+					<option value="">{ v.Tr("admin.unassigned") }</option>
+					<option value="me" selected?={ d.AssignedToMe }>{ v.Tr("admin.me") }</option>
+				</select>
+			</div>
+		</form>
+		<div class="thread-body">
+			for _, m := range d.Messages {
+				<div class={ "t-msg", msgClass(m) }>
+					<div class="bubble">{ m.Body }</div>
+					<div class="t-meta">{ m.Author + " · " + m.When }</div>
+				</div>
+			}
+		</div>
+		<form class="thread-reply" method="post" action={ templ.SafeURL("/admin/support/" + d.ID + "/reply") }>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<div class="reply-tabs">
+				<label class="tab">
+					<input type="radio" name="note" value="" checked/>
+					<span>{ v.Tr("admin.reply") }</span>
+				</label>
+				<label class="tab">
+					<input type="radio" name="note" value="1"/>
+					<span>{ v.Tr("admin.internal_note") }</span>
+				</label>
+			</div>
+			<textarea class="input" name="body" rows="3" required placeholder={ v.Tr("admin.write_reply") }></textarea>
+			<div class="row gap-sm">
+				<span class="spacer"></span>
+				<button class="btn btn-sm" type="submit" name="resolve" value="1">{ v.Tr("admin.send_and_resolve") }</button>
+				<button class="btn btn-sm btn-primary" type="submit">
+					@IconClass("send", "icon-sm")
+					{ v.Tr("admin.send_reply") }
+				</button>
+			</div>
+		</form>
+	</section>
+}
+
+func msgClass(m ThreadMessage) string {
+	switch {
+	case m.IsNote:
+		return "note"
+	case m.IsStaff:
+		return "staff"
+	}
+	return "player"
+}
+
+func ticketStatusClass(status string) string {
+	switch status {
+	case "open":
+		return "badge-lamp"
+	case "waiting":
+		return "badge-info"
+	}
+	return "badge-soft"
+}
+
+// inboxHref keeps the other controls where they are when one changes.
+func inboxHref(d InboxData, key, value string) string {
+	status, topic, q := d.Status, d.Topic, d.Query
+	priority, assignee, ticket := d.Priority, d.Assignee, ""
+	if d.Thread != nil {
+		ticket = d.Thread.ID
+	}
+	switch key {
+	case "status":
+		status = value
+	case "topic":
+		if topic == value {
+			value = ""
+		}
+		topic = value
+	case "priority":
+		priority = value
+	case "assignee":
+		assignee = value
+	case "t":
+		ticket = value
+	}
+	out := "/admin/support?status=" + status + "&topic=" + topic + "&q=" + q +
+		"&priority=" + priority + "&assignee=" + assignee
+	if ticket != "" {
+		out += "&t=" + ticket
+	}
+	return out
+}

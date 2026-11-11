@@ -1,0 +1,1061 @@
+package pages
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+	"siraj/internal/platform/avatar"
+)
+
+// Conversation is one row of the inbox (MS-01): who it is with, what was said last,
+// and the marks the player put on it.
+type Conversation struct {
+	ID       string
+	Name     string
+	Initials string
+	Color    string
+	Preview  string
+	When     string
+	Unread   int
+	Online   bool
+	Pinned   bool
+	Muted    bool
+	Guest    bool
+	Group    bool
+	Room     bool
+	System   bool
+	Active   bool
+}
+
+// Message is one bubble of a thread (MS-02). One struct covers every shape the design
+// draws: text, a quote above it, a file, a photo, a voice note, a challenge card, a
+// line the room itself said, and the tombstone of a message taken back.
+type Message struct {
+	ID       string
+	Kind     string
+	Body     string
+	When     string
+	Day      string
+	Mine     bool
+	From     string
+	ShowFrom bool
+	Deleted  bool
+	Read     bool
+	System   bool
+	Quote    string
+	QuoteWho string
+	FileName string
+	FileSize string
+	FileURL  string
+	Duration string
+	Title    string
+	Line     string
+	Game     string
+}
+
+// MessageTab is one of the three lists the inbox is split into.
+type MessageTab struct {
+	Key    string
+	Label  string
+	Unread int
+	On     bool
+}
+
+// MessagesData backs P22: the list on the left, the open thread on the right.
+type MessagesData struct {
+	Tabs          []MessageTab
+	Tab           string
+	TabNote       string
+	Query         string
+	Conversations []Conversation
+	// The open thread.
+	Open     bool
+	ThreadID string
+	Head     Conversation
+	Presence string
+	People   string
+	Messages []Message
+	CanReply bool
+	// ReplyTo is the message the composer is answering, shown as a bar over it.
+	ReplyTo    string
+	ReplyWho   string
+	ReplyBody  string
+	RoomCode   string
+	Guest      bool
+	Candidates []MessagePerson
+	NewOpen    bool
+	// NewKind is which half of the "+" the player chose: person, group or room.
+	NewKind string
+	// The group panel (MS-01): who is in this group, and who can still be added.
+	GroupOpen  bool
+	GroupTitle string
+	IAmOwner   bool
+	Members    []MessagePerson
+	CanAdd     []MessagePerson
+	// The composer's challenge picker (MS-02).
+	PickChallenge bool
+	Shareable     []ShareableChallenge
+	// MaxUploadBytes is the size the server will actually take. The composer turns a
+	// bigger file away here, where the player can still pick another one — but it has
+	// to be the server's number, not a second copy of it, or the screen promises a
+	// size the upload handler refuses.
+	MaxUploadBytes int64
+}
+
+// ShareableChallenge is one line of the composer's challenge picker.
+type ShareableChallenge struct {
+	ID        string
+	Title     string
+	Questions int
+	Score     int
+}
+
+// MessagePerson is one line of the "New message" dialog, of a group's member list,
+// and of the people who can still be added to it.
+type MessagePerson struct {
+	ID       string
+	Name     string
+	Initials string
+	Color    string
+	Note     string
+	// Me and Owner are what the members panel needs to decide its buttons.
+	Me    bool
+	Owner bool
+	Online   bool
+}
+
+// Messages is prototype screen 22, rebuilt to the Messages design deck: the inbox on
+// the left with its three tabs, the thread on the right, and every action the deck
+// shows on a conversation and on a single message.
+templ Messages(v *view.Ctx, d MessagesData) {
+	@layouts.App(v, v.Tr("nav.messages")) {
+		<div class="page messages-page">
+			<section class={ "card inbox", templ.KV("open", d.Open) }>
+				<div class="inbox-list">
+					@inboxTop(v, d)
+					@InboxList(v, d)
+				</div>
+				@MessageThread(v, d)
+			</section>
+			if d.NewOpen && d.NewKind == "group" {
+				@groupDialog(v, d)
+			} else if d.NewOpen {
+				@newMessageDialog(v, d)
+			}
+			if d.GroupOpen {
+				@groupPanel(v, d)
+			}
+			if d.PickChallenge {
+				@challengePicker(v, d)
+			}
+		</div>
+	}
+}
+
+// inboxTop is the head of the list: the title, the way to start a thread, the three
+// tabs with what is unread on each, and the search box (MS-01).
+templ inboxTop(v *view.Ctx, d MessagesData) {
+	<div class="inbox-top">
+		<div class="row">
+			<h1>{ v.Tr("nav.messages") }</h1>
+			<span class="spacer"></span>
+			// The "+" offers the three things it can start: a person, a group, or
+			// walking into a room by its code (MS-01).
+			<div class="menu-wrap" x-data="{ open: false }" x-on:keydown.escape="open = false">
+				<button
+					class="icon-btn sm"
+					type="button"
+					x-on:click="open = !open"
+					x-bind:aria-expanded="open"
+					aria-label={ v.Tr("messages.new") }
+				>
+					@components.IconClass("plus", "i-sm")
+				</button>
+				<div class="menu" x-show="open" x-cloak x-on:click.outside="open = false">
+					<a class="mi" href={ templ.URL(messagesHref(d, "new", "person")) }>
+						@components.IconClass("user", "i-sm")
+						{ v.Tr("messages.new_person") }
+					</a>
+					<a class="mi" href={ templ.URL(messagesHref(d, "new", "group")) }>
+						@components.IconClass("users", "i-sm")
+						{ v.Tr("messages.new_group") }
+					</a>
+					<a class="mi" href="/rooms/join">
+						@components.IconClass("radio", "i-sm")
+						{ v.Tr("messages.join_room") }
+					</a>
+				</div>
+			</div>
+		</div>
+		if d.Guest {
+			<div class="guest-chat">
+				<span class="mode-ic gold sm">
+					@components.IconClass("users", "i-sm")
+				</span>
+				<div class="min0">
+					<b>{ v.Tr("messages.guests_only") }</b>
+					<p class="help">{ v.Tr("messages.guests_only_body") }</p>
+					<a class="link-btn" href="/signup">{ v.Tr("messages.guest_create_account") }</a>
+				</div>
+			</div>
+		}
+		<div class="seg full" role="group" aria-label={ v.Tr("nav.messages") }>
+			for _, t := range d.Tabs {
+				<a
+					class={ "seg-item", templ.KV("on", t.On) }
+					href={ templ.URL(messagesHref(d, "tab", t.Key)) }
+					aria-pressed={ fmt.Sprint(t.On) }
+				>
+					{ t.Label }
+					if t.Unread > 0 {
+						<span class="count">{ fmt.Sprint(t.Unread) }</span>
+					}
+				</a>
+			}
+		</div>
+		<p class="help">{ d.TabNote }</p>
+		<form class="field input-icon" method="get" action="/messages">
+			<input type="hidden" name="tab" value={ d.Tab }/>
+			if d.ThreadID != "" {
+				<input type="hidden" name="with" value={ d.ThreadID }/>
+			}
+			@components.IconClass("search", "i-sm")
+			<label class="sr-only" for="msg-q">{ v.Tr("messages.search") }</label>
+			<input
+				class="input"
+				id="msg-q"
+				name="q"
+				value={ d.Query }
+				placeholder={ v.Tr("messages.search") }
+				autocomplete="off"
+			/>
+		</form>
+	</div>
+}
+
+// InboxList is the part that changes when a message arrives: it asks for itself when
+// the stream says so, and swaps in place (MS-01, NF-02).
+templ InboxList(v *view.Ctx, d MessagesData) {
+	<div
+		class="conv-list"
+		id="conv-list"
+		hx-get={ messagesHref(d, "", "") + "&partial=list" }
+		hx-trigger="sj:live:messages from:body"
+		hx-swap="outerHTML"
+	>
+		if len(d.Conversations) == 0 {
+			<p class="help center-text pad">{ v.Tr("messages.nothing_here") }</p>
+		}
+		for _, conv := range d.Conversations {
+			<div class={ "conv", templ.KV("on", conv.Active) }>
+				<a class="conv-main" href={ templ.URL(messagesHref(d, "with", conv.ID)) }>
+					@conversationAvatar(conv)
+					<span class="grow">
+						<span class="row">
+							<span class="t ell">{ conv.Name }</span>
+							if conv.Pinned {
+								@components.IconClass("pin", "i-sm")
+							}
+							if conv.Muted {
+								@components.IconClass("mute", "i-sm")
+							}
+							<span class="spacer"></span>
+							<span class="muted s">{ conv.When }</span>
+						</span>
+						<span class="s ell">{ conv.Preview }</span>
+					</span>
+					if conv.Unread > 0 {
+						<span class="count">{ fmt.Sprint(conv.Unread) }</span>
+					}
+				</a>
+				if !conv.Room {
+					@conversationMenu(v, d, conv)
+				}
+			</div>
+		}
+	</div>
+}
+
+// conversationAvatar is the face beside a row: a person with their online dot, a
+// group's own mark, or the room's radio icon (MS-01).
+templ conversationAvatar(conv Conversation) {
+	if conv.Group {
+		<span class="av grp" style={ avatarColor(conv.Color) }>
+			@components.IconClass("users", "i-sm")
+		</span>
+	} else if conv.Room {
+		<span class="av grp" style={ avatarColor(conv.Color) }>
+			@components.IconClass("radio", "i-sm")
+		</span>
+	} else {
+		@components.PersonAvatar(conv.Initials, conv.Color, "", conv.Online)
+	}
+}
+
+// conversationMenu is the ⋮ of a row: pin, mute, mark unread, block a person, and
+// delete the thread for yourself (MS-01).
+templ conversationMenu(v *view.Ctx, d MessagesData, conv Conversation) {
+	<div class="c-more" x-data="sjOverlay">
+		<button class="icon-btn sm" type="button" x-on:click="toggle()" x-bind:aria-expanded="open" aria-label={ conv.Name }>
+			@components.IconClass("more", "i-sm")
+		</button>
+		<div class="menu" role="menu" x-show="open" x-on:click.outside="hide()" x-cloak>
+			@menuPost(v, "/messages/"+conv.ID+"/pin", "pinned", notBool(conv.Pinned), d.Tab) {
+				@components.Icon("pin")
+				if conv.Pinned {
+					{ v.Tr("messages.unpin") }
+				} else {
+					{ v.Tr("messages.pin") }
+				}
+			}
+			@menuPost(v, "/messages/"+conv.ID+"/mute", "muted", notBool(conv.Muted), d.Tab) {
+				@components.Icon("mute")
+				if conv.Muted {
+					{ v.Tr("messages.unmute") }
+				} else {
+					{ v.Tr("messages.mute") }
+				}
+			}
+			@menuPost(v, "/messages/"+conv.ID+"/unread", "", "", d.Tab) {
+				@components.Icon("mail")
+				{ v.Tr("messages.mark_unread") }
+			}
+			if !conv.Group && !conv.System {
+				<a class="mi" href={ templ.URL("/messages?confirm=block&with=" + conv.ID) }>
+					@components.Icon("x")
+					{ v.Tr("messages.block") }
+				</a>
+			}
+			<a class="mi danger" href={ templ.URL("/messages?confirm=delete&with=" + conv.ID) }>
+				@components.Icon("trash")
+				{ v.Tr("messages.delete_conversation") }
+			</a>
+		</div>
+	</div>
+}
+
+// menuPost is one posting line of a menu, with the hidden field it carries.
+templ menuPost(v *view.Ctx, action, field, value, tab string) {
+	<form method="post" action={ templ.SafeURL(action) }>
+		<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+		<input type="hidden" name="tab" value={ tab }/>
+		if field != "" {
+			<input type="hidden" name={ field } value={ value }/>
+		}
+		<button class="mi" type="submit">
+			{ children... }
+		</button>
+	</form>
+}
+
+// MessageThread is the right-hand side: the head, the bubbles and the composer. It
+// re-asks for itself when the stream says a message arrived (MS-02).
+templ MessageThread(v *view.Ctx, d MessagesData) {
+	<div
+		class="thread"
+		id="thread"
+		hx-get={ messagesHref(d, "", "") + "&partial=thread" }
+		hx-trigger="sj:live:messages from:body"
+		hx-swap="outerHTML"
+	>
+		if !d.Open {
+			<div class="thread-body center">
+				@components.Empty("chat", v.Tr("messages.pick"), v.Tr("messages.pick_body"))
+			</div>
+		} else {
+			@threadHead(v, d)
+			<div class="thread-body" x-init="$el.scrollTop = $el.scrollHeight">
+				if len(d.Messages) == 0 {
+					<p class="muted center-text">{ v.Tr("messages.say_hello") }</p>
+				}
+				for _, m := range d.Messages {
+					if m.Day != "" {
+						<div class="day-sep"><span>{ m.Day }</span></div>
+					}
+					if m.System {
+						<div class="msg-sys" dir="auto">{ m.Body }</div>
+					} else {
+						@messageRow(v, d, m)
+					}
+				}
+			</div>
+			if d.CanReply {
+				@composer(v, d)
+			} else {
+				<div class="composer-wrap">
+					<div class="composer">
+						<span class="help grow">{ v.Tr("messages.no_reply_here") }</span>
+						<a class="btn btn-sm" href="/support">{ v.Tr("support.title") }</a>
+					</div>
+				</div>
+			}
+		}
+	</div>
+}
+
+// threadHead names who you are writing to and what they are doing, and carries the
+// one action the design puts there: challenge a person, rejoin a room (MS-02).
+templ threadHead(v *view.Ctx, d MessagesData) {
+	<div class="thread-head">
+		<a class="icon-btn sm back-btn" href={ templ.URL(messagesHref(d, "with", "")) } aria-label={ v.Tr("action.back") }>
+			@components.IconClass("arrowL", "flip")
+		</a>
+		@conversationAvatar(d.Head)
+		<div class="grow min0">
+			<b class="block ell">{ d.Head.Name }</b>
+			<span class="help ell">
+				if d.People != "" {
+					{ d.People }
+				} else {
+					{ d.Presence }
+				}
+			</span>
+		</div>
+		if d.Head.Group {
+			// A group is managed from its own panel: who is in it, who may join,
+			// and the way out (MS-01).
+			<a class="btn btn-sm" href={ templ.URL(messagesHref(d, "panel", "1")) }>
+				@components.IconClass("users", "i-sm")
+				{ v.Tr("messages.members") }
+			</a>
+		}
+		if d.Head.Room {
+			<a class="btn btn-sm" href={ templ.URL("/rooms/" + d.RoomCode) }>
+				@components.IconClass("door", "i-sm")
+				{ v.Tr("messages.rejoin") }
+			</a>
+		} else if !d.Head.System {
+			<a class="btn btn-sm" href={ templ.URL("/challenges/new?with=" + d.Head.ID) }>
+				@components.IconClass("swords", "i-sm")
+				{ v.Tr("messages.challenge") }
+			</a>
+		}
+	</div>
+}
+
+// messageRow is one bubble with its avatar, its time, its ticks and its menu.
+templ messageRow(v *view.Ctx, d MessagesData, m Message) {
+	<div class={ "bubble-row", templ.KV("me", m.Mine) }>
+		if !m.Mine {
+			if m.From == "" {
+				// A line the Sirāj team wrote carries the lamp, not a stranger's
+				// initials (MS-03).
+				<span class="av sm brandav" aria-hidden="true">
+					@components.Lamp()
+				</span>
+			} else {
+				@components.PersonAvatar(avatar.Initials(m.From), avatar.Color(m.From), "sm", false)
+			}
+		}
+		<div class="b-wrap">
+			if m.ShowFrom && !m.Mine {
+				<span class="b-from">{ m.From }</span>
+			}
+			@bubbleBody(v, m)
+			<span class="bubble-time">
+				{ m.When }
+				if m.Mine && !m.Deleted {
+					{ " " }
+					<span class={ "ticks", templ.KV("read", m.Read) }>
+						@components.IconClass("check", "i-sm")
+						if m.Read {
+							@components.IconClass("check", "i-sm")
+						}
+					</span>
+				}
+			</span>
+		</div>
+		if !m.Deleted {
+			@messageMenu(v, d, m)
+		}
+	</div>
+}
+
+// bubbleBody is what a message actually is: words, a quote and words, a file, a
+// photo, a voice note, a challenge card, or the mark left by a deleted one.
+templ bubbleBody(v *view.Ctx, m Message) {
+	if m.Deleted {
+		<div class="bubble deleted">
+			@components.IconClass("trash", "i-sm")
+			{ v.Tr("messages.deleted") }
+		</div>
+	} else if m.Kind == "challenge" {
+		<div class="msg-card">
+			<b class="row gap-sm">
+				@components.IconClass("swords", "i-sm")
+				{ m.Title }
+			</b>
+			<span class="help">{ m.Line }</span>
+			<a class="btn btn-primary btn-sm btn-block" href={ templ.URL(cardHref(m)) }>
+				{ v.Tr("messages.accept_and_play") }
+			</a>
+		</div>
+	} else if m.Kind == "voice" {
+		<div class="bubble vbub">
+			<div class="voice" x-data={ voiceData(m.Duration) } x-bind:class="{ playing }">
+				<button class="vplay" type="button" x-on:click="toggle()" aria-label={ v.Tr("messages.play") }>
+					<template x-if="!playing">
+						@components.IconClass("tri", "i-sm flip")
+					</template>
+					<template x-if="playing">
+						@components.IconClass("pause", "i-sm")
+					</template>
+				</button>
+				<span class="wave" aria-hidden="true">
+					for _, h := range waveform(m.ID) {
+						<i style={ barHeight(h) }></i>
+					}
+				</span>
+				<span class="vdur">{ m.Duration }</span>
+				if m.FileURL != "" {
+					<audio x-ref="audio" preload="none" src={ m.FileURL }></audio>
+				}
+			</div>
+		</div>
+	} else if m.Kind == "image" {
+		<div class="bubble img">
+			if m.FileURL != "" {
+				<img src={ m.FileURL } alt={ m.FileName } loading="lazy"/>
+			}
+			<span class="fsz">{ m.FileName }</span>
+			if m.Body != "" {
+				<span class="caption" dir="auto">{ m.Body }</span>
+			}
+		</div>
+	} else if m.Kind == "file" {
+		<div class="bubble file-wrap">
+			<a class="file-line" href={ templ.URL(m.FileURL) } download>
+				@components.Icon("clip")
+				<span>
+					<b>{ m.FileName }</b>
+					<span class="fsz">{ m.FileSize }</span>
+				</span>
+			</a>
+			if m.Body != "" {
+				<span class="caption" dir="auto">{ m.Body }</span>
+			}
+		</div>
+	} else {
+		// What somebody wrote, in whatever language they wrote it: dir="auto" so an
+		// Arabic message reads right-to-left inside an English thread, and the quote
+		// of an earlier one does the same (§16).
+		<div class="bubble" dir="auto">
+			if m.Quote != "" {
+				<span class="quote" dir="auto">
+					<b>{ m.QuoteWho }</b>
+					<span>{ m.Quote }</span>
+				</span>
+			}
+			{ m.Body }
+		</div>
+	}
+}
+
+// messageMenu is the ⋮ beside a bubble: reply, copy, delete, report — and, on your
+// own message, when it was sent and whether it was read (MS-04).
+templ messageMenu(v *view.Ctx, d MessagesData, m Message) {
+	<div class="m-more" x-data="sjOverlay">
+		<button class="icon-btn sm" type="button" x-on:click="toggle()" x-bind:aria-expanded="open" aria-label={ v.Tr("action.more") }>
+			@components.IconClass("more", "i-sm")
+		</button>
+		<div class="menu msg-menu" role="menu" x-show="open" x-on:click.outside="hide()" x-cloak>
+			if m.Mine {
+				<div class="mh help">
+					<span class="block">{ v.Tr("messages.sent_at", "when", m.When) }</span>
+					<span class="block">
+						if m.Read {
+							{ v.Tr("messages.read_yes") }
+						} else {
+							{ v.Tr("messages.read_no") }
+						}
+					</span>
+				</div>
+			}
+			<a class="mi" href={ templ.URL(messagesHref(d, "reply", m.ID)) }>
+				@components.Icon("reply")
+				{ v.Tr("messages.reply") }
+			</a>
+			if m.Body != "" {
+				<button class="mi" type="button" x-data={ copyText(m.Body, v.Tr("messages.copied")) } x-on:click="copy()">
+					@components.Icon("copy")
+					{ v.Tr("messages.copy_text") }
+				</button>
+			}
+			@menuPost(v, "/messages/m/"+m.ID+"/hide", "", "", d.Tab) {
+				@components.Icon("eye")
+				{ v.Tr("messages.delete_for_me") }
+			}
+			if m.Mine {
+				@menuPost(v, "/messages/m/"+m.ID+"/delete", "", "", d.Tab) {
+					@components.Icon("trash")
+					{ v.Tr("messages.delete_for_everyone") }
+				}
+			} else {
+				@menuPost(v, "/messages/m/"+m.ID+"/report", "reason", "message", d.Tab) {
+					@components.Icon("flag")
+					{ v.Tr("messages.report") }
+				}
+			}
+		</div>
+	</div>
+}
+
+// composer is the bottom of a thread: the quote bar when you are answering something,
+// the drafts you attached, and the one row that sends them (MS-02).
+// composerChallenge is the button that opens the picker: a round posted into the
+// thread, which the other side taps to play (MS-02).
+templ composerChallenge(v *view.Ctx, d MessagesData) {
+	<a
+		class="icon-btn sm"
+		href={ templ.URL(messagesHref(d, "pick", "1")) }
+		aria-label={ v.Tr("messages.send_challenge") }
+		title={ v.Tr("messages.send_challenge") }
+	>
+		@components.IconClass("swords", "i-sm")
+	</a>
+}
+
+templ composer(v *view.Ctx, d MessagesData) {
+	<div
+		class="composer-wrap"
+		x-data="sjComposer"
+		data-max-bytes={ fmt.Sprint(d.MaxUploadBytes) }
+		data-too-big={ v.Tr("messages.file_too_big", "mb", d.MaxUploadBytes>>20) }
+		data-no-mic={ v.Tr("messages.no_microphone") }
+	>
+		if d.ReplyTo != "" {
+			<div class="reply-bar">
+				@components.IconClass("reply", "i-sm")
+				<span class="grow min0 ell">
+					<b>{ d.ReplyWho }</b>
+					{ " · " + d.ReplyBody }
+				</span>
+				<a class="icon-btn sm" href={ templ.URL(messagesHref(d, "reply", "")) } aria-label={ v.Tr("action.cancel") }>
+					@components.IconClass("x", "i-sm")
+				</a>
+			</div>
+		}
+		<div class="drafts" x-show="files.length" x-cloak>
+			<template x-for="(f, i) in files" x-bind:key="i">
+				<span class="draft">
+					<b x-text="f.name"></b>
+					<span class="fsz" x-text="f.size"></span>
+					<button class="icon-btn sm" type="button" x-on:click="drop(i)" aria-label={ v.Tr("action.remove") }>
+						@components.IconClass("x", "i-sm")
+					</button>
+				</span>
+			</template>
+		</div>
+		<div class="composer rec" x-show="recording" x-cloak>
+			<span class="rec-dot" aria-hidden="true"></span>
+			<b>{ v.Tr("messages.recording") }</b>
+			<span class="num" x-text="clock"></span>
+			<span class="spacer"></span>
+			<button class="btn btn-sm btn-ghost" type="button" x-on:click="cancelRecording()">{ v.Tr("action.cancel") }</button>
+			<button class="btn btn-sm btn-primary" type="button" x-on:click="stopRecording()">
+				@components.IconClass("check", "i-sm")
+				{ v.Tr("action.done") }
+			</button>
+		</div>
+		<form
+			class="composer"
+			method="post"
+			action={ templ.SafeURL("/messages/" + d.ThreadID) }
+			enctype="multipart/form-data"
+			x-show="!recording"
+			x-ref="form"
+		>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			// The tab the player is on rides with the message, so sending in a room
+			// or a group leaves them where they were (MS-01).
+			<input type="hidden" name="tab" value={ d.Tab }/>
+			if d.Query != "" {
+				<input type="hidden" name="q" value={ d.Query }/>
+			}
+			if d.ReplyTo != "" {
+				<input type="hidden" name="reply_to" value={ d.ReplyTo }/>
+			}
+			<div class="c-tool">
+				<button class="icon-btn" type="button" x-on:click="emoji = !emoji" aria-label={ v.Tr("messages.emoji") }>
+					@components.Icon("smile")
+				</button>
+				<div class="emoji-pop" x-show="emoji" x-on:click.outside="emoji = false" x-cloak>
+					for _, e := range emojiRow() {
+						<button type="button" x-on:click={ "add('" + e + "')" }>{ e }</button>
+					}
+				</div>
+			</div>
+			<label class="sr-only" for="msg-body">{ v.Tr("messages.placeholder") }</label>
+			<input
+				class="input grow"
+				id="msg-body"
+				name="body"
+				placeholder={ v.Tr("messages.placeholder") }
+				autocomplete="off"
+				maxlength="2000"
+				x-ref="body"
+			/>
+			<input class="sr-only" type="file" name="upload" aria-label={ v.Tr("messages.attach") } x-ref="file" x-on:change="picked()"/>
+			if !d.Head.System {
+				@composerChallenge(v, d)
+			}
+			<button class="icon-btn" type="button" x-on:click="$refs.file.click()" aria-label={ v.Tr("messages.attach") }>
+				@components.Icon("clip")
+			</button>
+			<button class="icon-btn" type="button" x-on:click="startRecording()" aria-label={ v.Tr("messages.voice") }>
+				@components.Icon("mic")
+			</button>
+			<button class="btn btn-primary" type="submit" aria-label={ v.Tr("messages.send") }>
+				@components.IconClass("send", "flip")
+			</button>
+		</form>
+	</div>
+}
+
+// newMessageDialog is the + of the inbox: a friend to write to, or — for a guest —
+// one of the guests they actually played with (RL-03, §4 of 03-BACKEND-CHANGES).
+// groupDialog is "New group": a name and the friends who start in it (MS-01).
+templ groupDialog(v *view.Ctx, d MessagesData) {
+	<div class="ov scrim"></div>
+	<div class="ov modal-wrap" role="dialog" aria-modal="true">
+		<form class="modal" method="post" action="/messages/group">
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<div class="modal-head">
+				<h2>{ v.Tr("messages.new_group") }</h2>
+				<p class="muted">{ v.Tr("messages.new_group_body") }</p>
+			</div>
+			<div class="modal-body stack gap-sm">
+				<div class="field">
+					<label class="label" for="group-title">{ v.Tr("messages.group_name") }</label>
+					<input class="input" id="group-title" name="title" maxlength="60" autofocus/>
+				</div>
+				for _, p := range d.Candidates {
+					<label class="written pick">
+						<input type="checkbox" name="user_id" value={ p.ID }/>
+						@components.PersonAvatar(p.Initials, p.Color, "sm", p.Online)
+						<span class="grow min0">
+							<b class="block">{ p.Name }</b>
+							if p.Note != "" {
+								<span class="help">{ p.Note }</span>
+							}
+						</span>
+						@components.IconClass("check", "i-sm pick-tick")
+					</label>
+				}
+				if len(d.Candidates) == 0 {
+					<p class="help">{ v.Tr("messages.no_candidates") }</p>
+				}
+			</div>
+			<div class="actions">
+				<a class="btn" href={ templ.URL(messagesHref(d, "new", "")) }>{ v.Tr("action.cancel") }</a>
+				<button class="btn btn-primary" type="submit">{ v.Tr("messages.create_group") }</button>
+			</div>
+		</form>
+	</div>
+}
+
+// groupPanel is how a group is managed: who is in it, adding a friend, removing
+// one, and leaving. Only the player who started it may remove somebody or rename
+// it; anybody may leave (MS-01).
+templ groupPanel(v *view.Ctx, d MessagesData) {
+	<div class="ov scrim"></div>
+	<div class="ov modal-wrap" role="dialog" aria-modal="true">
+		<div class="modal">
+			<div class="modal-head">
+				<h2>{ v.Tr("messages.group_members", "n", len(d.Members)) }</h2>
+				<p class="muted">{ d.GroupTitle }</p>
+			</div>
+			<div class="modal-body stack gap-sm">
+				if d.IAmOwner {
+					<form class="field row gap-sm" method="post" action={ templ.SafeURL("/messages/" + d.ThreadID + "/rename") }>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<input class="input grow" name="title" value={ d.GroupTitle } maxlength="60" aria-label={ v.Tr("messages.group_name") }/>
+						<button class="btn btn-sm" type="submit">{ v.Tr("action.save") }</button>
+					</form>
+				}
+				for _, m := range d.Members {
+					<div class="written">
+						@components.PersonAvatar(m.Initials, m.Color, "sm", m.Online)
+						<span class="grow min0">
+							<b class="block">{ m.Name }</b>
+							<span class="help">{ m.Note }</span>
+						</span>
+						if d.IAmOwner && !m.Me {
+							<form method="post" action={ templ.SafeURL("/messages/" + d.ThreadID + "/members/" + m.ID + "/remove") }>
+								<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+								<button class="icon-btn sm danger" type="submit" aria-label={ v.Tr("messages.remove_member", "name", m.Name) }>
+									@components.IconClass("x", "i-sm")
+								</button>
+							</form>
+						}
+					</div>
+				}
+				if len(d.CanAdd) > 0 {
+					<form method="post" action={ templ.SafeURL("/messages/" + d.ThreadID + "/members") } class="stack gap-sm">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<div class="label">{ v.Tr("messages.add_people") }</div>
+						for _, p := range d.CanAdd {
+							<label class="written pick">
+								<input type="checkbox" name="user_id" value={ p.ID }/>
+								@components.PersonAvatar(p.Initials, p.Color, "sm", p.Online)
+								<span class="grow min0"><b class="block">{ p.Name }</b></span>
+								@components.IconClass("check", "i-sm pick-tick")
+							</label>
+						}
+						<button class="btn btn-sm" type="submit">{ v.Tr("messages.add_selected") }</button>
+					</form>
+				}
+			</div>
+			<div class="actions">
+				<form method="post" action={ templ.SafeURL("/messages/" + d.ThreadID + "/leave") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-danger-ghost" type="submit">{ v.Tr("messages.leave_group") }</button>
+				</form>
+				<span class="spacer"></span>
+				<a class="btn" href={ templ.URL(messagesHref(d, "panel", "")) }>{ v.Tr("action.close") }</a>
+			</div>
+		</div>
+	</div>
+}
+
+// challengePicker is what the composer's "challenge" button opens: the rounds this
+// player can put into the thread (MS-02).
+templ challengePicker(v *view.Ctx, d MessagesData) {
+	<div class="ov scrim"></div>
+	<div class="ov modal-wrap" role="dialog" aria-modal="true">
+		<div class="modal">
+			<div class="modal-head">
+				<h2>{ v.Tr("messages.send_challenge") }</h2>
+				<p class="muted">{ v.Tr("messages.send_challenge_body") }</p>
+			</div>
+			<div class="modal-body stack gap-sm">
+				for _, ch := range d.Shareable {
+					<form method="post" action={ templ.SafeURL("/messages/" + d.ThreadID + "/challenge") }>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<input type="hidden" name="challenge_id" value={ ch.ID }/>
+						<button class="written wide" type="submit">
+							<span class="mode-ic gold sm">
+								@components.IconClass("swords", "i-sm")
+							</span>
+							<span class="grow min0 start">
+								<b class="block">{ ch.Title }</b>
+								<span class="help">{ v.Tr("messages.challenge_line", "questions", ch.Questions, "score", ch.Score) }</span>
+							</span>
+							@components.IconClass("send", "i-sm")
+						</button>
+					</form>
+				}
+				if len(d.Shareable) == 0 {
+					<p class="help">{ v.Tr("messages.no_challenges") }</p>
+					<a class="btn btn-primary btn-sm" href="/challenges/new">{ v.Tr("messages.make_challenge") }</a>
+				}
+			</div>
+			<div class="actions">
+				<a class="btn" href={ templ.URL(messagesHref(d, "pick", "")) }>{ v.Tr("action.cancel") }</a>
+			</div>
+		</div>
+	</div>
+}
+
+templ newMessageDialog(v *view.Ctx, d MessagesData) {
+	<div class="ov scrim"></div>
+	<div class="ov modal-wrap" role="dialog" aria-modal="true">
+		<div class="modal">
+			<div class="modal-head">
+				<h2>{ v.Tr("messages.new") }</h2>
+				<p class="muted">
+					if d.Guest {
+						{ v.Tr("messages.new_guest_body") }
+					} else {
+						{ v.Tr("messages.new_body") }
+					}
+				</p>
+			</div>
+			<div class="modal-body stack gap-sm">
+				for _, p := range d.Candidates {
+					<a class="written" href={ templ.URL("/messages?with=" + p.ID) }>
+						@components.PersonAvatar(p.Initials, p.Color, "sm", p.Online)
+						<span class="grow min0">
+							<b class="block">{ p.Name }</b>
+							if p.Note != "" {
+								<span class="help">{ p.Note }</span>
+							}
+						</span>
+					</a>
+				}
+				if len(d.Candidates) == 0 {
+					<p class="help">{ v.Tr("messages.no_candidates") }</p>
+				}
+				if d.Guest {
+					<div class="banner info">
+						<div class="grow start">{ v.Tr("messages.guest_cannot_reach") }</div>
+						<a class="btn btn-primary btn-sm" href="/signup">{ v.Tr("action.signup") }</a>
+					</div>
+				}
+			</div>
+			<div class="actions">
+				<a class="btn" href={ templ.URL(messagesHref(d, "new", "")) }>{ v.Tr("action.cancel") }</a>
+			</div>
+		</div>
+	</div>
+}
+
+// MessagesWithConfirm is the screen with one of its two questions open over it:
+// blocking a person, or removing a thread from your own list (MS-01).
+templ MessagesWithConfirm(v *view.Ctx, d MessagesData, what, id string) {
+	@layouts.App(v, v.Tr("nav.messages")) {
+		<div class="page messages-page">
+			<section class={ "card inbox", templ.KV("open", d.Open) }>
+				<div class="inbox-list">
+					@inboxTop(v, d)
+					@InboxList(v, d)
+				</div>
+				@MessageThread(v, d)
+			</section>
+			@ConfirmDialog(v, d, what, id)
+		</div>
+	}
+}
+
+// ConfirmDialog is the two questions the inbox asks before it does something it
+// cannot undo: blocking a person, and removing a thread from your own list.
+templ ConfirmDialog(v *view.Ctx, d MessagesData, what, id string) {
+	<div class="ov scrim"></div>
+	<div class="ov modal-wrap" role="dialog" aria-modal="true">
+		<div class="modal">
+			<div class="modal-head">
+				if what == "block" {
+					<div class="m-ic red">
+						@components.IconClass("x", "i-lg")
+					</div>
+					<h2>{ v.Tr("messages.block_title") }</h2>
+					<p class="muted">{ v.Tr("messages.block_body") }</p>
+				} else {
+					<h2>{ v.Tr("messages.delete_title") }</h2>
+					<p class="muted">{ v.Tr("messages.delete_body") }</p>
+				}
+			</div>
+			<div class="actions">
+				<a class="btn" href="/messages">{ v.Tr("action.cancel") }</a>
+				<form method="post" action={ templ.SafeURL("/messages/" + id + "/" + what) }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-danger" type="submit">
+						if what == "block" {
+							{ v.Tr("messages.block") }
+						} else {
+							{ v.Tr("action.delete") }
+						}
+					</button>
+				</form>
+			</div>
+		</div>
+	</div>
+}
+
+// messagesHref keeps the tab, the search and the open thread while one of them
+// changes, so the screen never loses its place.
+// messagesHref keeps the screen's state in the link: the tab, the search, the open
+// thread, the message being answered, and whichever panel is open over it.
+func messagesHref(d MessagesData, key, value string) string {
+	tab, query, with, reply := d.Tab, d.Query, d.ThreadID, d.ReplyTo
+	dialog, panel, pick := "", "", ""
+	switch key {
+	case "tab":
+		tab, with, reply = value, "", ""
+	case "with":
+		with, reply = value, ""
+	case "reply":
+		reply = value
+	case "new":
+		dialog = value
+	case "panel":
+		panel = value
+	case "pick":
+		pick = value
+	}
+	out := "/messages?tab=" + tab
+	if query != "" {
+		out += "&q=" + url.QueryEscape(query)
+	}
+	if with != "" {
+		out += "&with=" + with
+	}
+	if reply != "" {
+		out += "&reply=" + reply
+	}
+	if dialog != "" {
+		out += "&new=" + dialog
+	}
+	if panel != "" {
+		out += "&panel=" + panel
+	}
+	if pick != "" {
+		out += "&pick=" + pick
+	}
+	return out
+}
+
+// cardHref opens the challenge a card carries, or the challenges screen when the
+// round it named is gone.
+func cardHref(m Message) string {
+	if m.Game == "" {
+		return "/challenges"
+	}
+	return "/challenges/" + m.Game
+}
+
+// notBool is the value a toggle posts: the opposite of what it shows.
+func notBool(on bool) string {
+	if on {
+		return "false"
+	}
+	return "true"
+}
+
+// copyText puts a message on the clipboard and says so once, rather than reading the
+// whole message back at the player.
+func copyText(body, done string) string {
+	clean := strings.NewReplacer("\\", "\\\\", "'", "\\'", "\n", " ", "\r", "").Replace(body)
+	return "{ copy() { navigator.clipboard?.writeText('" + clean + "'); window.sjToast?.('" + done + "') } }"
+}
+
+
+
+// avatarColor hands a row's own colour to its avatar without writing it in markup.
+func avatarColor(c string) string {
+	if c == "" {
+		return ""
+	}
+	return "--c:" + c
+}
+
+// emojiRow is the dozen the design puts in the picker.
+func emojiRow() []string {
+	return []string{"🤲", "😄", "👍", "❤️", "🔥", "🌙", "📖", "🎉", "😊", "🙏", "✅", "💯"}
+}
+
+// waveform draws a voice note's bars. The shape is derived from the message id, so a
+// note looks the same every time it is drawn without storing a picture of it.
+func waveform(seed string) []int {
+	var h uint32 = 2166136261
+	for _, c := range seed {
+		h = (h ^ uint32(c)) * 16777619
+	}
+	out := make([]int, 28)
+	for i := range out {
+		h = h*1103515245 + 12345
+		out[i] = 30 + int((h>>16)%70)
+	}
+	return out
+}
+
+func barHeight(pct int) string { return fmt.Sprintf("height:%d%%", pct) }
+
+// voiceData plays a note in place, with the bar filling as it goes.
+func voiceData(duration string) string {
+	return "sjVoice('" + strings.ReplaceAll(duration, "'", "") + "')"
+}

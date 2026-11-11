@@ -1,0 +1,98 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// HistoryData backs P26 (LB-03): the five mode filters, four tiles and the list.
+type HistoryData struct {
+	Mode      string // "" = all
+	Games     int32
+	ThisWeek  int32
+	BestScore int32
+	Accuracy  int32
+	Rows      []RecentGame
+	Page      int
+	Pages     int
+}
+
+templ History(v *view.Ctx, d HistoryData) {
+	@layouts.App(v, v.Tr("history.title")) {
+		<div class="page mid history-page">
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("history.title") }</h1>
+					<p class="sub">{ v.Tr("history.sub") }</p>
+				</div>
+			</div>
+			<div class="stat-row four push-bottom">
+				<div class="stat">
+					<div class="k">{ v.Tr("profile.games") }</div>
+					<div class="v num">{ fmt.Sprint(d.Games) }</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("lb.this_week") }</div>
+					<div class="v num">{ fmt.Sprint(d.ThisWeek) }</div>
+				</div>
+				<div class="stat gold">
+					<div class="k">{ v.Tr("history.best_score") }</div>
+					<div class="v num">{ fmt.Sprint(d.BestScore) }</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("profile.accuracy") }</div>
+					<div class="v num">{ fmt.Sprint(d.Accuracy) }%</div>
+				</div>
+			</div>
+			<div class="seg push-bottom">
+				@historyTab(v, d.Mode, "", v.Tr("history.all"))
+				@historyTab(v, d.Mode, "solo", v.Tr("history.solo"))
+				@historyTab(v, d.Mode, "live", v.Tr("play.live_room"))
+				@historyTab(v, d.Mode, "duel", v.Tr("history.duels"))
+				@historyTab(v, d.Mode, "challenge", v.Tr("nav.challenges"))
+				@historyTab(v, d.Mode, "device", v.Tr("history.device"))
+			</div>
+			<section class="card">
+				if len(d.Rows) == 0 {
+					@components.Empty("history", v.Tr("history.empty"), "")
+				} else {
+					for _, g := range d.Rows {
+						<div class="li wrap">
+							<span class="cat-ic sm" style={ fmt.Sprintf("--c:%s", g.Color) }>
+								@components.Icon(g.Icon)
+							</span>
+							<div class="grow min200">
+								<div class="t">{ g.Title }</div>
+								<div class="s">{ g.Subtitle }</div>
+							</div>
+							<b class="num min90">{ g.Score }</b>
+							<span class="badge gold num">{ fmt.Sprintf("+%d", g.Points) }</span>
+							<a class="btn btn-sm btn-ghost" href={ templ.URL("/games/" + g.ID + "/results") }>
+								{ v.Tr("history.review") }
+								@components.IconClass("chevR", "i-sm flip")
+							</a>
+						</div>
+					}
+				}
+			</section>
+			if d.Pages > 1 {
+				@components.Pager(d.Page, d.Pages, historyHref(d.Mode), v)
+			}
+		</div>
+	}
+}
+
+templ historyTab(v *view.Ctx, current string, mode string, label string) {
+	<a href={ templ.URL(historyHref(mode)(1)) } aria-pressed={ fmt.Sprint(current == mode) }>{ label }</a>
+}
+
+func historyHref(mode string) func(int) string {
+	return func(page int) string {
+		if mode == "" {
+			return fmt.Sprintf("/history?page=%d", page)
+		}
+		return fmt.Sprintf("/history?mode=%s&page=%d", mode, page)
+	}
+}

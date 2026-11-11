@@ -1,0 +1,14 @@
+{
+  // VS Code shows an "Install recommended extensions" prompt when you open this folder.
+  "recommendations": [
+    "anthropic.claude-code",          // Claude Code: builds features with you, reads CLAUDE.md
+    "golang.go",                      // Go: run, debug, tests, imports
+    "ms-azuretools.vscode-docker",    // Docker: see the PostgreSQL container
+    "humao.rest-client",              // send the requests in api.http with one click
+    "mtxr.sqltools",                  // browse the database
+    "mtxr.sqltools-driver-pg",
+    "a-h.templ",                      // templ pages (web UI, next step)
+    "bradlc.vscode-tailwindcss",      // Tailwind classes (web UI, next step)
+    "editorconfig.editorconfig"
+  ]
+}

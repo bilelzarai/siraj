@@ -40,6 +40,10 @@ func NewGame(repo *repository.Repo, hub *Hub) *Game { return &Game{repo: repo, h
 // StartOptions configures a new round.
 type StartOptions struct {
 	CategoryID *int
+	// DomainID draws from a whole subject area. It is an alternative to
+	// CategoryID, never a companion: picking a category has already picked the
+	// domain above it, and carrying both would let the two disagree.
+	DomainID   *int
 	Difficulty int // 0 = mixed
 	Count      int
 	Locale     string
@@ -85,7 +89,8 @@ func (g *Game) Start(ctx context.Context, userID uuid.UUID, opts StartOptions) (
 	ids := opts.QuestionIDs
 	if len(ids) == 0 {
 		var err error
-		ids, err = g.repo.PickQuestionIDs(ctx, opts.CategoryID, opts.Difficulty, opts.Count, opts.Locale)
+		ids, err = g.repo.PickQuestionIDs(ctx, opts.CategoryID, opts.DomainID,
+			opts.Difficulty, opts.Count, opts.Locale)
 		if err != nil {
 			return nil, err
 		}
@@ -94,10 +99,19 @@ func (g *Game) Start(ctx context.Context, userID uuid.UUID, opts StartOptions) (
 		return nil, ErrNotEnoughQuestions
 	}
 
+	// A category wins over a domain if a caller sends both: it is the narrower
+	// of the two, and recording a domain beside it would claim the round was
+	// drawn from the whole area when it was not.
+	domainID := opts.DomainID
+	if opts.CategoryID != nil {
+		domainID = nil
+	}
+
 	session := &models.GameSession{
 		UserID:         userID,
 		Mode:           opts.Mode,
 		CategoryID:     opts.CategoryID,
+		DomainID:       domainID,
 		Difficulty:     opts.Difficulty,
 		Locale:         opts.Locale,
 		QuestionIDs:    ids,

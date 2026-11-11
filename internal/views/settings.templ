@@ -34,6 +34,22 @@ func (d SettingsData) PwProblems(c Ctx) []FieldProblem {
 	return out
 }
 
+// themeChoice is one option in the appearance group. aria-checked is what a
+// screen reader reads; is-active is what the eye reads; both are set by the
+// server so the answer is already correct before the script runs.
+templ themeChoice(c Ctx, theme string) {
+	<button
+		class={ "segment__item", templ.KV("is-active", c.CurrentTheme() == theme) }
+		type="button"
+		role="radio"
+		aria-checked={ boolAttr(c.CurrentTheme() == theme) }
+		data-theme-set={ theme }
+	>
+		{ children... }
+		<span>{ c.T(ThemeKey(theme)) }</span>
+	</button>
+}
+
 templ Settings(c Ctx, d SettingsData) {
 	@Base(c, c.T("settings.title")) {
 		<div class="shell shell--narrow stack-lg">
@@ -42,7 +58,7 @@ templ Settings(c Ctx, d SettingsData) {
 				<h1>{ c.T("settings.title") }</h1>
 			</div>
 			<section class="card stack">
-				<div class="card__head" style="margin:0">
+				<div class="card__head flush">
 					<span class="card__title">{ c.T("settings.language") }</span>
 				</div>
 				<p class="small muted">{ c.T("settings.language.help") }</p>
@@ -57,7 +73,6 @@ templ Settings(c Ctx, d SettingsData) {
 								type="submit"
 								style={ localeButtonStyle(loc.Code == c.Locale) }
 							>
-								<span aria-hidden="true">{ loc.Flag }</span>
 								<span>{ loc.Name }</span>
 							</button>
 						</form>
@@ -65,23 +80,29 @@ templ Settings(c Ctx, d SettingsData) {
 				</div>
 			</section>
 			<section class="card stack">
-				<div class="card__head" style="margin:0">
+				<div class="card__head flush">
 					<span class="card__title">{ c.T("settings.theme") }</span>
 				</div>
-				<div class="segment" role="group">
-					<button class="segment__item" type="button" data-theme-set="light">
-						☀️ { c.T("settings.theme.light") }
-					</button>
-					<button class="segment__item" type="button" data-theme-set="dark">
-						🌙 { c.T("settings.theme.dark") }
-					</button>
-					<button class="segment__item" type="button" data-theme-set="system">
-						🖥️ { c.T("settings.theme.system") }
-					</button>
+				// The applied setting is rendered here rather than left to the
+				// script: a group of three identical buttons tells nobody which
+				// one is in force, and a screen reader was told nothing at all —
+				// role="group" carries no selected state. A radio group does, it
+				// survives a page with no script, and it does not flash on first
+				// paint. Same icons as the header toggle, for the same reason.
+				<div class="segment" role="radiogroup" aria-label={ c.T("settings.theme") }>
+					@themeChoice(c, "light") {
+						@IconSun()
+					}
+					@themeChoice(c, "dark") {
+						@IconMoon()
+					}
+					@themeChoice(c, "system") {
+						@IconMonitor()
+					}
 				</div>
 			</section>
 			<section class="card stack">
-				<div class="card__head" style="margin:0">
+				<div class="card__head flush">
 					<span class="card__title">{ c.T("settings.password.title") }</span>
 				</div>
 				@FormProblems(c, d.PasswordError, d.PwProblems(c))
@@ -109,7 +130,7 @@ templ Settings(c Ctx, d SettingsData) {
 				</form>
 			</section>
 			<section class="card stack">
-				<div class="card__head" style="margin:0">
+				<div class="card__head flush">
 					<span class="card__title">{ c.T("settings.sessions.title") }</span>
 				</div>
 				<div class="stack-sm">
@@ -135,7 +156,7 @@ templ Settings(c Ctx, d SettingsData) {
 				}
 			</section>
 			<section class="card stack">
-				<div class="card__head" style="margin:0">
+				<div class="card__head flush">
 					<span class="card__title" style="color:var(--danger)">{ c.T("settings.danger") }</span>
 				</div>
 				<p class="small muted">{ c.T("settings.delete.confirm") }</p>
@@ -143,7 +164,7 @@ templ Settings(c Ctx, d SettingsData) {
 				// deliberate step that stops a mis-click, the password is what
 				// proves the owner is the one asking. The username alone is on
 				// screen, so a borrowed session could type it.
-				<form method="post" action="/settings/delete" class="row row--wrap" style="gap:10px" data-confirm={ c.T("settings.delete.confirm") }>
+				<form method="post" action="/settings/delete" class="row row--wrap gap-5" data-confirm={ c.T("settings.delete.confirm") }>
 					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
 					<input
 						class="input"

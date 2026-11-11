@@ -3,6 +3,9 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -96,31 +99,103 @@ func (r *Repo) CommentCounts(ctx context.Context, questionIDs []int64) (map[int6
 	return out, rows.Err()
 }
 
-// RecentQuestionComments feeds the moderation queue.
-// CountQuestionComments is how many remarks the moderation queue holds.
-func (r *Repo) CountQuestionComments(ctx context.Context, includeHidden bool) (int, error) {
+// CommentFilter is the moderation queue's filter.
+//
+// State is the queue's own split: "open" is everything still waiting, which is
+// what the screen opens on, "resolved" what has been dealt with, "hidden" what
+// was taken down, and "" everything.
+type CommentFilter struct {
+	Query  string
+	State  string
+	Locale string
+	Limit  int
+	Offset int
+}
+
+// commentWhere builds the clause the count and the page share, so the pager
+// can never be counting a different set than the one on screen.
+// $1 is always the locale the category name is resolved in, so the clause's
+// own placeholders start at $2. Numbering is by position in the argument
+// slice, not by position in the statement, so the locale has to be seeded here
+// rather than prepended by the caller — prepending it shifted every filter
+// placeholder by one and the LIMIT ended up reading the search text.
+func commentWhere(f CommentFilter) (string, []any) {
+	where := []string{"$1::text IS NOT NULL"}
+	args := []any{commentLocale(f)}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+
+	switch f.State {
+	case "open":
+		where = append(where, "qc.resolved_at IS NULL AND NOT qc.hidden")
+	case "resolved":
+		where = append(where, "qc.resolved_at IS NOT NULL")
+	case "hidden":
+		where = append(where, "qc.hidden")
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		add("qc.body ILIKE '%%' || $%d || '%%'", q)
+	}
+	if f.Locale != "" {
+		add("qc.locale = $%d", f.Locale)
+	}
+	return strings.Join(where, " AND "), args
+}
+
+// CommentCountsByState is the number beside each of the queue's tabs. One
+// query rather than four: the tabs are read together.
+func (r *Repo) CommentCountsByState(ctx context.Context) (models.CommentCounts, error) {
+	var c models.CommentCounts
+	err := r.pool.QueryRow(ctx, `
+		SELECT count(*)::int,
+		       count(*) FILTER (WHERE resolved_at IS NULL AND NOT hidden)::int,
+		       count(*) FILTER (WHERE resolved_at IS NOT NULL)::int,
+		       count(*) FILTER (WHERE hidden)::int
+		  FROM question_comments`).Scan(&c.Total, &c.Open, &c.Resolved, &c.Hidden)
+	return c, err
+}
+
+// CountQuestionComments is how many remarks the filter matches.
+func (r *Repo) CountQuestionComments(ctx context.Context, f CommentFilter) (int, error) {
+	clause, args := commentWhere(f)
 	var n int
 	err := r.pool.QueryRow(ctx,
-		`SELECT count(*) FROM question_comments WHERE ($1 OR NOT hidden)`,
-		includeHidden).Scan(&n)
+		`SELECT count(*) FROM question_comments qc WHERE `+clause, args...).Scan(&n)
 	return n, err
 }
 
-// QuestionCommentsPage is one page of it.
-func (r *Repo) QuestionCommentsPage(ctx context.Context, includeHidden bool, limit, offset int) ([]*models.QuestionComment, error) {
-	return r.questionComments(ctx, includeHidden, limit, offset)
-}
+// QuestionCommentsPage is one page of the queue.
+//
+// The offset is used. It was accepted and dropped, so every page of the
+// moderation queue was page one — the pager moved, the rows did not, and a
+// queue longer than one page could not be worked through at all.
+func (r *Repo) QuestionCommentsPage(ctx context.Context, f CommentFilter) ([]*models.QuestionComment, error) {
+	if f.Limit <= 0 || f.Limit > 200 {
+		f.Limit = 50
+	}
+	clause, args := commentWhere(f)
+	args = append(args, f.Limit, f.Offset)
 
-func (r *Repo) questionComments(ctx context.Context, includeHidden bool, limit, offset int) ([]*models.QuestionComment, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT qc.id, qc.question_id, qc.locale, qc.body, qc.created_at,
 		       COALESCE(u.display_name, ''), COALESCE(u.username, ''),
-		       COALESCE(u.avatar_seed, ''), qc.hidden
+		       COALESCE(u.avatar_seed, ''), qc.hidden,
+		       qc.resolved_at, COALESCE(ru.display_name, ru.username, ''),
+		       COALESCE(ct.name, c.slug, ''), COALESCE(c.icon, '')
 		  FROM question_comments qc
-		  LEFT JOIN users u ON u.id = qc.user_id
-		 WHERE ($1 OR NOT qc.hidden)
+		  LEFT JOIN users u  ON u.id = qc.user_id
+		  LEFT JOIN users ru ON ru.id = qc.resolved_by
+		  -- The question the remark is about, so a moderator reading it knows
+		  -- which part of the bank it concerns without opening the question.
+		  LEFT JOIN questions q  ON q.id = qc.question_id
+		  LEFT JOIN categories c ON c.id = q.category_id
+		  LEFT JOIN category_translations ct
+		         ON ct.category_id = c.id AND ct.locale = $1
+		 WHERE `+clause+`
 		 ORDER BY qc.created_at DESC
-		 LIMIT $2`, includeHidden, limit)
+		 LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +205,34 @@ func (r *Repo) questionComments(ctx context.Context, includeHidden bool, limit, 
 	for rows.Next() {
 		var c models.QuestionComment
 		if err := rows.Scan(&c.ID, &c.QuestionID, &c.Locale, &c.Body, &c.CreatedAt,
-			&c.AuthorName, &c.AuthorUsername, &c.AuthorSeed, &c.Hidden); err != nil {
+			&c.AuthorName, &c.AuthorUsername, &c.AuthorSeed, &c.Hidden,
+			&c.ResolvedAt, &c.ResolvedBy, &c.CategoryName, &c.CategoryIcon); err != nil {
 			return nil, err
 		}
 		out = append(out, &c)
 	}
 	return out, rows.Err()
+}
+
+// SetQuestionCommentResolved marks a remark dealt with, or puts it back.
+//
+// The third state, beside visible and hidden. A remark that reported a real
+// fault is not something to hide once it has been fixed — it was useful, and
+// hiding it pretends it never arrived — so this is how the queue stops asking
+// about it while it stays on the question.
+func (r *Repo) SetQuestionCommentResolved(ctx context.Context, id int64, resolved bool, by uuid.UUID) error {
+	ct, err := r.pool.Exec(ctx, `
+		UPDATE question_comments
+		   SET resolved_at = CASE WHEN $2 THEN now() ELSE NULL END,
+		       resolved_by = CASE WHEN $2 THEN $3::uuid ELSE NULL END
+		 WHERE id = $1`, id, resolved, by)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetQuestionCommentHidden is the moderator action.
@@ -295,4 +392,63 @@ func (r *Repo) CountPoorlyRated(ctx context.Context, threshold float64, minVotes
 			   AND max(qr.updated_at) > COALESCE(q.ratings_reviewed_at, '-infinity'::timestamptz)
 		) flagged`, threshold, minVotes).Scan(&n)
 	return n, err
+}
+
+// RatingSummary is how the bank is rated overall, for the figures above the
+// poorly-rated list: a single bad question says nothing about whether the bank
+// is in trouble, and these two numbers are what gives it a scale.
+type RatingSummary struct {
+	Votes int
+	// Positive is how many of those were four or five stars. The screen above
+	// this draws a thumbs split, and four-and-up is what "thumbs up" means on
+	// a five-point scale.
+	Positive int
+	// Average across every rating ever given.
+	Average float64
+}
+
+// Share is the positive proportion, as a percentage.
+func (r RatingSummary) Share() int {
+	if r.Votes == 0 {
+		return 0
+	}
+	return r.Positive * 100 / r.Votes
+}
+
+// RatingOverview counts every rating in a window. A zero window means all of
+// them — the screen offers "last 30 days" and "all time" and this answers both
+// rather than growing a second query.
+func (r *Repo) RatingOverview(ctx context.Context, within time.Duration) (RatingSummary, error) {
+	var s RatingSummary
+	var avg *float64
+
+	// An interval of zero would exclude everything, so "all time" is expressed
+	// as a null cutoff rather than as a zero one.
+	var since *time.Time
+	if within > 0 {
+		t := time.Now().Add(-within)
+		since = &t
+	}
+
+	err := r.pool.QueryRow(ctx, `
+		SELECT count(*)::int,
+		       count(*) FILTER (WHERE stars >= 4)::int,
+		       avg(stars)::float8
+		  FROM question_ratings
+		 WHERE $1::timestamptz IS NULL OR updated_at >= $1`, since,
+	).Scan(&s.Votes, &s.Positive, &avg)
+	if avg != nil {
+		s.Average = *avg
+	}
+	return s, err
+}
+
+// commentLocale is the language the category name is resolved in. The filter's
+// own locale when it has one, so a queue narrowed to French reads French
+// category names; otherwise the bank's default.
+func commentLocale(f CommentFilter) string {
+	if f.Locale != "" {
+		return f.Locale
+	}
+	return "ar"
 }

@@ -30,24 +30,43 @@ type AdminImportData struct {
 	Compare []*models.QuestionCompare
 }
 
+// importTile is one figure from the run. Attention only where the number
+// being above zero is a problem.
+templ importTile(c Ctx, icon, label string, n int, bad bool) {
+	<div class={ "kpi", templ.KV("is-attention", bad && n > 0) }>
+		<div class="kpi-label">
+			@adminIcon(icon, "")
+			{ label }
+		</div>
+		<div class="kpi-value">{ fmt.Sprint(n) }</div>
+	</div>
+}
+
 templ AdminImport(c Ctx, a AdminChrome, d AdminImportData) {
 	@adminShell(c, a, c.T("admin.import.title")) {
-		@BackLink(c, "/admin/questions", c.T("admin.nav.questions"))
+		<div class="page-head">
+			<div class="actions">
+				<a class="btn btn-ghost btn-sm" href="/admin/questions">
+					@adminIcon("i-chevron-left", "icon-sm icon-flip")
+					{ c.T("admin.nav.questions") }
+				</a>
+			</div>
+		</div>
 		@FormError(c, d.Error)
-		<section class="card stack">
-			<p class="small muted">{ c.T("admin.import.help") }</p>
+		<section class="panel stack">
+			<p class="muted">{ c.T("admin.import.help") }</p>
 			<form method="post" action="/admin/questions/import" enctype="multipart/form-data" class="stack">
 				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
 				<div class="field">
 					<label class="label" for="file">{ c.T("admin.import.file") }</label>
 					<input class="input" id="file" name="file" type="file" accept=".json,.csv,application/json,text/csv" required/>
-					<span class="tiny faint">{ c.T("admin.import.formats") }</span>
+					<span class="faint">{ c.T("admin.import.formats") }</span>
 				</div>
-				<div class="row" style="gap:10px">
-					<button class="btn btn--primary" type="submit" name="commit" value="0">
+				<div class="row">
+					<button class="btn btn-primary" type="submit" name="commit" value="0">
 						{ c.T("admin.import.preview") }
 					</button>
-					<a class="btn btn--ghost" href="/admin/questions/import/template.csv">
+					<a class="btn btn-ghost" href="/admin/questions/import/template.csv">
 						{ c.T("admin.import.template") }
 					</a>
 				</div>
@@ -57,37 +76,42 @@ templ AdminImport(c Ctx, a AdminChrome, d AdminImportData) {
 			@importResult(c, d)
 		}
 		if len(d.Recent) > 0 {
-			<section class="card card--flush">
-				<div class="card__head" style="padding:18px 20px 0;margin:0">
-					<span class="card__title">{ c.T("admin.import.history") }</span>
+			<section class="panel">
+				<div class="panel-head" style="padding:18px 20px 0;margin:0">
+					<h2>{ c.T("admin.import.history") }</h2>
 				</div>
-				<div class="scroll-x">
-					<table class="table">
+				<div class="table-wrap">
+					<table class="table stack-sm">
+						<caption class="sr-only">{ c.T("admin.import.history") }</caption>
 						<thead>
 							<tr>
-								<th>{ c.T("admin.import.file") }</th>
-								<th>{ c.T("admin.audit.actor") }</th>
-								<th class="num">+</th>
-								<th class="num">↻</th>
-								<th class="num">⊘</th>
-								<th class="num">✕</th>
-								<th></th>
+								<th scope="col" data-sort>{ c.T("admin.import.file") }</th>
+								<th scope="col" data-sort>{ c.T("admin.audit.actor") }</th>
+								// The four outcomes. Headed by their words
+								// rather than by a glyph: these become the row
+								// labels when the table stacks on a phone, and
+								// "⊘ 3" is not a sentence.
+								<th class="t-num" scope="col" data-sort="num">{ c.T("admin.import.added") }</th>
+								<th class="t-num" scope="col" data-sort="num">{ c.T("admin.import.updated") }</th>
+								<th class="t-num" scope="col" data-sort="num">{ c.T("admin.import.skipped") }</th>
+								<th class="t-num" scope="col" data-sort="num">{ c.T("admin.import.rejected") }</th>
+								<th scope="col"><span class="sr-only">{ c.T("admin.users.status") }</span></th>
 							</tr>
 						</thead>
 						<tbody>
 							for _, run := range d.Recent {
 								<tr>
-									<td class="truncate" style="max-width:24ch">{ run.Filename }</td>
-									<td class="tiny muted">{ run.ActorUsername }</td>
-									<td class="num">{ fmt.Sprint(run.Added) }</td>
-									<td class="num">{ fmt.Sprint(run.Updated) }</td>
-									<td class="num">{ fmt.Sprint(run.Skipped) }</td>
-									<td class="num">{ fmt.Sprint(run.Rejected) }</td>
-									<td class="tiny muted">
+									<td class="cell-first truncate" data-label={ c.T("admin.import.file") }>{ run.Filename }</td>
+									<td class="muted" data-label={ c.T("admin.audit.actor") }>{ run.ActorUsername }</td>
+									<td class="t-num" data-label={ c.T("admin.import.added") }>{ fmt.Sprint(run.Added) }</td>
+									<td class="t-num" data-label={ c.T("admin.import.updated") }>{ fmt.Sprint(run.Updated) }</td>
+									<td class="t-num" data-label={ c.T("admin.import.skipped") }>{ fmt.Sprint(run.Skipped) }</td>
+									<td class="t-num" data-label={ c.T("admin.import.rejected") }>{ fmt.Sprint(run.Rejected) }</td>
+									<td class="muted" data-label={ c.T("admin.users.status") }>
 										if run.Committed {
-											<span class="tag tag--success">{ c.T("admin.import.applied") }</span>
+											<span class="badge badge-live">{ c.T("admin.import.applied") }</span>
 										} else {
-											<span class="tag">{ c.T("admin.import.previewOnly") }</span>
+											<span class="badge">{ c.T("admin.import.previewOnly") }</span>
 										}
 										{ c.Tr.RelativeTime(run.CreatedAt) }
 									</td>
@@ -102,52 +126,57 @@ templ AdminImport(c Ctx, a AdminChrome, d AdminImportData) {
 }
 
 templ importResult(c Ctx, d AdminImportData) {
-	<section class="card stack">
+	<section class="panel stack">
 		// Anything that needs an answer goes above the numbers and the report.
 		// Underneath three hundred rows it is not a prompt, it is a footnote.
 		if d.Preview && d.Undecided() > 0 {
-			<div class="alert alert--warning">
+			<div class="callout warn">
 				<span aria-hidden="true">❓</span>
 				<span>{ c.T("admin.import.dup.pending", d.Undecided()) }</span>
 			</div>
 		}
 		if d.Preview && d.Stash != "" && d.Result.Added+d.Result.Updated > 0 {
-			<div class="alert alert--info">
+			<div class="callout">
 				<span aria-hidden="true">ℹ️</span>
 				<span>{ c.T("admin.import.confirmHint") }</span>
 			</div>
 		}
-		<div class="card__head" style="margin:0">
-			<span class="card__title">
+		<div class="panel-head flush">
+			<h2>
 				if d.Preview {
 					{ c.T("admin.import.previewTitle") }
 				} else {
 					{ c.T("admin.import.resultTitle") }
 				}
-			</span>
+			</h2>
 		</div>
-		<div class="grid grid--4">
-			@StatTile("➕", fmt.Sprint(d.Result.Added), c.T("admin.import.added"))
-			@StatTile("↻", fmt.Sprint(d.Result.Updated), c.T("admin.import.updated"))
-			@StatTile("⊘", fmt.Sprint(d.Result.Skipped), c.T("admin.import.skipped"))
-			@StatTile("✕", fmt.Sprint(d.Result.Rejected), c.T("admin.import.rejected"))
+		// The kit's tiles rather than the player's stat blocks: this screen
+		// is inside the console and these four numbers are the same kind of
+		// figure the dashboard reports. Rejected is the only one that is bad
+		// news, so it is the only one that draws attention to itself.
+		<div class="kpis">
+			@importTile(c, "i-plus", c.T("admin.import.added"), d.Result.Added, false)
+			@importTile(c, "i-refresh", c.T("admin.import.updated"), d.Result.Updated, false)
+			@importTile(c, "i-skip", c.T("admin.import.skipped"), d.Result.Skipped, false)
+			@importTile(c, "i-x-circle", c.T("admin.import.rejected"), d.Result.Rejected, true)
 		</div>
 		if len(d.Result.Report) > 0 {
-			<div id="import-report" class="scroll-x" style="max-height:320px;overflow-y:auto">
-				<table class="table">
+			<div id="import-report" class="table-wrap" style="max-height:320px;overflow-y:auto">
+				<table class="table stack-sm">
+					<caption class="sr-only">{ c.T("admin.nav.import") }</caption>
 					<thead>
 						<tr>
-							<th class="num">{ c.T("admin.import.line") }</th>
-							<th>{ c.T("admin.import.ref") }</th>
-							<th>{ c.T("admin.import.outcome") }</th>
-							<th>{ c.T("admin.import.reason") }</th>
+							<th class="t-num" scope="col" data-sort="num">{ c.T("admin.import.line") }</th>
+							<th scope="col" data-sort>{ c.T("admin.import.ref") }</th>
+							<th scope="col" data-sort>{ c.T("admin.import.outcome") }</th>
+							<th scope="col" data-sort>{ c.T("admin.import.reason") }</th>
 						</tr>
 					</thead>
 					<tbody>
 						for _, row := range decisionsFirst(d.Result.Report) {
 							<tr>
-								<td class="num tiny muted">{ fmt.Sprint(row.Line) }</td>
-								<td class="tiny truncate" style="max-width:26ch">
+								<td class="t-num muted" data-label={ c.T("admin.import.line") }>{ fmt.Sprint(row.Line) }</td>
+								<td class="cell-first truncate" data-label={ c.T("admin.import.ref") }>
 									if id, ok := row.RefID(); ok && row.RefExists {
 										@questionRef(c, id, row.Prompt)
 									} else if id, ok := row.RefID(); ok {
@@ -158,8 +187,10 @@ templ importResult(c Ctx, d AdminImportData) {
 										{ row.Ref }
 									}
 								</td>
-								<td><span class={ "tag", outcomeClass(row.Outcome) }>{ row.Outcome }</span></td>
-								<td class="tiny muted">
+								<td data-label={ c.T("admin.import.outcome") }>
+									<span class={ "badge", outcomeClass(row.Outcome) }>{ row.Outcome }</span>
+								</td>
+								<td class="muted" data-label={ c.T("admin.import.reason") }>
 									if row.SimilarID > 0 {
 										{ c.T("admin.import.looksLike", row.Percent) }
 										@questionRef(c, row.SimilarID, row.SimilarPrompt)
@@ -182,7 +213,7 @@ templ importResult(c Ctx, d AdminImportData) {
 		// Said rather than left to be discovered: a row without a "compare" link
 		// is otherwise indistinguishable from one whose link was missed.
 		if d.Preview && d.Flagged() > len(d.Compare) {
-			<p class="tiny muted">{ c.T("admin.compare.partial", len(d.Compare)) }</p>
+			<p class="muted">{ c.T("admin.compare.partial", len(d.Compare)) }</p>
 		}
 		// The panels live under the report rather than inside it: the table is a
 		// capped, scrolling box, and two questions read side by side do not fit
@@ -203,14 +234,13 @@ templ importResult(c Ctx, d AdminImportData) {
 				method="post"
 				action="/admin/questions/import"
 				class="row"
-				style="gap:10px"
 			>
 				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
 				<input type="hidden" name="commit" value="1"/>
 				// The upload itself is held on the server. This names it, so
 				// applying is one press rather than a second file dialog.
 				<input type="hidden" name="stash" value={ d.Stash }/>
-				<button class="btn btn--primary" type="submit">{ c.T("admin.import.apply") }</button>
+				<button class="btn btn-primary" type="submit">{ c.T("admin.import.apply") }</button>
 			</form>
 		}
 	</section>

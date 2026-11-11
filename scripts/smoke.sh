@@ -5,7 +5,26 @@ set -uo pipefail
 BASE=http://localhost:8080
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 DIR=${SMOKE_TMP:-$(mktemp -d)}
-trap '[ -n "${SMOKE_TMP:-}" ] || rm -rf "$DIR"' EXIT
+
+# A run must not outlive its own fixtures.
+#
+# reset-test-data.sh runs at the top of this script, which makes the suite
+# repeatable and does nothing about what a finished run leaves behind. So every
+# fixture stayed in the development database until somebody happened to run the
+# suite again — and one of them, a question asking the colour of the fourth
+# planet, sat active in the Manners & Ethics category, in English only, where a
+# player could draw it in a real round.
+#
+# Cleaning up on EXIT rather than at the end of the happy path, because a run
+# that fails half way leaves the most behind. SMOKE_KEEP=1 holds the fixtures
+# for inspection.
+cleanup() {
+  code=$?
+  [ -n "${SMOKE_TMP:-}" ] || rm -rf "$DIR"
+  [ -n "${SMOKE_KEEP:-}" ] || "$REPO/scripts/reset-test-data.sh" >/dev/null 2>&1 || true
+  exit $code
+}
+trap cleanup EXIT
 A=$DIR/cookieA.txt
 B=$DIR/cookieB.txt
 
@@ -15,10 +34,10 @@ B=$DIR/cookieB.txt
 # DATABASE_URL in .env, which holds whatever the last deploy was pointed at. So
 # `promote` landed on another server, the account under test stayed a player,
 # and seventy-six admin checks reported 404 without a word about why.
-DB_CONTAINER=${DB_CONTAINER:-islamic-game-db}
-DB_USER=${DB_USER:-islamic}
-DB_NAME=${DB_NAME:-islamic_game}
-DB_PASSWORD=${DB_PASSWORD:-islamic}
+DB_CONTAINER=${DB_CONTAINER:-siraj-game-db}
+DB_USER=${DB_USER:-siraj}
+DB_NAME=${DB_NAME:-siraj-db}
+DB_PASSWORD=${DB_PASSWORD:-siraj}
 DB_PORT=${DB_PORT:-5434}
 export DATABASE_URL=${SMOKE_DATABASE_URL:-postgres://$DB_USER:$DB_PASSWORD@localhost:$DB_PORT/$DB_NAME?sslmode=disable}
 
@@ -50,22 +69,22 @@ echo "== the reset only touches fixture accounts =="
 # This script used to run an unscoped DELETE FROM users, so running the smoke
 # test destroyed real accounts sharing the development database. The canary
 # below must still be standing afterwards.
-docker exec -i "${DB_CONTAINER:-islamic-game-db}" psql -U "${DB_USER:-islamic}" \
-  -d "${DB_NAME:-islamic_game}" -q -c \
+docker exec -i "${DB_CONTAINER:-siraj-game-db}" psql -U "${DB_USER:-siraj}" \
+  -d "${DB_NAME:-siraj-db}" -q -c \
   "INSERT INTO users (username, display_name, email, password_hash, avatar_seed, locale, role, status)
    VALUES ('smoke_canary','Canary','canary@not-example.test','\$2a\$10\$x','seed','en','player','active')
    ON CONFLICT (username) DO NOTHING;" >/dev/null 2>&1
 "$REPO/scripts/reset-test-data.sh" >/dev/null 2>&1
-SURVIVED=$(docker exec -i "${DB_CONTAINER:-islamic-game-db}" psql -U "${DB_USER:-islamic}" \
-  -d "${DB_NAME:-islamic_game}" -tAc \
+SURVIVED=$(docker exec -i "${DB_CONTAINER:-siraj-game-db}" psql -U "${DB_USER:-siraj}" \
+  -d "${DB_NAME:-siraj-db}" -tAc \
   "SELECT count(*) FROM users WHERE username = 'smoke_canary';" 2>/dev/null)
 check "a non-fixture account survives the reset" 1 "$SURVIVED"
-FIXTURES=$(docker exec -i "${DB_CONTAINER:-islamic-game-db}" psql -U "${DB_USER:-islamic}" \
-  -d "${DB_NAME:-islamic_game}" -tAc \
+FIXTURES=$(docker exec -i "${DB_CONTAINER:-siraj-game-db}" psql -U "${DB_USER:-siraj}" \
+  -d "${DB_NAME:-siraj-db}" -tAc \
   "SELECT count(*) FROM users WHERE email LIKE '%@example.com';" 2>/dev/null)
 check "fixture accounts are cleared" 0 "$FIXTURES"
-docker exec -i "${DB_CONTAINER:-islamic-game-db}" psql -U "${DB_USER:-islamic}" \
-  -d "${DB_NAME:-islamic_game}" -q -c "DELETE FROM users WHERE username='smoke_canary';" >/dev/null 2>&1
+docker exec -i "${DB_CONTAINER:-siraj-game-db}" psql -U "${DB_USER:-siraj}" \
+  -d "${DB_NAME:-siraj-db}" -q -c "DELETE FROM users WHERE username='smoke_canary';" >/dev/null 2>&1
 
 echo
 
@@ -76,8 +95,16 @@ check "landing en" 200 "$(code x $DIR/out.html "$BASE/?lang=en")"
 contains "landing en copy" "blends fun with learning" $DIR/out.html
 check "landing fr" 200 "$(code x $DIR/out.html "$BASE/?lang=fr")"
 contains "landing fr copy" "plaisir et apprentissage" $DIR/out.html
-check "css"       200 "$(code x /dev/null $BASE/static/css/app.css)"
-check "js"        200 "$(code x /dev/null $BASE/static/js/app.js)"
+# What the page links, not what it used to link. These two asked for fixed
+# paths that the bundler replaced with hashed filenames; they would now pass
+# only by accident, or fail for the wrong reason.
+curl -s "$BASE/" -o $DIR/head.html
+CSS_URL=$(grep -oP '<link rel="stylesheet" href="\K[^"]+' $DIR/head.html | head -1)
+JS_URL=$(grep -oP '<script src="\K[^"]+(?=" type="module")' $DIR/head.html | head -1)
+check "page links a stylesheet" "yes" "$([ -n "$CSS_URL" ] && echo yes || echo no)"
+check "page links a script"     "yes" "$([ -n "$JS_URL" ] && echo yes || echo no)"
+check "css"       200 "$(code x /dev/null "$BASE$CSS_URL")"
+check "js"        200 "$(code x /dev/null "$BASE$JS_URL")"
 check "healthz"   200 "$(code x /dev/null $BASE/healthz)"
 check "404"       404 "$(code x /dev/null $BASE/nope)"
 check "guard /app" 303 "$(code x /dev/null -o /dev/null $BASE/app)"
@@ -104,7 +131,11 @@ SEEN=$(docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
   "SELECT count(*) FROM users WHERE username = 'aisha_t';" 2>/dev/null)
 if [ "${SEEN:-0}" != "1" ]; then
   echo
-  echo "  FAIL the server under test is not using the database this script manages"
+  echo "  FAIL registration wrote nothing this script can see"
+  echo "       Either the server is pointed at another database, or — far more"
+  echo "       often — this suite has been run several times within the hour and"
+  echo "       the register limiter (ten per address per hour) is now refusing."
+  echo "       Restart the server to clear it; the limiter is in memory."
   echo "       start it with DATABASE_URL=$DATABASE_URL"
   exit 1
 fi
@@ -243,7 +274,7 @@ check "B inbox" 200 "$(code x $DIR/inbox.html -b "$B" $BASE/messages)"
 contains "message preview" "Assalamu alaykum" $DIR/inbox.html
 POLL=$(curl -s -b "$B" -H 'Accept: application/json' "$BASE/messages/$CONV/poll?after=0")
 echo "    poll -> $POLL"
-check "counts api" 200 "$(code x /dev/null -b "$B" -H 'Accept: application/json' $BASE/api/counts)"
+check "counts api" 200 "$(code x /dev/null -b "$B" -H 'Accept: application/json' $BASE/ui/counts)"
 
 echo "== profile / leaderboard / settings =="
 check "own profile" 200 "$(code x $DIR/prof.html -b "$A" -L $BASE/profile)"
@@ -305,10 +336,18 @@ for path in /settings /profile/edit /history /leaderboard /friends /challenges /
 done
 
 echo "== asset cache-busting =="
+# A fingerprint in the filename, which is what lets the response be cached
+# forever. Hashed by the bundler now rather than appended as ?v=, so the check
+# is that the name carries one — not which one.
 curl -s -b "$A" "$BASE/app" -o $DIR/assets.html
-V=$(grep -oP 'app\.css\?v=\K[^"]+' $DIR/assets.html | head -1)
-check "css url is versioned" "yes" "$([ -n "$V" ] && echo yes || echo no)"
-check "js url is versioned" "yes" "$(grep -q "app.js?v=$V" $DIR/assets.html && echo yes || echo no)"
+APP_CSS=$(grep -oP '<link rel="stylesheet" href="\K[^"]+' $DIR/assets.html | head -1)
+APP_JS=$(grep -oP '<script src="\K[^"]+(?=" type="module")' $DIR/assets.html | head -1)
+check "css url carries a fingerprint" "yes" \
+  "$(echo "$APP_CSS" | grep -qE '/static/dist/.*-[A-Za-z0-9_-]{8,}\.css$' && echo yes || echo no)"
+check "js url carries a fingerprint" "yes" \
+  "$(echo "$APP_JS" | grep -qE '/static/dist/.*-[A-Za-z0-9_-]{8,}\.js$' && echo yes || echo no)"
+check "the signed-in page links the same build" "yes" \
+  "$([ "$APP_CSS" = "$CSS_URL" ] && echo yes || echo no)"
 
 echo "== confirm-answer button =="
 check "start round" 303 "$(curl -s -b "$A" -o /dev/null -w '%{http_code}' -X POST $BASE/play/start \
@@ -494,16 +533,21 @@ contains "dark: names the applied theme" "Appearance: Dark" $DIR/theme_dark.html
 contains "dark: server preference survives boot" 'data-theme="dark"' $DIR/theme_dark.html
 # The boot script used to clear data-theme whenever localStorage was empty,
 # which threw away a signed-in user's saved theme on any fresh browser.
-code x $DIR/boot.js "$BASE/static/js/boot.js" > /dev/null
+BOOT_URL=$(grep -oP '<script src="\K[^"]*boot\.js[^"]*' $DIR/theme_dark.html | head -1)
+code x $DIR/boot.js "$BASE$BOOT_URL" > /dev/null
 contains "boot adopts the server theme" "localStorage.setItem(\"theme\"" $DIR/boot.js
-contains "boot script is a file, not inline" 'src="/static/js/boot.js' $DIR/theme_dark.html
-check "boot script is served" 200 "$(code x /dev/null "$BASE/static/js/boot.js")"
+contains "boot script is a file, not inline" 'boot.js' $DIR/theme_dark.html
+check "boot script is served" 200 "$(code x /dev/null "$BASE$BOOT_URL")"
+# Copied verbatim rather than bundled, because a built entry is a module and a
+# module script is deferred — which is the flash this script exists to prevent.
+check "boot script is not a module" "yes" \
+  "$(grep -q 'boot\.js[^>]*type="module"' $DIR/theme_dark.html && echo no || echo yes)"
 # The play screen uses the Bare layout; it has to load the same boot script, or
 # the theme flashes on the one screen a player spends the most time on.
 curl -s -b "$A" -o /dev/null -X POST $BASE/play/start \
   -d "csrf_token=$(csrf "$A")" -d "difficulty=0" -d "count=5" >/dev/null
 curl -s -b "$A" -o $DIR/playround.html $BASE/play/round
-contains "play screen shares the boot script" 'src="/static/js/boot.js' $DIR/playround.html
+contains "play screen shares the boot script" "$BOOT_URL" $DIR/playround.html
 curl -s -b "$A" -o /dev/null -X POST $BASE/play/quit -d "csrf_token=$(csrf "$A")"
 
 echo "== icon-only controls carry a translated name =="
@@ -519,8 +563,12 @@ fi
 
 echo
 echo "== forgotten password =="
-MH=${MAILHOG_URL:-http://localhost:8025}
-if curl -s -o /dev/null --max-time 2 "$MH/api/v2/messages"; then
+# The compose stack's own catcher, on 8026 rather than the usual 8025 — a
+# developer's machine often already has something there, and reading another
+# project's mailbox is how this section reported five failures that meant
+# "nothing was sent" rather than "the wrong thing was sent".
+MH=${MAIL_URL:-${MAILHOG_URL:-http://localhost:8026}}
+if curl -s -o /dev/null --max-time 2 "$MH/api/v1/messages"; then
   curl -s -X DELETE "$MH/api/v1/messages" >/dev/null
   rm -f $DIR/cookieR.txt
   curl -s -c $DIR/cookieR.txt "$BASE/forgot?lang=en" -o $DIR/forgot.html
@@ -542,7 +590,7 @@ if curl -s -o /dev/null --max-time 2 "$MH/api/v2/messages"; then
   else
     SKIP_RESET=0
     contains "unknown address: same answer" "reset link is on its way" $DIR/f1.html
-    UNKNOWN=$(curl -s "$MH/api/v2/messages" | grep -o '"total":[0-9]*' | head -1 | cut -d: -f2)
+    UNKNOWN=$(curl -s "$MH/api/v1/messages" | grep -o '"total":[0-9]*' | head -1 | cut -d: -f2)
     check "unknown address: no mail sent" 0 "$UNKNOWN"
   fi
 
@@ -553,8 +601,8 @@ if curl -s -o /dev/null --max-time 2 "$MH/api/v2/messages"; then
   fi
   sleep 2
 if [ "$SKIP_RESET" = "0" ]; then
-    curl -s "$MH/api/v2/messages" -o $DIR/mail.json
-    TOKEN=$("$REPO/scripts/mailhog-token.py" $DIR/mail.json)
+    TOKEN=$("$REPO/scripts/mail-token.py" "$MH" 2>$DIR/mail.err || true)
+    [ -n "$TOKEN" ] || echo "       $(cat $DIR/mail.err)"
     check "reset link arrived" "yes" "$([ -n "$TOKEN" ] && echo yes || echo no)"
     check "link opens the form" 200 "$(code x /dev/null "$BASE/reset?token=$TOKEN")"
     check "a bogus token is refused" 410 "$(code x /dev/null "$BASE/reset?token=not-a-real-token")"
@@ -619,13 +667,13 @@ check "a second note edits the first" 200 "$(curl -s -b $N -o /dev/null -w '%{ht
   -X POST $BASE/play/comment -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $(csrf $N)" -d "{\"position\":$NPOS,\"body\":\"SMOKE NOTE edited\"}")"
 
-ROWS=$(docker exec -i "${DB_CONTAINER:-islamic-game-db}" psql -U "${DB_USER:-islamic}" \
-  -d "${DB_NAME:-islamic_game}" -tAc \
+ROWS=$(docker exec -i "${DB_CONTAINER:-siraj-game-db}" psql -U "${DB_USER:-siraj}" \
+  -d "${DB_NAME:-siraj-db}" -tAc \
   "SELECT count(*) FROM question_comments WHERE body LIKE 'SMOKE NOTE%';" 2>/dev/null)
 check "editing did not add a row" 1 "$ROWS"
 
-QID=$(docker exec -i "${DB_CONTAINER:-islamic-game-db}" psql -U "${DB_USER:-islamic}" \
-  -d "${DB_NAME:-islamic_game}" -tAc \
+QID=$(docker exec -i "${DB_CONTAINER:-siraj-game-db}" psql -U "${DB_USER:-siraj}" \
+  -d "${DB_NAME:-siraj-db}" -tAc \
   "SELECT question_id FROM question_comments WHERE body LIKE 'SMOKE NOTE%' LIMIT 1;" 2>/dev/null)
 check "the thread renders" 200 "$(code x $DIR/thread.html -b $N "$BASE/questions/$QID/comments")"
 contains "the edited note is shown" "SMOKE NOTE edited" $DIR/thread.html
@@ -779,8 +827,8 @@ echo "== the review queue offers both decisions =="
 # Nothing in this suite can produce a machine translation — no provider is
 # configured — so flag one directly, then check the queue offers both decisions
 # on exactly the locale that is waiting.
-docker exec -i "${DB_CONTAINER:-islamic-game-db}" psql -U "${DB_USER:-islamic}" \
-  -d "${DB_NAME:-islamic_game}" -q -c \
+docker exec -i "${DB_CONTAINER:-siraj-game-db}" psql -U "${DB_USER:-siraj}" \
+  -d "${DB_NAME:-siraj-db}" -q -c \
   "UPDATE question_translations SET needs_review = true, source = 'machine'
     WHERE question_id = (SELECT min(question_id) FROM question_translations WHERE locale = 'fr')
       AND locale = 'fr';" >/dev/null 2>&1
@@ -794,8 +842,8 @@ contains "missing translations are listed" "Missing translations" $DIR/rev.html
 # navbar's language switcher carries those too.
 PAIRS=$(grep -oE '/admin/review/[0-9]+/(approve|reject)' $DIR/rev.html | sort -u | wc -l)
 check "one approve and one reject for the waiting locale" 2 "$PAIRS"
-docker exec -i "${DB_CONTAINER:-islamic-game-db}" psql -U "${DB_USER:-islamic}" \
-  -d "${DB_NAME:-islamic_game}" -q -c \
+docker exec -i "${DB_CONTAINER:-siraj-game-db}" psql -U "${DB_USER:-siraj}" \
+  -d "${DB_NAME:-siraj-db}" -q -c \
   "UPDATE question_translations SET needs_review = false, source = 'seed' WHERE needs_review;" >/dev/null 2>&1
 
 echo

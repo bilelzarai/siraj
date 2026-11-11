@@ -230,7 +230,7 @@ func TestSearchTakesHostileInputAsText(t *testing.T) {
 	}
 	for _, scope := range []string{"friends", "room", "device", "message"} {
 		for _, probe := range probes {
-			status, body := a.get("/api/people?scope=" + scope + "&q=" + url.QueryEscape(probe))
+			status, body := a.get("/ui/people?scope=" + scope + "&q=" + url.QueryEscape(probe))
 			if status != http.StatusOK {
 				t.Errorf("scope %s with %q → %d", scope, clip(probe, 24), status)
 			}

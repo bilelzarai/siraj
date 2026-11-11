@@ -242,7 +242,7 @@ func questionComment(c Ctx, cm *models.QuestionComment) templ.Component {
 			templ_7745c5c3_Var11 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "<article class=\"card stack-sm\"><div class=\"row row--between\" style=\"gap:8px\"><span class=\"tiny bold\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "<article class=\"card stack-sm\"><div class=\"row row--between gap-4\"><span class=\"tiny bold\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

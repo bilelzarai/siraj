@@ -1,0 +1,579 @@
+package views
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/bilelzarai/siraj/internal/i18n"
+	"github.com/bilelzarai/siraj/internal/models"
+)
+
+// The taxonomy screens: the list of categories and the form that writes one.
+// ------------------------------------------------------------- categories --
+
+type AdminCategoriesData struct {
+	Categories []*models.AdminCategory
+}
+
+// Domains is every distinct subject area in the list, for the filter. Read off
+// the rows rather than queried: the filter narrows exactly these rows, and a
+// domain with no category in the list would be an option matching nothing.
+func (d AdminCategoriesData) Domains() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, cat := range d.Categories {
+		if cat.DomainName != "" && !seen[cat.DomainName] {
+			seen[cat.DomainName] = true
+			out = append(out, cat.DomainName)
+		}
+	}
+	return out
+}
+
+// categoryState is the value the state tabs filter on.
+func categoryState(cat *models.AdminCategory) string {
+	if cat.IsActive {
+		return "live"
+	}
+	return "retired"
+}
+
+// localeNameState says whether this language of the name has been written.
+func localeNameState(c Ctx, present []string, loc i18n.Locale) string {
+	if hasLocale(present, loc.Code) {
+		return loc.Name
+	}
+	return c.T("admin.categories.missingName", loc.Name)
+}
+
+// Retired counts the categories currently switched off, which is what the
+// summary line above the table reports alongside the total.
+// TotalQuestions is everything filed under every category on screen, which is
+// the second half of the line under the table.
+func (d AdminCategoriesData) TotalQuestions() int {
+	n := 0
+	for _, cat := range d.Categories {
+		n += cat.Questions
+	}
+	return n
+}
+
+func (d AdminCategoriesData) Retired() int {
+	n := 0
+	for _, cat := range d.Categories {
+		if !cat.IsActive {
+			n++
+		}
+	}
+	return n
+}
+
+templ AdminCategories(c Ctx, a AdminChrome, d AdminCategoriesData) {
+	@adminShell(c, a, c.T("admin.nav.categories")) {
+		@adminPageHead(c, c.T("admin.nav.categories"), c.T("admin.categories.sub")) {
+			<a class="btn" href="/admin/questions/import">
+				@adminIcon("i-upload", "")
+				{ c.T("admin.nav.import") }
+			</a>
+			<a class="btn btn-primary" href="/admin/categories/new">
+				@adminIcon("i-plus", "")
+				{ c.T("admin.category.new") }
+			</a>
+		}
+		<div class="callout" style="margin-bottom:16px">
+			@adminIcon("i-info", "")
+			<div>{ c.T("admin.categories.help") }</div>
+		</div>
+		<section class="panel">
+			// Filtered in the browser, unlike the question bank: this list is
+			// loaded whole — a taxonomy is a dozen rows, not thousands — so
+			// narrowing it here narrows all of it, and the count beside each
+			// tab is the truth.
+			<div class="toolbar">
+				<label class="input-icon">
+					@adminIcon("i-search", "")
+					<span class="sr-only">{ c.T("admin.categories.filter") }</span>
+					<input
+						class="input input-sm"
+						type="search"
+						placeholder={ c.T("admin.categories.filter") }
+						data-filter-for="cat-table"
+						data-key="q"
+					/>
+				</label>
+				<div class="segmented" data-segmented data-filter-for="cat-table" data-key="state">
+					<button type="button" aria-pressed="true" data-value="all">
+						{ c.T("admin.questions.tab.all") }
+						<span class="n">{ fmt.Sprint(len(d.Categories)) }</span>
+					</button>
+					<button type="button" aria-pressed="false" data-value="live">
+						{ c.T("admin.category.state.live") }
+						<span class="n">{ fmt.Sprint(len(d.Categories) - d.Retired()) }</span>
+					</button>
+					<button type="button" aria-pressed="false" data-value="retired">
+						{ c.T("admin.category.state.retired") }
+						<span class="n">{ fmt.Sprint(d.Retired()) }</span>
+					</button>
+				</div>
+				<span class="spacer"></span>
+				if len(d.Domains()) > 1 {
+					<select
+						class="select input-sm"
+						aria-label={ c.T("admin.nav.domains") }
+						data-filter-for="cat-table"
+						data-key="domain"
+					>
+						<option value="all">{ c.T("admin.questions.allDomains") }</option>
+						for _, name := range d.Domains() {
+							<option value={ name }>{ name }</option>
+						}
+					</select>
+				}
+			</div>
+			if len(d.Categories) == 0 {
+				@adminEmpty(c, "i-layers", c.T("admin.categories.empty"), c.T("admin.categories.emptySub")) {
+					<a class="btn btn-sm btn-primary" href="/admin/categories/new">{ c.T("admin.category.new") }</a>
+				}
+			} else {
+				// The order the rows are in is the order players see, and this
+				// form is how a drag becomes that order. The script fills it
+				// with one hidden field per row as rows move, so what is
+				// submitted is a plain list of ids in their new sequence. With
+				// no script it never appears, and the Order field on the edit
+				// page is still how the sequence is set.
+				<form class="reorder-bar" method="post" action="/admin/categories/reorder" data-reorder-form hidden>
+					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+					<div class="toolbar">
+						@adminIcon("i-sort", "")
+						<span>{ c.T("admin.categories.orderChanged") }</span>
+						<span class="spacer"></span>
+						<button class="btn btn-sm btn-ghost" type="button" data-reorder-cancel>
+							{ c.T("common.cancel") }
+						</button>
+						<button class="btn btn-sm btn-primary" type="submit">
+							{ c.T("admin.categories.saveOrder") }
+						</button>
+					</div>
+				</form>
+				<div class="table-wrap">
+					<table class="table stack-sm" id="cat-table" data-reorder>
+						<caption class="sr-only">{ c.T("admin.nav.categories") }</caption>
+						<thead>
+							<tr>
+								<th class="t-grip" scope="col">
+									<span class="sr-only">{ c.T("admin.categories.col.order") }</span>
+								</th>
+								<th scope="col" data-sort>{ c.T("admin.categories.col.category") }</th>
+								<th class="hide-md" scope="col" data-sort>{ c.T("admin.categories.col.domain") }</th>
+								<th class="hide-md" scope="col" data-sort>{ c.T("admin.categories.col.slug") }</th>
+								// The running order, which is what the drag handle writes. Shown
+								// as a number as well as a position: a drag is how it is changed
+								// and the number is how it is checked.
+								<th class="t-num hide-md" scope="col" data-sort="num">{ c.T("admin.categories.col.order") }</th>
+								<th class="t-num" scope="col" data-sort="num">{ c.T("admin.categories.col.questions") }</th>
+								<th scope="col" data-sort="num">{ c.T("admin.categories.col.languages") }</th>
+								<th scope="col" data-sort>{ c.T("admin.categories.col.state") }</th>
+								<th scope="col"><span class="sr-only">{ c.T("common.actions") }</span></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, cat := range d.Categories {
+								@categoryRow(c, cat)
+							}
+						</tbody>
+					</table>
+				</div>
+				<div class="pager">
+					<span class="pager__count">
+						{ c.T("admin.categories.countedLabel", len(d.Categories), d.TotalQuestions()) }
+					</span>
+					<span class="faint">{ c.T("admin.categories.dragHint") }</span>
+				</div>
+			}
+		</section>
+	}
+}
+
+templ categoryRow(c Ctx, cat *models.AdminCategory) {
+	<tr
+		data-id={ fmt.Sprint(cat.ID) }
+		data-state={ categoryState(cat) }
+		data-domain={ cat.DomainName }
+	>
+		<td class="t-grip">
+			// The handle is the only part of the row a drag starts from, so
+			// selecting the text in a cell does not pick the row up. It takes
+			// focus and answers the arrow keys, because a reorder that can
+			// only be done with a pointer cannot be done by everybody.
+			<span
+				class="grip"
+				data-reorder-handle
+				tabindex="0"
+				role="button"
+				aria-label={ c.T("admin.categories.move", cat.Name) }
+			>
+				@adminIcon("i-grip", "")
+			</span>
+		</td>
+		<td class="cell-first" data-label={ c.T("admin.categories.col.category") }>
+			<div class="cell-main">
+				// The colour is the one the player sees on the category card,
+				// so it is shown here as itself rather than as a hex string.
+				<span class="cat-tile" style={ catColour(cat.Color) } aria-hidden="true">{ cat.Icon }</span>
+				<div style="min-width:0">
+					<div class="t truncate">{ cat.Name }</div>
+					if cat.Description != "" {
+						<div class="s truncate">{ cat.Description }</div>
+					}
+				</div>
+			</div>
+		</td>
+		<td class="hide-md" data-label={ c.T("admin.categories.col.domain") }>
+			// Which subject area it sits in, and whether that area is itself
+			// switched off — a category can be live inside a retired domain,
+			// and from a player's side that is indistinguishable from being
+			// retired, so the editor has to be told.
+			<span class="s">{ cat.DomainName }</span>
+			if !cat.DomainActive {
+				<span class="badge badge-retired" title={ c.T("admin.categories.domainRetired") }>
+					{ c.T("admin.domain.state.retired") }
+				</span>
+			}
+		</td>
+		<td class="hide-md" data-label={ c.T("admin.categories.col.slug") }>
+			<code class="mono">{ cat.Slug }</code>
+		</td>
+		<td class="t-num hide-md" data-label={ c.T("admin.categories.col.order") }>
+			{ fmt.Sprint(cat.SortOrder) }
+		</td>
+		<td
+			class="t-num"
+			data-label={ c.T("admin.categories.col.questions") }
+			data-value={ fmt.Sprint(cat.Questions) }
+		>
+			{ fmt.Sprint(cat.ActiveQuestions) }
+			if cat.Questions != cat.ActiveQuestions {
+				<span class="faint">{ fmt.Sprintf(" / %d", cat.Questions) }</span>
+			}
+		</td>
+		<td
+			data-label={ c.T("admin.categories.col.languages") }
+			data-value={ fmt.Sprint(len(cat.PresentLocales)) }
+		>
+			<span class="langs">
+				for _, loc := range c.Locales() {
+					<span
+						class={ "lang", templ.KV("is-missing", !hasLocale(cat.PresentLocales, loc.Code)) }
+						title={ localeNameState(c, cat.PresentLocales, loc) }
+					>
+						{ loc.Tag() }
+					</span>
+				}
+			</span>
+		</td>
+		<td data-label={ c.T("admin.categories.col.state") }>
+			if cat.IsActive {
+				<span class="badge badge-live">{ c.T("admin.category.state.live") }</span>
+			} else {
+				<span class="badge badge-retired">{ c.T("admin.category.state.retired") }</span>
+			}
+		</td>
+		<td class="cell-actions">
+			<div class="btn-group">
+				// Named rather than iconographic: these are the two things done
+				// to a category, and a row of unlabelled icons makes the reader
+				// hover to find out which is which.
+				<a
+					class="btn btn-ghost btn-sm"
+					href={ templ.SafeURL(fmt.Sprintf("/admin/categories/%d/edit", cat.ID)) }
+					aria-label={ c.T("admin.categories.editOne", cat.Name) }
+				>
+					@adminIcon("i-edit", "icon-sm")
+					{ c.T("common.edit") }
+				</a>
+				@categoryRetireButton(c, cat)
+				<div class="menu-wrap">
+					<button
+						class="icon-btn sm"
+						type="button"
+						data-menu
+						aria-expanded="false"
+						aria-label={ c.T("admin.categories.moreFor", cat.Name) }
+					>
+						@adminIcon("i-more", "")
+					</button>
+					<div class="menu">
+						@categoryActionButton(c, cat)
+					</div>
+				</div>
+			</div>
+		</td>
+	</tr>
+}
+
+// categoryActionButton is the one destructive control on the row, and which
+// one it is depends on what the category holds. A category with questions in
+// it cannot be deleted — the cascade would take the questions and every answer
+// anybody gave them — so what it offers is retirement, which is reversible.
+// categoryRetireButton is the reversible half, on the row: retiring takes the
+// category off the setup screen and stops its questions being drawn, and
+// restoring puts it back. Nothing is destroyed either way.
+templ categoryRetireButton(c Ctx, cat *models.AdminCategory) {
+	if !cat.IsActive {
+		<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/categories/%d/restore", cat.ID)) }>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<button class="btn btn-soft btn-sm" type="submit">
+				@adminIcon("i-restore", "icon-sm")
+				{ c.T("admin.category.restore") }
+			</button>
+		</form>
+	} else {
+		<form
+			method="post"
+			action={ templ.SafeURL(fmt.Sprintf("/admin/categories/%d/retire", cat.ID)) }
+			data-confirm={ c.T("admin.category.confirmRetire", cat.Name) }
+		>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<button class="btn btn-ghost btn-sm" type="submit">
+				@adminIcon("i-archive", "icon-sm")
+				{ c.T("admin.category.retire") }
+			</button>
+		</form>
+	}
+}
+
+// categoryActionButton is what is left for the menu: the one action that
+// cannot be taken back, and only while it is permitted at all.
+templ categoryActionButton(c Ctx, cat *models.AdminCategory) {
+	<a href={ templ.SafeURL(fmt.Sprintf("/admin/questions?category=%d", cat.ID)) }>
+		@adminIcon("i-question", "")
+		{ c.T("admin.categories.browseQuestions") }
+	</a>
+	if cat.Questions == 0 {
+		<hr/>
+		<form
+			method="post"
+			action={ templ.SafeURL(fmt.Sprintf("/admin/categories/%d/delete", cat.ID)) }
+			data-confirm={ c.T("admin.category.confirmDelete", cat.Name) }
+		>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			<button class="danger" type="submit">
+				@adminIcon("i-trash", "")
+				{ c.T("common.delete") }
+			</button>
+		</form>
+	}
+}
+
+// ------------------------------------------------------------------- form --
+
+// LocaleForm is one language of a taxonomy node — a domain or a category — as
+// the form holds it between the request and the template. One type for both
+// levels: the fields are the same, and a second copy is a second place to
+// forget the provenance a name carries.
+type LocaleForm struct {
+	Name        string
+	Description string
+	Source      string
+	NeedsReview bool
+}
+
+func (f LocaleForm) Blank() bool {
+	return strings.TrimSpace(f.Name) == "" && strings.TrimSpace(f.Description) == ""
+}
+
+type AdminCategoryFormData struct {
+	ID int
+	// DomainID is which subject area this category sits in, and Domains is
+	// what there is to choose from: the active ones, plus this category's own
+	// if that one has since been retired. The exception is what stops an edit
+	// from relocating a category nobody meant to move — see domainOptions.
+	DomainID  int
+	Domains   []*models.Domain
+	Slug      string
+	Icon      string
+	Color     string
+	SortOrder int
+	IsActive  bool
+	Locales   map[string]LocaleForm
+	// Error is what is wrong with the category; Errors is what is wrong with
+	// one field or one language, keyed by field name or locale code.
+	Error  string
+	Errors map[string]string
+}
+
+// DomainChosen reports whether the posted domain is one the list actually
+// offers. A select whose options are all unselected is a select the browser
+// chooses for you.
+func (d AdminCategoryFormData) DomainChosen() bool {
+	for _, dom := range d.Domains {
+		if dom.ID == d.DomainID {
+			return true
+		}
+	}
+	return false
+}
+
+func (d AdminCategoryFormData) Locale(code string) LocaleForm {
+	return d.Locales[code]
+}
+
+func (d AdminCategoryFormData) Err(field string) string {
+	return d.Errors[field]
+}
+
+templ AdminCategoryForm(c Ctx, a AdminChrome, d AdminCategoryFormData) {
+	{{ title := c.T("admin.category.new") }}
+	if d.ID > 0 {
+		{{ title = c.T("admin.category.edit") }}
+	}
+	@adminShell(c, a, title) {
+		if len(d.Domains) == 0 {
+			// Every category belongs to a subject area and there is none to
+			// choose. A form that can only ever be refused is worse than a
+			// sentence saying what has to happen first.
+			@Empty("🌐", c.T("admin.category.noDomains"))
+		}
+		@FormError(c, d.Error)
+		<form method="post" action="/admin/categories/save" class="stack" novalidate>
+			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+			if d.ID > 0 {
+				<input type="hidden" name="id" value={ fmt.Sprint(d.ID) }/>
+			}
+			<section class="panel"><div class="panel-body stack">
+				// What a player will see, kept in step as the form is typed
+				// into. The whole point of the icon and the colour is how the
+				// card looks, and that is not readable from a hex value.
+				@taxonomyPreview(c, d.Icon, d.Color, d.Locale(i18n.DefaultLocale).Name,
+					d.Locale(i18n.DefaultLocale).Description,
+					c.T("admin.category.previewName"), c.T("admin.category.previewDesc"))
+				<div class="field">
+					<label class="label" for="domain_id">{ c.T("admin.category.domain") }</label>
+					<select
+						class="select"
+						id="domain_id"
+						name="domain_id"
+						required
+						aria-invalid={ boolAttr(d.Err("domain_id") != "") }
+						aria-describedby={ describedBy("domain_id", d.Err("domain_id") != "") }
+					>
+						// The placeholder stands whenever nothing in the list is
+						// selected — not only when the field is empty. A refusal
+						// carrying an id that is not offered would otherwise
+						// leave every option unselected, and the browser would
+						// quietly preselect the first subject area while the
+						// message said the choice was invalid.
+						if !d.DomainChosen() {
+							<option value="" selected disabled>{ c.T("admin.category.domain") }</option>
+						}
+						for _, dom := range d.Domains {
+							<option value={ fmt.Sprint(dom.ID) } selected?={ dom.ID == d.DomainID }>
+								{ dom.Icon } { dom.Name }
+								if !dom.IsActive {
+									{ " · " }{ c.T("admin.domain.state.retired") }
+								}
+							</option>
+						}
+					</select>
+					if msg := d.Err("domain_id"); msg != "" {
+						@FieldError("domain_id", msg)
+					} else {
+						<span class="faint">{ c.T("admin.category.domainHint") }</span>
+					}
+				</div>
+				@taxonomyAppearance(c, d.Icon, d.Color,
+					c.T("admin.category.iconHint"), c.T("admin.category.colorHint"))
+				<div class="form-section">
+					<h3>{ c.T("admin.taxonomy.identity") }</h3>
+					@taxonomySlug(c, d.ID, d.Slug, "tafsir",
+						c.T("admin.category.slugHint"), d.Err("slug"))
+					@taxonomyOrder(c, d.SortOrder, c.T("admin.category.orderHint"))
+				</div>
+				<div class="field">
+					<span class="label">{ c.T("admin.category.state") }</span>
+					<label class="row">
+						<input type="checkbox" name="is_active" value="1" checked?={ d.IsActive }/>
+						<span class="help">{ c.T("admin.category.activeHint") }</span>
+					</label>
+				</div>
+				</div>
+			</section>
+			for _, loc := range c.Locales() {
+				@categoryLocaleFields(c, d, loc)
+			}
+			<div class="row" style="gap:var(--s-5);justify-content:flex-end">
+				<a class="btn btn-ghost" href="/admin/categories">{ c.T("common.cancel") }</a>
+				<button class="btn btn-primary" type="submit">{ c.T("common.save") }</button>
+			</div>
+		</form>
+	}
+}
+
+templ categoryLocaleFields(c Ctx, d AdminCategoryFormData, loc i18n.Locale) {
+	{{ form := d.Locale(loc.Code) }}
+	<section class="panel"><div class="panel-body stack">
+		<div class="row row-wrap">
+			<h3>{ loc.Name }</h3>
+			<span class="spacer"></span>
+			<span class="row row-wrap">
+				if loc.Code == i18n.DefaultLocale {
+					<span class="badge badge-pending">{ c.T("admin.category.required") }</span>
+				}
+				if form.NeedsReview {
+					<span class="badge badge-pending">{ c.T("admin.questions.awaiting") }</span>
+				}
+				if form.Source != "" {
+					<span class="badge">{ form.Source }</span>
+				}
+			</span>
+		</div>
+		if msg := d.Err(loc.Code); msg != "" {
+			<div class="callout danger" role="alert">
+				@IconAlert()
+				<span>{ msg }</span>
+			</div>
+		}
+		// Each language keeps its own direction, so an Arabic name is not
+		// reflowed by an English interface while it is being written.
+		@TextField(c, TextFieldOpts{
+			ID:        "name_" + loc.Code,
+			Name:      "name_" + loc.Code,
+			Label:     c.T("admin.category.name"),
+			Value:     form.Name,
+			Dir:       loc.Dir,
+			MaxLength: 80,
+		})
+		@TextField(c, TextFieldOpts{
+			ID:        "description_" + loc.Code,
+			Name:      "description_" + loc.Code,
+			Label:     c.T("admin.category.description"),
+			Value:     form.Description,
+			Dir:       loc.Dir,
+			MaxLength: 160,
+			Optional:  true,
+			Hint:      c.T("admin.category.descriptionHint"),
+		})
+		</div>
+	</section>
+}
+
+// hasLocale reports whether a category has been written in one language.
+func hasLocale(present []string, code string) bool {
+	for _, p := range present {
+		if p == code {
+			return true
+		}
+	}
+	return false
+}
+
+// SafeColor is a stored colour that is safe to put in a style attribute, or
+// the default. Rows written before the admin form existed came from a seed
+// file; nothing guarantees what a future import puts there, and this value is
+// interpolated into CSS.
+func SafeColor(s string) string {
+	if models.ValidHexColor(s) {
+		return s
+	}
+	return models.DefaultCategoryColor
+}

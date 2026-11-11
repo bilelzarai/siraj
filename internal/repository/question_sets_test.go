@@ -70,7 +70,7 @@ func TestQuestionSetIsPrivateToItsOwner(t *testing.T) {
 	}
 
 	// And the containment rule still holds: a written question is not the bank.
-	drawn, err := r.PickQuestionIDs(ctx, nil, 0, 100, "en")
+	drawn, err := r.PickQuestionIDs(ctx, nil, nil, 0, 100, "en")
 	if err != nil {
 		t.Fatalf("draw: %v", err)
 	}

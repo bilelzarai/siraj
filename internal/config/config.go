@@ -41,6 +41,12 @@ type Config struct {
 	// the limit, so the number is answered before anything is stored.
 	MaxFilesPerMessage int
 
+	// ViteDevServer is the origin the asset dev server answers on. Empty
+	// everywhere but a developer's laptop, and ignored outright in production:
+	// it widens the content policy, and a policy an environment variable can
+	// relax on a live deployment is not a policy.
+	ViteDevServer string
+
 	SMTP      SMTPConfig
 	Translate TranslateConfig
 }
@@ -95,6 +101,12 @@ func Load() (*Config, error) {
 		MaxUploadBytes: int64(envInt("MAX_UPLOAD_MB", 8)) * 1 << 20,
 
 		MaxFilesPerMessage: envInt("MAX_FILES_PER_MESSAGE", 5),
+
+		// The asset dev server, admitted to the content policy in development
+		// only. Read here but ignored outside development on purpose: a policy
+		// that an environment variable can relax on a live deployment is not a
+		// policy.
+		ViteDevServer: env("VITE_DEV_SERVER", ""),
 
 		SMTP: SMTPConfig{
 			Host:      env("SMTP_HOST", ""),

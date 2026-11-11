@@ -57,6 +57,10 @@ func TestMain(m *testing.M) {
 		fmt.Println("handler walk skipped: database unreachable")
 		os.Exit(m.Run())
 	}
+	// The same sweep the repository harness runs, for the same reason: a run
+	// that is killed cannot clean up after itself, so the next one does it.
+	sweepLeaked(ctx, admin, "siraj_walk_")
+
 	if _, err := admin.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
 		fmt.Println("handler walk skipped:", err)
 		admin.Close()
@@ -184,6 +188,27 @@ func (a *app) get(path string) (int, string) {
 	return res.StatusCode, body
 }
 
+// rawResponse is a whole answer, headers included. get returns the status and
+// the body, which is everything a page needs — a download is the one case
+// where the headers *are* the behaviour: what makes a CSV a file the browser
+// saves rather than text it shows is Content-Type and Content-Disposition, and
+// a test that cannot see them cannot tell the two apart.
+type rawResponse struct {
+	status int
+	header http.Header
+	body   string
+}
+
+func (a *app) raw(path string) rawResponse {
+	a.t.Helper()
+	res, err := a.client.Get(a.server.URL + path)
+	if err != nil {
+		a.t.Fatalf("GET %s: %v", path, err)
+	}
+	defer res.Body.Close()
+	return rawResponse{status: res.StatusCode, header: res.Header, body: readAll(res)}
+}
+
 func (a *app) post(path string, form url.Values) (int, string) {
 	a.t.Helper()
 	form.Set("csrf_token", a.csrf())
@@ -273,4 +298,37 @@ func repoRoot(t *testing.T) string {
 		dir = filepath.Dir(dir)
 	}
 	return "."
+}
+
+// sweepLeaked drops the walk databases an interrupted run left behind. The
+// deferred drop at the end of a run is skipped by a kill signal, which is how
+// 385 of them accumulated before anything looked.
+func sweepLeaked(ctx context.Context, admin *pgxpool.Pool, prefix string) {
+	rows, err := admin.Query(ctx, `
+		SELECT datname FROM pg_database
+		 WHERE datname LIKE $1
+		   AND NOT EXISTS (
+		         SELECT 1 FROM pg_stat_activity WHERE datname = pg_database.datname)`,
+		prefix+"%")
+	if err != nil {
+		return
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err == nil {
+			names = append(names, name)
+		}
+	}
+	rows.Close()
+
+	var swept int
+	for _, name := range names {
+		if _, err := admin.Exec(ctx, `DROP DATABASE IF EXISTS "`+name+`"`); err == nil {
+			swept++
+		}
+	}
+	if swept > 0 {
+		fmt.Printf("swept %d leaked walk database(s) left by an interrupted run\n", swept)
+	}
 }

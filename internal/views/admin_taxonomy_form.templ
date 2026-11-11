@@ -1,0 +1,185 @@
+package views
+
+import "fmt"
+
+// The pieces the two taxonomy forms share.
+//
+// A domain and a category are the same shape of thing one level apart — a
+// name in three languages, a description, an emoji, a colour, a slug and a
+// place in the running order — so they are written once here and filled in
+// twice. The design draws them the same way for the same reason.
+
+// taxonomyIcons is the set offered by the picker.
+//
+// A short, curated list rather than the whole emoji keyboard: these are the
+// symbols a subject area or a topic is plausibly represented by, and a picker
+// of two thousand is a picker nobody uses. The field underneath still accepts
+// anything typed into it, so the list is a shortcut and not a restriction.
+var taxonomyIcons = []string{
+	"📖", "🕌", "🌟", "⚖️", "📜", "🏛️", "🌙", "🤝",
+	"🔤", "🎙️", "🔍", "✍️", "🕋", "🧭", "💡", "🌿",
+}
+
+// taxonomyPalette is the colours offered beside the picker. The category's own
+// colour is the one place a hex value is written into markup, because it is
+// the category's property and an admin chose it.
+var taxonomyPalette = []string{
+	"#0d9488", "#0f766e", "#2563eb", "#4f46e5",
+	"#7c3aed", "#db2777", "#d97706", "#b45309",
+}
+
+// taxonomyPreview is the card as a player will see it, updating as the form is
+// typed into. The kit drives it from data-preview; with no script it still
+// shows what is already saved, which is the useful half.
+templ taxonomyPreview(c Ctx, icon, color, name, description, fallbackName, fallbackDesc string) {
+	<div class="panel" data-preview style="padding:14px 16px;margin-bottom:22px;background:var(--surface-2)">
+		<div class="row">
+			<span class="cat-tile lg" style={ catColour(color) } aria-hidden="true">{ icon }</span>
+			<div style="min-width:0">
+				<div class="t" data-pv-name>
+					if name != "" {
+						{ name }
+					} else {
+						{ fallbackName }
+					}
+				</div>
+				<div class="s" data-pv-desc>
+					if description != "" {
+						{ description }
+					} else {
+						{ fallbackDesc }
+					}
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+// taxonomyAppearance is the emoji and the colour, as two pickers over the two
+// fields that actually submit. The fields stay: with no script the pickers do
+// nothing and the pair is still editable, which is the whole reason they are
+// not replaced by the pickers.
+templ taxonomyAppearance(c Ctx, icon, color, iconHint, colorHint string) {
+	<div class="form-section">
+		<h3>{ c.T("admin.taxonomy.appearance") }</h3>
+		<div class="field">
+			<label class="label" for="icon">{ c.T("admin.category.icon") }</label>
+			<div class="icon-picker" data-pressed-group>
+				for _, option := range taxonomyIcons {
+					<button
+						type="button"
+						data-icon={ option }
+						aria-pressed={ boolAttr(option == icon) }
+						aria-label={ option }
+					>{ option }</button>
+				}
+			</div>
+			<input
+				class="input input-sm"
+				id="icon"
+				name="icon"
+				type="text"
+				value={ icon }
+				maxlength="8"
+				data-icon-field
+				aria-label={ c.T("admin.category.icon") }
+			/>
+			<span class="help">{ iconHint }</span>
+		</div>
+		<div class="field">
+			<label class="label" for="color">{ c.T("admin.category.color") }</label>
+			<div class="swatches" data-pressed-group>
+				for _, option := range taxonomyPalette {
+					<button
+						type="button"
+						style={ "--c:" + option }
+						data-color={ option }
+						aria-pressed={ boolAttr(option == color) }
+						aria-label={ option }
+					></button>
+				}
+			</div>
+			// Two controls on one value: the swatch for choosing and the box
+			// for pasting six characters somebody was given. The script keeps
+			// them in step; with no script the text box is the one that
+			// submits, so the pair still works.
+			<div class="row" x-data="colourField">
+				<input
+					class="input input-sm"
+					id="color"
+					name="color"
+					type="text"
+					value={ color }
+					maxlength="7"
+					dir="ltr"
+					data-color-text
+					x-ref="text"
+					x-on:input="typed"
+				/>
+				<input
+					class="color-well"
+					type="color"
+					value={ SafeColor(color) }
+					data-color-well
+					x-ref="well"
+					x-on:input="picked"
+					aria-label={ c.T("admin.category.color") }
+					tabindex="-1"
+				/>
+			</div>
+			<span class="help">{ colorHint }</span>
+		</div>
+	</div>
+}
+
+// taxonomySlug is the identifier, which fills itself from the name the first
+// time and stops as soon as anybody edits it — a slug somebody has chosen must
+// not be overwritten by the next keystroke in the name.
+templ taxonomySlug(c Ctx, id int, slug, placeholder, hint, errMsg string) {
+	<div class="field">
+		<label class="label" for="slug">{ c.T("admin.category.slug") }</label>
+		<input
+			class="input"
+			id="slug"
+			name="slug"
+			type="text"
+			value={ slug }
+			placeholder={ placeholder }
+			maxlength="40"
+			dir="ltr"
+			if id == 0 {
+				data-slug-from="name_en"
+			}
+			aria-invalid={ boolAttr(errMsg != "") }
+		/>
+		if errMsg != "" {
+			@FieldError("slug", errMsg)
+		} else {
+			<span class="help">
+				{ hint }
+				if id > 0 {
+					{ " " }
+					{ c.T("admin.taxonomy.slugLocked") }
+				}
+			</span>
+		}
+	</div>
+}
+
+// taxonomyOrder is where it sits in the list players see. Set by dragging on
+// the list screen as well; this is the same number, typed.
+templ taxonomyOrder(c Ctx, order int, hint string) {
+	<div class="field">
+		<label class="label" for="sort_order">{ c.T("admin.category.order") }</label>
+		<input
+			class="input"
+			id="sort_order"
+			name="sort_order"
+			type="number"
+			value={ fmt.Sprint(order) }
+			min="0"
+			max="999"
+		/>
+		<span class="help">{ hint }</span>
+	</div>
+}

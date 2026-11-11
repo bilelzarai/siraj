@@ -152,11 +152,7 @@ func TestTheWaveformIsStableForAnID(t *testing.T) {
 // be the same arithmetic, or a recording changes appearance the moment the
 // page is reloaded.
 func TestBothSidesDrawTheSameWaveform(t *testing.T) {
-	script, err := os.ReadFile(filepath.Join(repoRoot(t), "static/js/app.js"))
-	if err != nil {
-		t.Fatalf("read app.js: %v", err)
-	}
-	body := string(script)
+	body := clientSources(t)
 
 	// The numbers the shape is made of. A change to either side that does not
 	// change the other lands here.

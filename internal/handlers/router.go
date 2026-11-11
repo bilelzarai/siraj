@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"io/fs"
+	"log/slog"
 	"net/http"
 
+	"github.com/bilelzarai/siraj/internal/assets"
+	"github.com/bilelzarai/siraj/internal/handlers/api"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -13,6 +16,24 @@ import (
 func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 	// Hash the assets once at boot so every page links a versioned URL.
 	h.assetV = assetVersion(staticFS)
+
+	// Where the built assets are, or the dev server if one is pointed at us. A
+	// tree nobody has built resolves nothing and the pages still answer.
+	manifest := assets.Load(staticFS, assetBase)
+	devOrigin := ""
+	if !h.cfg.IsProduction() {
+		devOrigin = h.cfg.ViteDevServer
+	}
+	h.links = assets.NewLinks(manifest, devOrigin, h.assetV, assetBase)
+	switch {
+	case devOrigin != "":
+		slog.Info("linking assets from the dev server", "origin", devOrigin)
+	case manifest.Loaded():
+		slog.Info("linking built assets", "manifest", manifest.Source())
+	default:
+		slog.Warn("no asset build found and no dev server configured; " +
+			"pages will render without styles or script — run `npm run build`")
+	}
 
 	r := chi.NewRouter()
 
@@ -31,7 +52,7 @@ func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 	// already gone out?" check can never see one and always answers no.
 	r.Use(Logger)
 	r.Use(h.Recover)
-	r.Use(SecureHeaders)
+	r.Use(SecureHeaders(contentSecurityPolicy(h.cfg)))
 	r.Use(middleware.Compress(5, "text/html", "text/css", "application/javascript", "application/json"))
 
 	r.NotFound(h.NotFound)
@@ -40,6 +61,13 @@ func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 	// touch the database.
 	r.Handle("/static/*", staticHandler(staticFS, !h.cfg.IsProduction()))
 	r.Get("/healthz", h.Health)
+
+	// The public surface, mounted above the session layer on purpose: it reads
+	// no cookie and pairs no cross-site token, because a bearer key is a
+	// different kind of credential and the two must never be interchangeable
+	// (D2). Nothing below this line can be reached with a key, and nothing
+	// above it with a session.
+	r.Mount("/api/v1", api.NewV1(h.repo).Routes())
 
 	r.Group(func(r chi.Router) {
 		r.Use(h.Session)
@@ -88,7 +116,12 @@ func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 			// Who this player may reach, for the picker dialogs. Friends and
 			// the room they are standing in — which is the whole of it, on
 			// purpose.
-			r.Get("/api/people", h.People)
+			//
+			// Under /ui and not /api: this is the interface fetching for
+			// itself, inside the session chain, behind the cookie and the
+			// cross-site token. /api/v1 is mounted above that chain with a
+			// bearer key and reads no cookie, and one prefix cannot mean both.
+			r.Get("/ui/people", h.People)
 
 			// Looking back over the round that just finished. The list of
 			// past rounds is history and needs an account; one round's own
@@ -200,7 +233,7 @@ func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 			// would be live for an account and silent for a guest, which is
 			// the same room behaving two ways.
 			r.Get("/events", h.Events)
-			r.Get("/api/counts", h.UnreadCounts)
+			r.Get("/ui/counts", h.UnreadCounts)
 
 			r.Group(func(r chi.Router) {
 				r.Use(h.RequireAccount)
@@ -265,7 +298,42 @@ func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 				r.Use(h.RequireModerator)
 
 				r.Get("/", h.AdminDashboard)
+
+				// The top bar's one search field. It answers a fragment for
+				// the drop-down under the field, not a page.
+				r.Get("/search", h.AdminSearch)
+
+				// The level above a category. Admin-only, every one of them:
+				// reshaping the taxonomy is structural, while writing a
+				// category inside it is content work and stays with
+				// moderators (D11). {id}/{action} is registered last or it
+				// swallows the named routes above it.
+				r.With(h.RequireAdmin).Get("/domains", h.AdminDomains)
+				r.With(h.RequireAdmin).Get("/domains/new", h.AdminDomainForm)
+				r.With(h.RequireAdmin).Get("/domains/{id}/edit", h.AdminDomainForm)
+				r.With(h.RequireAdmin).Post("/domains/save", h.AdminDomainSave)
+				r.With(h.RequireAdmin).Post("/domains/{id}/delete", h.AdminDomainDelete)
+				r.With(h.RequireAdmin).Post("/domains/{id}/{action}", h.AdminDomainAction)
+
+				// The taxonomy. Content work, so a moderator may add a
+				// category and correct its names; deleting one is not, because
+				// the cascade reaches the questions filed under it and every
+				// answer ever given to one — the same reasoning that put bulk
+				// question deletion behind full admin.
+				r.Get("/categories", h.AdminCategories)
+				r.Get("/categories/new", h.AdminCategoryForm)
+				r.Get("/categories/{id}/edit", h.AdminCategoryForm)
+				r.Post("/categories/save", h.AdminCategorySave)
+				// Before the {id}/{action} route below, which would otherwise
+				// read "reorder" as a category id.
+				r.Post("/categories/reorder", h.AdminCategoryReorder)
+				r.With(h.RequireAdmin).Post("/categories/{id}/delete", h.AdminCategoryDelete)
+				r.Post("/categories/{id}/{action}", h.AdminCategoryAction)
+
 				r.Get("/questions", h.AdminQuestions)
+				// The same filter the listing reads, written to a file. A
+				// literal segment, so it is matched ahead of {id} below.
+				r.Get("/questions/export.csv", h.AdminExportQuestions)
 				// Authoring. Until these existed the only ways to add or correct
 				// a question were editing the bundled JSON and restarting, or
 				// preparing a bulk import.
@@ -307,10 +375,18 @@ func (h *Handlers) Routes(staticFS fs.FS) http.Handler {
 				r.Group(func(r chi.Router) {
 					r.Use(h.RequireAdmin)
 					r.Get("/users", h.AdminUsers)
+					// Email addresses and last-seen times leave the building
+					// in this file, so it sits with the directory behind
+					// RequireAdmin rather than with the content exports.
+					r.Get("/users/export.csv", h.AdminExportUsers)
+					// The drawer the directory's eye opens, fetched when it
+					// is opened rather than rendered fifty times with the list.
+					r.Get("/users/{id}/panel", h.AdminUserPanel)
 					r.Get("/users/new", h.AdminNewUserForm)
 					r.Post("/users/new", h.AdminCreateUser)
 					r.Post("/users/{id}/{action}", h.AdminUserAction)
 					r.Get("/audit", h.AdminAudit)
+					r.Get("/audit/export.csv", h.AdminExportAudit)
 				})
 			})
 		})

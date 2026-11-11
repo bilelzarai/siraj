@@ -2,87 +2,392 @@ package views
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/bilelzarai/siraj/internal/models"
+	"github.com/bilelzarai/siraj/internal/repository"
 )
+
+// ratedPeriods is how far back the figures above the flagged list look. The
+// values are the ones the handler's ratingWindows map understands.
+var ratedPeriods = []struct{ Value, LabelKey string }{
+	{"30d", "admin.rated.last30"},
+	{"7d", "admin.rated.last7"},
+	{"", "admin.rated.allTime"},
+}
 
 // Dashboard, content health, poorly-rated questions, remarks, audit trail.
 // ------------------------------------------------------------- dashboard --
 
 type AdminDashboardData struct {
-	Stats  *models.PlatformStats
-	Recent []*models.AuditEntry
+	Stats *models.PlatformStats
+	// Insight is the half of the overview that a count cannot answer: play
+	// over time, the categories carrying it, the languages the players are in,
+	// and each figure's comparison from the period before.
+	Insight *models.DashboardInsight
+	Recent  []*models.AuditEntry
+	// Attention is the work waiting, in the order it should be dealt with.
+	Attention []AttentionItem
+}
+
+// AttentionItem is one thing waiting for somebody, as the "needs attention"
+// list shows it. Built in the handler from the counts that already exist
+// rather than queried: every number here is one an admin screen is already
+// reporting, and the list's job is to say which of them to open first.
+type AttentionItem struct {
+	// Tone picks the dot's colour: "lamp" for work queued, "danger" for
+	// something wrong, "info" for everything else.
+	Tone   string
+	Icon   string
+	Title  string
+	Detail string
+	Href   string
+	Action string
 }
 
 templ AdminDashboard(c Ctx, a AdminChrome, d AdminDashboardData) {
 	@adminShell(c, a, c.T("admin.nav.dashboard")) {
-		<section class="grid grid--stats">
-			@StatTile("👥", fmt.Sprint(d.Stats.Users), c.T("admin.stat.users"))
-			@StatTile("🟢", fmt.Sprint(d.Stats.ActiveToday), c.T("admin.stat.activeToday"))
-			@StatTile("✨", fmt.Sprint(d.Stats.NewThisWeek), c.T("admin.stat.newThisWeek"))
-			@StatTile("🛡️", fmt.Sprint(d.Stats.Admins+d.Stats.Moderators), c.T("admin.stat.staff"))
-			@StatTile("❓", fmt.Sprint(d.Stats.ActiveQuestions), c.T("admin.stat.questions"))
-			@StatTile("🌐", fmt.Sprint(d.Stats.Translations), c.T("admin.stat.translations"))
-			@StatTile("🎮", fmt.Sprint(d.Stats.RoundsPlayed), c.T("admin.stat.rounds"))
-			@StatTile("⚔️", fmt.Sprint(d.Stats.Duels), c.T("admin.stat.duels"))
-		</section>
-		if d.Stats.PendingReview > 0 {
-			<a class="alert alert--warning" href="/admin/review" style="align-items:center">
-				<span aria-hidden="true">🔍</span>
-				<span>{ c.T("admin.review.pending", d.Stats.PendingReview) }</span>
+		@adminPageHead(c, c.T("admin.dash.greeting"), c.T("admin.dash.sub")) {
+			<a class="btn btn-primary" href="/admin/questions/new">
+				@adminIcon("i-plus", "")
+				{ c.T("admin.question.new") }
 			</a>
 		}
-		<section class="card stack">
-			<div class="card__head" style="margin:0">
-				<span class="card__title">{ c.T("admin.coverage.title") }</span>
-				<span class="tiny muted">{ c.T("admin.coverage.help") }</span>
+		@dashKPIs(c, d)
+		<div class="split side-first">
+			<div class="stack">
+				@dashPlayChart(c, d)
+				@dashCategories(c, d)
+				@dashCoverage(c, d)
 			</div>
-			if len(d.Stats.Coverage) == 0 {
-				@Empty("📭", c.T("admin.coverage.empty"))
-			} else {
-				<div class="scroll-x">
-					<table class="table">
-						<thead>
-							<tr>
-								<th>{ c.T("game.setup.category") }</th>
-								<th>{ c.T("game.difficulty.1") }</th>
-								<th>{ c.T("game.difficulty.2") }</th>
-								<th>{ c.T("game.difficulty.3") }</th>
-								<th>{ c.T("admin.coverage.total") }</th>
-							</tr>
-						</thead>
-						<tbody>
-							for _, row := range coverageByCategory(d.Stats.Coverage) {
-								<tr>
-									<td>
-										<span aria-hidden="true">{ row.Icon }</span>
-										{ row.Name }
-									</td>
-									@coverageCell(row.Easy)
-									@coverageCell(row.Medium)
-									@coverageCell(row.Hard)
-									<td class="num bold">{ fmt.Sprint(row.Easy + row.Medium + row.Hard) }</td>
-								</tr>
-							}
-						</tbody>
-					</table>
-				</div>
-			}
-		</section>
-		if len(d.Recent) > 0 {
-			<section class="card card--flush">
-				<div class="card__head" style="padding:18px 20px 0;margin:0">
-					<span class="card__title">{ c.T("admin.nav.audit") }</span>
-					<a class="tiny bold" style="color:var(--accent)" href="/admin/audit">
-						{ c.T("common.viewAll") }
-					</a>
-				</div>
-				@auditList(c, d.Recent)
-			</section>
-		}
+			<div class="stack">
+				@dashAttention(c, d)
+				@dashLanguages(c, d)
+				@dashActivity(c, a, d)
+			</div>
+		</div>
 	}
+}
+
+// dashKPIs is the four figures the morning starts with. Each carries what it
+// is being compared against, because a number with nothing beside it cannot
+// say whether it is good.
+templ dashKPIs(c Ctx, d AdminDashboardData) {
+	<div class="kpis">
+		@dashKPI(c, "i-users", c.T("admin.dash.activePlayers"),
+			fmt.Sprint(d.Insight.ActivePlayers),
+			delta(d.Insight.ActivePlayers, d.Insight.ActivePlayersPrior), c.T("admin.dash.vsLastWeek"))
+		@dashKPI(c, "i-play", c.T("admin.dash.gamesToday"),
+			fmt.Sprint(d.Insight.GamesToday),
+			delta(d.Insight.GamesToday, d.Insight.GamesYesterday), c.T("admin.dash.vsYesterday"))
+		@dashKPI(c, "i-target", c.T("admin.dash.accuracy"),
+			fmt.Sprintf("%d%%", d.Insight.Accuracy()),
+			accuracyDelta(d.Insight), c.T("admin.dash.vsLastWeek"))
+		<div class={ "kpi", templ.KV("is-attention", d.Stats.PendingReview > 0) }>
+			<div class="kpi-label">
+				@adminIcon("i-review", "")
+				{ c.T("admin.dash.waitingReview") }
+			</div>
+			<div class="kpi-value">{ fmt.Sprint(d.Stats.PendingReview) }</div>
+			<div class="kpi-meta">
+				if d.Insight.OldestPendingReview != nil {
+					{ c.T("admin.attention.reviewOldest", c.Tr.RelativeTime(*d.Insight.OldestPendingReview)) }
+				} else {
+					{ c.T("admin.dash.reviewClear") }
+				}
+				if d.Stats.PendingReview > 0 {
+					<a class="stretch" href="/admin/review" aria-label={ c.T("admin.nav.review") }></a>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// dashKPI is one figure with its comparison. The arrow and the colour come
+// from the sign of the change; "no change" says so rather than drawing a
+// flat arrow that reads as a rise.
+templ dashKPI(c Ctx, icon, label, value string, change Delta, against string) {
+	<div class="kpi">
+		<div class="kpi-label">
+			@adminIcon(icon, "")
+			{ label }
+		</div>
+		<div class="kpi-value">{ value }</div>
+		<div class="kpi-meta">
+			if change.Known {
+				<span class={ "delta", change.Class() }>
+					@adminIcon(change.Icon(), "")
+					{ change.Label }
+				</span>
+				{ against }
+			} else {
+				{ c.T("admin.dash.noComparison") }
+			}
+		</div>
+	</div>
+}
+
+// dashPlayChart is the fortnight of finished rounds.
+//
+// Bars rather than a line: the series is fourteen discrete days, and a line
+// between them would imply a reading at every moment in between. Each bar
+// carries its own figure in a title, so the exact number is available without
+// a tooltip layer and without a script.
+templ dashPlayChart(c Ctx, d AdminDashboardData) {
+	<section class="panel">
+		<div class="panel-head">
+			<div>
+				<h2>{ c.T("admin.dash.gamesPlayed") }</h2>
+				<p class="hint">{ c.T("admin.dash.gamesPlayedHint", len(d.Insight.Days)) }</p>
+			</div>
+		</div>
+		<div class="panel-body">
+			<div class="bars" role="img" aria-label={ dashChartSummary(c, d.Insight) }>
+				for i, day := range d.Insight.Days {
+					<div class={ "bar", templ.KV("is-today", i == len(d.Insight.Days)-1) }>
+						<i
+							style={ fmt.Sprintf("--h:%d%%", day.Height(d.Insight.PeakGames())) }
+							data-v={ fmt.Sprint(day.Games) }
+							title={ fmt.Sprintf("%s · %d", c.Tr.Date(day.Day), day.Games) }
+						></i>
+						<span>{ dashDayLabel(c, day.Day, i == len(d.Insight.Days)-1) }</span>
+					</div>
+				}
+			</div>
+		</div>
+	</section>
+}
+
+// dashCategories ranks the live categories by how much they were played in the
+// last day, with how well they were answered and how they are rated.
+templ dashCategories(c Ctx, d AdminDashboardData) {
+	<section class="panel">
+		<div class="panel-head">
+			<div>
+				<h2>{ c.T("admin.dash.categoryPerf") }</h2>
+				<p class="hint">{ c.T("admin.dash.categoryPerfHint") }</p>
+			</div>
+			<a class="btn btn-ghost btn-sm" href="/admin/categories">
+				{ c.T("admin.dash.allCategories") }
+				@adminIcon("i-chevron-right", "icon-flip")
+			</a>
+		</div>
+		if len(d.Insight.Categories) == 0 {
+			@adminEmpty(c, "i-layers", c.T("admin.dash.noCategories"), "")
+		} else {
+			<div class="table-wrap">
+				<table class="table stack-sm">
+					<caption class="sr-only">{ c.T("admin.dash.categoryPerf") }</caption>
+					<thead>
+						<tr>
+							<th scope="col" data-sort>{ c.T("game.setup.category") }</th>
+							<th class="t-num" scope="col" data-sort="num">{ c.T("admin.dash.playsToday") }</th>
+							<th scope="col" data-sort="num">{ c.T("admin.dash.accuracy") }</th>
+							<th class="t-num" scope="col" data-sort="num">{ c.T("admin.dash.rating") }</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, cat := range d.Insight.Categories {
+							<tr>
+								<td class="cell-first" data-label={ c.T("game.setup.category") }>
+									<div class="cell-main">
+										<span class="cat-tile" style={ catColour(cat.CategoryColor) } aria-hidden="true">
+											{ cat.CategoryIcon }
+										</span>
+										<div class="t truncate">{ cat.CategoryName }</div>
+									</div>
+								</td>
+								<td class="t-num" data-label={ c.T("admin.dash.playsToday") }>{ fmt.Sprint(cat.Plays) }</td>
+								<td data-label={ c.T("admin.dash.accuracy") }>
+									if cat.Answered == 0 {
+										<span class="faint">{ c.T("admin.dash.noPlays") }</span>
+									} else {
+										@adminMeter(cat.Accuracy())
+									}
+								</td>
+								<td class="t-num hide-sm" data-label={ c.T("admin.dash.rating") }>
+									if cat.RatingVotes == 0 {
+										<span class="faint">—</span>
+									} else {
+										<span class="row" style="justify-content:flex-end;gap:5px">
+											@adminIcon("i-star", "icon-sm")
+											{ fmt.Sprintf("%.1f", cat.Rating) }
+										</span>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</section>
+}
+
+// adminMeter is a proportion drawn as a bar with its figure beside it. Below
+// sixty per cent it turns amber: the bank is three difficulties deep and a
+// category most players get wrong is a category that is mis-graded.
+templ adminMeter(pct int) {
+	<div class="meter">
+		<div class={ "meter-bar", templ.KV("warn", pct < 60) }>
+			<i style={ fmt.Sprintf("--v:%d%%", pct) }></i>
+		</div>
+		<span class="v">{ fmt.Sprintf("%d%%", pct) }</span>
+	</div>
+}
+
+// dashCoverage is the bank's depth: how many questions exist per category and
+// difficulty, against the target. It is the one panel here that is about
+// content rather than play, and the only thing on this screen that says
+// whether there is enough of the bank to run on.
+templ dashCoverage(c Ctx, d AdminDashboardData) {
+	<section class="panel">
+		<div class="panel-head">
+			<div>
+				<h2>{ c.T("admin.coverage.title") }</h2>
+				<p class="hint">{ c.T("admin.coverage.help") }</p>
+			</div>
+		</div>
+		if len(d.Stats.Coverage) == 0 {
+			@adminEmpty(c, "i-inbox", c.T("admin.coverage.empty"), "")
+		} else {
+			<div class="table-wrap">
+				<table class="table stack-sm">
+					<caption class="sr-only">{ c.T("admin.coverage.title") }</caption>
+					<thead>
+						<tr>
+							<th scope="col">{ c.T("game.setup.category") }</th>
+							<th scope="col">{ c.T("game.difficulty.1") }</th>
+							<th scope="col">{ c.T("game.difficulty.2") }</th>
+							<th scope="col">{ c.T("game.difficulty.3") }</th>
+							<th class="t-num" scope="col">{ c.T("admin.coverage.total") }</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, row := range coverageByCategory(d.Stats.Coverage) {
+							<tr>
+								<td class="cell-first" data-label={ c.T("game.setup.category") }>
+									<div class="cell-main">
+										<span class="cat-tile" aria-hidden="true">{ row.Icon }</span>
+										<div class="t truncate">{ row.Name }</div>
+									</div>
+								</td>
+								@coverageCell(c, row.ID, 1, row.Easy)
+								@coverageCell(c, row.ID, 2, row.Medium)
+								@coverageCell(c, row.ID, 3, row.Hard)
+								<td class="t-num" data-label={ c.T("admin.coverage.total") }>
+									<b>{ fmt.Sprint(row.Easy + row.Medium + row.Hard) }</b>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</section>
+}
+
+// dashAttention is the work waiting, most pressing first.
+templ dashAttention(c Ctx, d AdminDashboardData) {
+	<section class="panel">
+		<div class="panel-head">
+			<h2>{ c.T("admin.dash.attention") }</h2>
+			if len(d.Attention) > 0 {
+				<span class="badge badge-lamp no-dot">{ c.T("admin.dash.items", len(d.Attention)) }</span>
+			}
+		</div>
+		if len(d.Attention) == 0 {
+			@adminEmpty(c, "i-check-circle", c.T("admin.dash.allClear"), c.T("admin.dash.allClearSub"))
+		} else {
+			<ul class="list">
+				for _, item := range d.Attention {
+					<li class="list-item">
+						<span class={ "tl-dot", "c-" + item.Tone }>
+							@adminIcon(item.Icon, "")
+						</span>
+						<div class="grow">
+							<div class="t">{ item.Title }</div>
+							if item.Detail != "" {
+								<div class="s">{ item.Detail }</div>
+							}
+						</div>
+						<a class="btn btn-sm" href={ templ.SafeURL(item.Href) }>{ item.Action }</a>
+					</li>
+				}
+			</ul>
+		}
+	</section>
+}
+
+// dashLanguages is the split of accounts across the shipped languages — which
+// is the number that decides whether a missing translation matters to two
+// players or to half of them.
+templ dashLanguages(c Ctx, d AdminDashboardData) {
+	<section class="panel">
+		<div class="panel-head">
+			<h2>{ c.T("admin.dash.byLanguage") }</h2>
+		</div>
+		if len(d.Insight.Languages) == 0 {
+			@adminEmpty(c, "i-languages", c.T("admin.dash.noPlayers"), "")
+		} else {
+			<div class="panel-body">
+				for i, lang := range d.Insight.Languages {
+					<div class="field">
+						<div class="row">
+							<span class="label">{ localeName(c, lang.Locale) }</span>
+							<span class="spacer"></span>
+							<span class="muted">{ c.T("admin.dash.players", lang.Players) }</span>
+						</div>
+						<div class="meter-bar" style="height:8px">
+							<i style={ fmt.Sprintf("--v:%d%%;background:%s", lang.Percent, languageBar(i)) }></i>
+						</div>
+					</div>
+				}
+			</div>
+		}
+	</section>
+}
+
+// dashActivity is the last few privileged actions, as a way into the trail
+// rather than a replacement for it.
+templ dashActivity(c Ctx, a AdminChrome, d AdminDashboardData) {
+	<section class="panel">
+		<div class="panel-head">
+			<h2>{ c.T("admin.dash.recent") }</h2>
+			// Only an admin: the trail is behind RequireAdmin, and a link
+			// that 404s on click tells a moderator the route is there.
+			if a.IsAdmin {
+				<a class="btn btn-ghost btn-sm" href="/admin/audit">{ c.T("admin.nav.audit") }</a>
+			}
+		</div>
+		if len(d.Recent) == 0 {
+			@adminEmpty(c, "i-history", c.T("admin.audit.empty"), "")
+		} else {
+			<ul class="timeline">
+				for _, entry := range d.Recent {
+					<li>
+						<span class={ "tl-dot", auditTone(entry) }>
+							@adminIcon(auditIcon(entry), "")
+						</span>
+						<div>
+							<div class="t">
+								<b>{ entry.ActorUsername }</b>
+								{ " " }
+								{ auditPhrase(c, entry) }
+								if entry.Label() != "" {
+									{ " " }
+									<b class="truncate">{ entry.Label() }</b>
+								}
+							</div>
+							<div class="s">{ c.Tr.RelativeTime(entry.CreatedAt) }</div>
+						</div>
+					</li>
+				}
+			</ul>
+		}
+	</section>
 }
 
 // -------------------------------------------------------------- integrity --
@@ -96,6 +401,10 @@ type AdminIntegrityData struct {
 	// near-duplicates once per language they share, so the list is filtered to
 	// one and the comparison carries the rest.
 	Locale string
+	// Health is the screen's reading of the bank: a score, the counts behind
+	// it, and the checks it is made of. Library is what the bank is made of.
+	Health  HealthReport
+	Library repository.LibraryFacts
 	// SweptAt is when this list was computed. The sweep is held for a few
 	// minutes rather than re-run on every visit, and a list that is not live
 	// should say when it was.
@@ -104,83 +413,186 @@ type AdminIntegrityData struct {
 
 templ AdminIntegrity(c Ctx, a AdminChrome, d AdminIntegrityData) {
 	@adminShell(c, a, c.T("admin.nav.integrity")) {
-		<section class="grid grid--2">
-			@StatTile("🧹", fmt.Sprint(len(d.Issues)), c.T("admin.integrity.issues"))
-			@StatTile("👯", fmt.Sprint(len(d.Duplicates)), c.T("admin.integrity.duplicates"))
-		</section>
-		<section class="card stack">
-			<div class="card__head" style="margin:0">
-				<span class="card__title">{ c.T("admin.integrity.issues") }</span>
+		@adminPageHead(c, c.T("admin.nav.integrity"), c.T("admin.integrity.sub")) {
+			if !d.SweptAt.IsZero() {
+				<span class="result-meta">
+					@adminIcon("i-refresh", "icon-sm")
+					{ c.T("admin.integrity.sweptAt", c.Tr.RelativeTime(d.SweptAt)) }
+				</span>
+			}
+		}
+		// The score, and what the bank is made of. One sentence rather than a
+		// list: a list of faults cannot say whether a hundred thin
+		// explanations is a crisis or a Tuesday, and that is the question this
+		// screen exists to answer.
+		<div class="split" style="margin-bottom:18px">
+			<section class="panel">
+				<div class="score-hero">
+					<div class="score-ring" style={ fmt.Sprintf("--p:%d", d.Health.Score) }>
+						<div>
+							<b>{ fmt.Sprint(d.Health.Score) }</b>
+							<span>{ c.T("admin.health.outOf") }</span>
+						</div>
+					</div>
+					<div style="min-width:0">
+						<h2>{ c.T(healthVerdictKey(d.Health)) }</h2>
+						<p class="hint">{ c.T("admin.health.weighting") }</p>
+						<div class="row" style="gap:10px;margin-top:10px;flex-wrap:wrap">
+							if d.Health.Errors > 0 {
+								<span class="badge badge-danger">{ c.T("admin.health.errors", d.Health.Errors) }</span>
+							}
+							if d.Health.Warnings > 0 {
+								<span class="badge badge-pending">{ c.T("admin.health.warnings", d.Health.Warnings) }</span>
+							}
+							if d.Health.Passing > 0 {
+								<span class="badge badge-live">{ c.T("admin.health.passing", d.Health.Passing) }</span>
+							}
+						</div>
+					</div>
+				</div>
+			</section>
+			<section class="panel">
+				<div class="panel-head">
+					<h2>{ c.T("admin.health.library") }</h2>
+				</div>
+				<div class="panel-body">
+					<dl class="side-facts">
+						<dt>{ c.T("admin.nav.questions") }</dt>
+						<dd>{ c.T("admin.health.questionsLine", d.Library.Live, d.Library.Retired, d.Library.InReview) }</dd>
+						<dt>{ c.T("admin.nav.categories") }</dt>
+						<dd>{ c.T("admin.health.categoriesLine", d.Library.LiveCategories, d.Library.Categories-d.Library.LiveCategories) }</dd>
+						<dt>{ c.T("settings.language") }</dt>
+						<dd>{ localeList(c) }</dd>
+						<dt>{ c.T("admin.health.lastImport") }</dt>
+						<dd>
+							if d.Library.LastImport != nil {
+								{ d.Library.LastImportFile }
+								{ ", " }
+								{ c.Tr.RelativeTime(*d.Library.LastImport) }
+							} else {
+								<span class="faint">{ c.T("admin.health.neverImported") }</span>
+							}
+						</dd>
+					</dl>
+				</div>
+			</section>
+		</div>
+		// The checks themselves: what is true of the bank, how much of it
+		// passes, and the one press that goes and fixes it.
+		<section class="panel">
+			<div class="panel-head">
+				<div>
+					<h2>{ c.T("admin.health.checks") }</h2>
+					<p class="hint">{ c.T("admin.integrity.issuesHint") }</p>
+				</div>
 			</div>
-			if len(d.Issues) == 0 {
-				@Empty("✅", c.T("admin.integrity.clean"))
-			} else {
-				<div class="scroll-x" style="max-height:420px;overflow-y:auto">
-					<table class="table">
+			for _, check := range d.Health.Checks {
+				<div class="check-row">
+					<span class={ "sev", healthSeverity(check.Level) }>
+						@adminIcon(healthIcon(check.Level), "icon-sm")
+					</span>
+					<div style="min-width:0">
+						<div class="t">
+							if check.Failing > 0 {
+								{ c.T(check.Key, check.Failing) }
+							} else {
+								{ c.T(check.Key+"Clear") }
+							}
+						</div>
+						<div class="s">{ c.T(check.DetailKey) }</div>
+					</div>
+					@adminMeter(check.Share)
+					if check.Action != "" {
+						<a class="btn btn-sm" href={ templ.SafeURL(check.Action) }>{ c.T(check.ActionKey) }</a>
+					} else {
+						<span class="badge badge-live">{ c.T("admin.health.ok") }</span>
+					}
+				</div>
+			}
+		</section>
+		if len(d.Issues) > 0 {
+			<section class="panel">
+				<div class="panel-head">
+					<div>
+						<h2>{ c.T("admin.integrity.issues") }</h2>
+						<p class="hint">{ c.T("admin.health.everyRow") }</p>
+					</div>
+					<span class="badge badge-danger no-dot">{ fmt.Sprint(len(d.Issues)) }</span>
+				</div>
+				<div class="table-wrap" style="max-height:420px;overflow-y:auto">
+					<table class="table stack-sm">
+						<caption class="sr-only">{ c.T("admin.integrity.issues") }</caption>
 						<thead>
 							<tr>
-								<th class="num">#</th>
-								<th>{ c.T("admin.integrity.kind") }</th>
-								<th>{ c.T("admin.integrity.detail") }</th>
+								<th scope="col" data-sort>{ c.T("admin.integrity.kind") }</th>
+								<th scope="col" data-sort>{ c.T("admin.integrity.detail") }</th>
+								<th scope="col"><span class="sr-only">{ c.T("common.actions") }</span></th>
 							</tr>
 						</thead>
 						<tbody>
 							for _, issue := range d.Issues {
 								<tr>
-									// Every one of these is a question with a
-									// field to fix. Printing the id as text left
-									// the admin to copy it into a search.
-									<td class="num tiny">
-										@questionRef(c, issue.QuestionID, issue.Detail)
+									<td class="cell-first" data-label={ c.T("admin.integrity.kind") }>
+										<span class={ "badge", integrityBadge(issue.Kind) }>{ issue.Kind }</span>
 									</td>
-									<td><span class="tag tag--warning tiny">{ issue.Kind }</span></td>
-									<td class="tiny">{ issue.Detail }</td>
+									<td data-label={ c.T("admin.integrity.detail") }>
+										<span class="s">{ issue.Detail }</span>
+									</td>
+									<td class="cell-actions">
+										<a
+											class="btn btn-sm btn-ghost"
+											href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", issue.QuestionID)) }
+										>
+											@adminIcon("i-edit", "icon-sm")
+											{ fmt.Sprintf("#%d", issue.QuestionID) }
+										</a>
+									</td>
 								</tr>
 							}
 						</tbody>
 					</table>
 				</div>
-			}
-		</section>
-		<section id="duplicates" class="card stack">
-			<div class="card__head" style="margin:0">
-				<span class="card__title">{ c.T("admin.integrity.duplicates") }</span>
-				<span class="tiny muted">{ c.T("admin.integrity.duplicatesHelp") }</span>
-				if !d.SweptAt.IsZero() {
-					<span class="tiny faint">{ c.T("admin.integrity.sweptAt", c.Tr.RelativeTime(d.SweptAt)) }</span>
-				}
-			</div>
-			// One language at a time. The same pair is a near-duplicate in every
-			// language it is written in, and listing it once per language made a
-			// sweep of sixty read as a sweep of twenty — the same twenty, three
-			// times over. Switching here does not switch the interface: reading
-			// the Arabic duplicates should not mean reading an Arabic screen.
-			<div class="row" style="gap:6px;flex-wrap:wrap">
-				<span class="tiny muted">{ c.T("admin.integrity.duplicatesLang") }</span>
-				for _, loc := range c.Locales() {
-					<a
-						class={ "lang-pick", templ.KV("lang-pick--on", loc.Code == d.Locale) }
-						href={ templ.SafeURL("/admin/integrity?loc=" + loc.Code + "#duplicates") }
-						if loc.Code == d.Locale {
-							aria-current="true"
-						}
-					>
-						<span aria-hidden="true">{ loc.Flag }</span>
-						{ " " }
-						{ loc.Name }
-					</a>
-				}
+			</section>
+		}
+		<section id="duplicates" class="panel">
+			<div class="panel-head">
+				<div>
+					<h2>{ c.T("admin.integrity.duplicates") }</h2>
+					<p class="hint">{ c.T("admin.integrity.duplicatesHelp") }</p>
+				</div>
+				// One language at a time. The same pair is a near-duplicate in
+				// every language it is written in, and listing it once per
+				// language made a sweep of sixty read as a sweep of twenty —
+				// the same twenty, three times over. Switching here does not
+				// switch the interface: reading the Arabic duplicates should
+				// not mean reading an Arabic screen.
+				<div class="segmented" role="group" aria-label={ c.T("admin.integrity.duplicatesLang") }>
+					for _, loc := range c.Locales() {
+						<a
+							class={ "seg-link", templ.KV("is-on", loc.Code == d.Locale) }
+							href={ templ.SafeURL("/admin/integrity?loc=" + loc.Code + "#duplicates") }
+							if loc.Code == d.Locale {
+								aria-current="true"
+							}
+						>
+							{ loc.Name }
+						</a>
+					}
+				</div>
 			</div>
 			if len(d.Duplicates) == 0 {
-				@Empty("✅", c.T("admin.integrity.noDuplicates"))
+				@adminEmpty(c, "i-check-circle", c.T("admin.integrity.noDuplicates"), "")
 			} else {
 				// Said rather than left to be discovered: a pair without a
 				// "compare" link is otherwise indistinguishable from one whose
 				// link was missed.
 				if len(d.Duplicates) > len(d.Compare) {
-					<p class="tiny muted">{ c.T("admin.compare.partial", len(d.Compare)) }</p>
+					<div class="callout warn">
+						@adminIcon("i-info", "")
+						<div>{ c.T("admin.compare.partial", len(d.Compare)) }</div>
+					</div>
 				}
-				<div class="stack-sm">
+				<div class="panel-body stack">
 					for _, pair := range d.Duplicates {
 						@duplicatePair(c, d, pair)
 					}
@@ -192,127 +604,365 @@ templ AdminIntegrity(c Ctx, a AdminChrome, d AdminIntegrityData) {
 
 // ------------------------------------------------------------------ audit --
 templ AdminAudit(c Ctx, a AdminChrome, d AdminAuditData) {
-	{{ entries := d.Entries }}
 	@adminShell(c, a, c.T("admin.nav.audit")) {
-		if len(entries) == 0 {
-			@Empty("📋", c.T("admin.audit.empty"))
-		} else {
-			<div class="card card--flush">
-				@auditList(c, entries)
-			</div>
-			@PagerBar(c, d.Pager)
+		@adminPageHead(c, c.T("admin.nav.audit"), c.T("admin.audit.sub")) {
+			<a class="btn" href={ templ.SafeURL("/admin/audit/export.csv?" + d.FilterQuery()) }>
+				@adminIcon("i-download", "")
+				{ c.T("common.export") }
+			</a>
 		}
-	}
-}
-
-templ auditList(c Ctx, entries []*models.AuditEntry) {
-	<div class="scroll-x">
-		<table class="table">
-			<thead>
-				<tr>
-					<th>{ c.T("admin.audit.when") }</th>
-					<th>{ c.T("admin.audit.actor") }</th>
-					<th>{ c.T("admin.audit.action") }</th>
-					<th>{ c.T("admin.audit.target") }</th>
-				</tr>
-			</thead>
-			<tbody>
-				for _, e := range entries {
-					<tr>
-						<td class="tiny muted">{ c.Tr.RelativeTime(e.CreatedAt) }</td>
-						<td class="tiny bold">{ e.ActorUsername }</td>
-						<td><span class="tag tiny">{ e.Action }</span></td>
-						<td class="tiny muted truncate" style="max-width:28ch">
-							if e.TargetKind != "" {
-								{ e.TargetKind }
-							}
-							{ auditDetail(e) }
-						</td>
-					</tr>
+		<section class="panel">
+			// Server-side: the trail is the longest list in the application
+			// and the whole point of filtering it is to reach a day that is
+			// not on this page.
+			<form method="get" action="/admin/audit">
+				<div class="toolbar">
+					<label class="input-icon">
+						@adminIcon("i-search", "")
+						<span class="sr-only">{ c.T("admin.audit.search") }</span>
+						<input
+							class="input input-sm"
+							type="search"
+							name="q"
+							value={ d.Query }
+							placeholder={ c.T("admin.audit.search") }
+						/>
+					</label>
+					<select class="select input-sm" name="actor" aria-label={ c.T("admin.audit.actor") }>
+						<option value="">{ c.T("admin.audit.anyone") }</option>
+						for _, actor := range d.Actors {
+							<option value={ actor } selected?={ d.Actor == actor }>{ actor }</option>
+						}
+					</select>
+					<select class="select input-sm" name="area" aria-label={ c.T("admin.audit.area") }>
+						<option value="">{ c.T("admin.audit.allAreas") }</option>
+						for _, area := range models.AuditAreas {
+							<option value={ area } selected?={ d.Area == area }>
+								{ c.T("admin.audit.area." + area) }
+							</option>
+						}
+					</select>
+					<span class="spacer"></span>
+					<div class="segmented" role="radiogroup" aria-label={ c.T("admin.audit.window") }>
+						for _, w := range auditWindowTabs {
+							<label class={ "seg-radio", templ.KV("is-on", d.Window == w.Value) }>
+								<input
+									type="radio"
+									name="window"
+									value={ w.Value }
+									checked?={ d.Window == w.Value }
+									onchange="this.form.submit()"
+								/>
+								<span>{ c.T(w.LabelKey) }</span>
+							</label>
+						}
+					</div>
+					<button class="btn btn-sm btn-primary" type="submit">{ c.T("common.search") }</button>
+					if d.AuditFiltered() {
+						<a class="btn btn-ghost btn-sm" href="/admin/audit">
+							@adminIcon("i-x", "icon-sm")
+							{ c.T("admin.filters.clear") }
+						</a>
+					}
+				</div>
+			</form>
+			if len(d.Entries) == 0 {
+				@adminEmpty(c, "i-history", c.T("admin.audit.empty"), c.T("admin.audit.emptySub")) {
+					if d.AuditFiltered() {
+						<a class="btn btn-sm" href="/admin/audit">{ c.T("admin.filters.clear") }</a>
+					}
 				}
-			</tbody>
-		</table>
-	</div>
+			} else {
+				<div class="table-wrap">
+					<table class="table stack-sm">
+						<caption class="sr-only">{ c.T("admin.nav.audit") }</caption>
+						<thead>
+							<tr>
+								@sortHeader(c, d.Sorting, SortCol{Column: "time", Label: c.T("admin.audit.when"), DescFirst: true})
+								@sortHeader(c, d.Sorting, SortCol{Column: "actor", Label: c.T("admin.audit.actor")})
+								@sortHeader(c, d.Sorting, SortCol{Column: "action", Label: c.T("admin.audit.action")})
+								@sortHeader(c, d.Sorting, SortCol{Column: "target", Label: c.T("admin.audit.target"), Class: "hide-md"})
+								@sortHeader(c, d.Sorting, SortCol{Column: "area", Label: c.T("admin.audit.area")})
+							</tr>
+						</thead>
+						<tbody>
+							// Grouped by day, because that is how somebody
+							// reading a trail after the fact navigates it: they
+							// know roughly when, not roughly where in a list.
+							//
+							// Only while it is in time order. Sorted by actor,
+							// a day heading would appear every few rows and
+							// then again further down, which reads as the same
+							// day happening twice.
+							if d.Sorting.Sort.Active() && d.Sorting.Sort.By != "time" {
+								for _, e := range d.Entries {
+									@auditRow(c, e)
+								}
+							} else {
+								for _, group := range auditByDay(c, d.Entries) {
+									<tr class="day-sep">
+										<td colspan="5">{ group.Label }</td>
+									</tr>
+									for _, e := range group.Entries {
+										@auditRow(c, e)
+									}
+								}
+							}
+						</tbody>
+					</table>
+				</div>
+				@adminPager(c, d.Pager)
+			}
+		</section>
+	}
 }
 
-// auditDetail renders the jsonb payload compactly.
-func auditDetail(e *models.AuditEntry) string {
-	if len(e.Detail) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(e.Detail))
-	for k, v := range e.Detail {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
-	}
-	return " " + strings.Join(parts, " ")
+templ auditRow(c Ctx, e *models.AuditEntry) {
+	<tr>
+		<td class="num" data-label={ c.T("admin.audit.when") } style="white-space:nowrap">
+			<span title={ c.Tr.DateTime(e.CreatedAt) }>{ auditClock(e.CreatedAt) }</span>
+		</td>
+		<td class="cell-first" data-label={ c.T("admin.audit.actor") }>
+			<div class="cell-main" style="min-width:150px">
+				<span class="avatar sm" aria-hidden="true">{ Initial(e.ActorUsername) }</span>
+				<span class="t truncate">{ e.ActorUsername }</span>
+			</div>
+		</td>
+		<td data-label={ c.T("admin.audit.action") }>
+			<span class="act">
+				@adminIcon(auditIcon(e), "")
+				{ auditPhrase(c, e) }
+			</span>
+			// The change itself, folded away. The trail's job on first read is
+			// "who did what"; what exactly moved is the second question, and
+			// opening every row's answer at once makes the first unreadable.
+			if changes := e.Changes(); len(changes) > 0 {
+				<details class="row-details">
+					<summary>
+						@adminIcon("i-chevron-right", "icon-sm icon-flip")
+						{ c.T("admin.audit.showChange") }
+					</summary>
+					<div class="audit-diff">
+						for _, ch := range changes {
+							if ch.From != "" {
+								<div class="before">
+									{ fmt.Sprintf("− %s: %s", auditFieldName(c, ch.Field), ch.From) }
+								</div>
+							}
+							if ch.To != "" {
+								<div class="after">
+									{ fmt.Sprintf("+ %s: %s", auditFieldName(c, ch.Field), ch.To) }
+								</div>
+							}
+						}
+					</div>
+				</details>
+			}
+		</td>
+		<td class="hide-md" data-label={ c.T("admin.audit.target") }>
+			<span class="truncate" style="max-width:26ch" title={ e.Label() }>{ e.Label() }</span>
+		</td>
+		<td data-label={ c.T("admin.audit.area") }>
+			<span class="tag">{ c.T("admin.audit.area." + e.Area()) }</span>
+		</td>
+	</tr>
 }
+
 
 // ------------------------------------------------------ comment moderation --
 
 type AdminCommentsData struct {
-	Comments      []*models.QuestionComment
-	IncludeHidden bool
-	Pager         Pager
+	Comments []*models.QuestionComment
+	// Counts is the number beside each tab, of the whole queue rather than of
+	// the page — a tab that counted its page would say the same number on
+	// every one of them.
+	Counts models.CommentCounts
+	State  string
+	Query  string
+	Locale string
+	Pager  Pager
+}
+
+// commentTabs is the queue's own split, in the order the screen shows it.
+// Open first because that is the work; everything else is a record.
+var commentTabs = []struct{ Value, LabelKey string }{
+	{"open", "admin.comments.open"},
+	{"resolved", "admin.comments.resolvedTab"},
+	{"hidden", "admin.comments.hiddenTab"},
+	{"", "admin.questions.tab.all"},
+}
+
+// TabCount is the number beside one tab.
+func (d AdminCommentsData) TabCount(state string) int {
+	switch state {
+	case "open":
+		return d.Counts.Open
+	case "resolved":
+		return d.Counts.Resolved
+	case "hidden":
+		return d.Counts.Hidden
+	}
+	return d.Counts.Total
+}
+
+// TabHref keeps the search and the language when the tab changes: the tab is
+// which part of the queue, not a reset of what you were looking for.
+func (d AdminCommentsData) TabHref(state string) string {
+	v := url.Values{}
+	if state != "" {
+		v.Set("state", state)
+	}
+	if d.Query != "" {
+		v.Set("q", d.Query)
+	}
+	if d.Locale != "" {
+		v.Set("loc", d.Locale)
+	}
+	if len(v) == 0 {
+		return "/admin/comments"
+	}
+	return "/admin/comments?" + v.Encode()
 }
 
 templ AdminComments(c Ctx, a AdminChrome, d AdminCommentsData) {
 	@adminShell(c, a, c.T("admin.nav.comments")) {
-		<p class="small muted">{ c.T("admin.comments.help") }</p>
-		<div class="tabs">
-			@tabItem(c, "/admin/comments", c.T("admin.comments.all"), d.IncludeHidden)
-			@tabItem(c, "/admin/comments?hidden=0", c.T("admin.comments.visibleOnly"), !d.IncludeHidden)
-		</div>
-		if len(d.Comments) == 0 {
-			@Empty("💬", c.T("admin.comments.empty"))
-		} else {
-			<div class="stack-sm">
-				for _, cm := range d.Comments {
-					@adminCommentRow(c, cm)
-				}
-				@PagerBar(c, d.Pager)
-			</div>
+		@adminPageHead(c, c.T("admin.nav.comments"), c.T("admin.comments.help")) {
 		}
+		<section class="panel">
+			<div class="tabs" role="tablist">
+				for _, tab := range commentTabs {
+					<a
+						class={ "tab", templ.KV("is-on", d.State == tab.Value) }
+						href={ templ.SafeURL(d.TabHref(tab.Value)) }
+						role="tab"
+						aria-selected={ boolAttr(d.State == tab.Value) }
+					>
+						{ c.T(tab.LabelKey) }
+						if n := d.TabCount(tab.Value); n > 0 {
+							<span class="n">{ fmt.Sprint(n) }</span>
+						}
+					</a>
+				}
+			</div>
+			// Server-side, because the queue is paged: filtering the rows on
+			// screen would narrow this page and quietly ignore the rest.
+			<form class="toolbar" method="get" action="/admin/comments" role="search">
+				if d.State != "" {
+					<input type="hidden" name="state" value={ d.State }/>
+				}
+				<label class="input-icon">
+					@adminIcon("i-search", "")
+					<span class="sr-only">{ c.T("admin.comments.search") }</span>
+					<input
+						class="input input-sm"
+						type="search"
+						name="q"
+						value={ d.Query }
+						placeholder={ c.T("admin.comments.search") }
+					/>
+				</label>
+				<select class="select input-sm" name="loc" aria-label={ c.T("settings.language") }>
+					<option value="">{ c.T("admin.comments.anyLanguage") }</option>
+					for _, loc := range c.Locales() {
+						<option value={ loc.Code } selected?={ d.Locale == loc.Code }>{ loc.Name }</option>
+					}
+				</select>
+				<span class="spacer"></span>
+				<button class="btn btn-sm btn-primary" type="submit">{ c.T("common.search") }</button>
+				if d.Query != "" || d.Locale != "" {
+					<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(d.TabHref(d.State)) }>
+						@adminIcon("i-x", "icon-sm")
+						{ c.T("admin.filters.clear") }
+					</a>
+				}
+			</form>
+			if len(d.Comments) == 0 {
+				@adminEmpty(c, "i-comment", c.T("admin.comments.empty"), c.T("admin.comments.emptySub"))
+			} else {
+				<div>
+					for _, cm := range d.Comments {
+						@adminCommentRow(c, cm)
+					}
+				</div>
+				@adminPager(c, d.Pager)
+			}
+		</section>
 	}
 }
 
+// adminCommentRow is the kit's comment card.
+//
+// is-flagged is the kit's "somebody reported this" state and is deliberately
+// not used: nothing in this application lets a player report a remark, so a
+// row drawn as flagged would be saying something untrue. Hidden is the state
+// that does exist, and it dims the card instead.
 templ adminCommentRow(c Ctx, cm *models.QuestionComment) {
-	<article class={ "card", "stack-sm", templ.KV("is-inactive", cm.Hidden) }>
-		<div class="row row--between row--wrap" style="gap:8px">
-			<span class="row" style="gap:8px;align-items:center">
+	<article class={ "comment", templ.KV("is-hidden", cm.Hidden), templ.KV("is-done", cm.Resolved()) }>
+		<span class="avatar" aria-hidden="true">{ Initial(cm.AuthorName) }</span>
+		<div class="body">
+			<div class="head">
 				if cm.Anonymous() {
-					<span class="tiny muted">{ c.T("comments.deletedAuthor") }</span>
+					<span class="muted">{ c.T("comments.deletedAuthor") }</span>
 				} else {
-					<a class="tiny bold" href={ templ.SafeURL("/u/" + cm.AuthorUsername) }>
-						{ cm.AuthorName }
-					</a>
+					<b><a href={ templ.SafeURL("/u/" + cm.AuthorUsername) }>{ cm.AuthorName }</a></b>
 				}
-				<a class="tiny muted" href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", cm.QuestionID)) }>
-					{ fmt.Sprintf("#%d", cm.QuestionID) }
+				<span class="lang">{ strings.ToUpper(cm.Locale) }</span>
+				<span class="muted">{ c.Tr.RelativeTime(cm.CreatedAt) }</span>
+				if cm.Hidden {
+					<span class="badge badge-danger">{ c.T("admin.comments.isHidden") }</span>
+				} else if cm.Resolved() {
+					<span class="badge badge-live">{ c.T("admin.comments.isResolved") }</span>
+				}
+			</div>
+			// Player-authored text: rendered as text, never as markup, and
+			// tagged with the language it was written in so bidi text is not
+			// reordered by the page around it.
+			<p class="text" dir={ ContentDir(cm.Locale) } lang={ cm.Locale }>{ cm.Body }</p>
+			<a class="on" href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", cm.QuestionID)) }>
+				@adminIcon("i-question", "icon-sm")
+				<span class="truncate">
+					{ c.T("admin.comments.onQuestion", cm.QuestionID) }
+					if cm.CategoryName != "" {
+						{ " · " + cm.CategoryIcon + " " + cm.CategoryName }
+					}
+				</span>
+			</a>
+			<div class="acts">
+				// Resolved, not hidden, is the answer for a remark that was
+				// right: it reported a real fault, it was acted on, and hiding
+				// a correct observation pretends it never arrived.
+				if cm.Resolved() {
+					@adminCommentAction(c, cm.ID, "reopen", "i-restore", c.T("admin.comments.reopen"))
+				} else {
+					@adminCommentAction(c, cm.ID, "resolve", "i-check", c.T("admin.comments.resolve"))
+				}
+				<a
+					class="btn btn-sm btn-ghost"
+					href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", cm.QuestionID)) }
+				>
+					@adminIcon("i-edit", "icon-sm")
+					{ c.T("admin.comments.editQuestion") }
 				</a>
-				<span class="tag tiny num">{ cm.Locale }</span>
 				if cm.Hidden {
-					<span class="tag tag--danger tiny">{ c.T("admin.comments.isHidden") }</span>
-				}
-			</span>
-			<span class="row" style="gap:8px;align-items:center">
-				<span class="tiny muted">{ c.Tr.RelativeTime(cm.CreatedAt) }</span>
-				if cm.Hidden {
-					@adminCommentAction(c, cm.ID, "show", "btn--soft", c.T("admin.comments.show"))
+					@adminCommentAction(c, cm.ID, "show", "i-eye", c.T("admin.comments.show"))
 				} else {
-					@adminCommentAction(c, cm.ID, "hide", "btn--ghost", c.T("admin.comments.hide"))
+					@adminCommentAction(c, cm.ID, "hide", "i-eye-off", c.T("admin.comments.hide"))
 				}
-			</span>
+			</div>
+			if cm.Resolved() && cm.ResolvedBy != "" {
+				<p class="help">{ c.T("admin.comments.resolvedBy", cm.ResolvedBy) }</p>
+			}
 		</div>
-		// Player-authored text: rendered as text, never as markup, and tagged
-		// with the language it was written in so bidi text is not reordered.
-		<p class="small" dir={ ContentDir(cm.Locale) } lang={ cm.Locale }>{ cm.Body }</p>
 	</article>
 }
 
-templ adminCommentAction(c Ctx, id int64, action, variant, label string) {
+templ adminCommentAction(c Ctx, id int64, action, icon, label string) {
 	<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/comments/%d/%s", id, action)) }>
 		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-		<button class={ "btn", "btn--sm", variant } type="submit">{ label }</button>
+		<button class="btn btn-sm btn-ghost" type="submit">
+			@adminIcon(icon, "icon-sm")
+			{ label }
+		</button>
 	</form>
 }
 
@@ -320,13 +970,33 @@ templ adminCommentAction(c Ctx, id int64, action, variant, label string) {
 
 type AdminAuditData struct {
 	Entries []*models.AuditEntry
-	Pager   Pager
+	// Actors is everybody who has ever appeared in the trail, for the person
+	// filter. Query, Actor, Area and Window are what is currently selected,
+	// so the controls come back showing the filter they produced.
+	Actors []string
+	Query  string
+	Actor  string
+	Area   string
+	Window string
+	Pager  Pager
+	// Sorting is which column the trail is ordered by and how to change it.
+	Sorting SortState
+}
+
+// AuditFiltered reports whether anything is narrowing the trail, which is what
+// decides whether the screen offers a way to clear it.
+func (d AdminAuditData) AuditFiltered() bool {
+	return d.Query != "" || d.Actor != "" || d.Area != "" || d.Window != ""
 }
 
 type AdminRatedData struct {
 	Questions []*models.RatedQuestion
 	Threshold string
 	MinVotes  int
+	// Overall is how the bank is rated as a whole, which is what gives the
+	// flagged list below a scale.
+	Overall repository.RatingSummary
+	Period  string
 	Pager     Pager
 }
 
@@ -337,58 +1007,135 @@ type AdminRatedData struct {
 // scoring two or less puts itself on this list and a badge on the nav.
 templ AdminRated(c Ctx, a AdminChrome, d AdminRatedData) {
 	@adminShell(c, a, c.T("admin.rated.title")) {
-		<section class="card stack">
-			<div class="card__head" style="margin:0">
-				<span class="card__title">{ c.T("admin.rated.title") }</span>
-				<span class="tiny muted">{ c.T("admin.rated.help", d.Threshold, d.MinVotes) }</span>
+		@adminPageHead(c, c.T("admin.rated.title"), c.T("admin.rated.sub")) {
+			<form method="get" action="/admin/rated">
+				<label class="sr-only" for="rated-period">{ c.T("admin.rated.period") }</label>
+				<select class="select" id="rated-period" name="period" onchange="this.form.submit()">
+					for _, w := range ratedPeriods {
+						<option value={ w.Value } selected?={ d.Period == w.Value }>
+							{ c.T(w.LabelKey) }
+						</option>
+					}
+				</select>
+				<noscript>
+					<button class="btn btn-sm" type="submit">{ c.T("common.search") }</button>
+				</noscript>
+			</form>
+		}
+		// The bank as a whole, so the list below has a scale. Five questions
+		// under the line out of a bank players mostly like is a different
+		// morning from five out of a bank they do not.
+		<div class="kpis" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+			<div class="kpi">
+				<div class="kpi-label">
+					@adminIcon("i-thumbs-up", "")
+					{ c.T("admin.rated.positiveOverall") }
+				</div>
+				<div class="kpi-value">{ fmt.Sprintf("%d%%", d.Overall.Share()) }</div>
+				<div class="kpi-meta">{ c.T("admin.rated.votesCounted", d.Overall.Votes) }</div>
 			</div>
-			if len(d.Questions) == 0 {
-				@Empty("✅", c.T("admin.rated.none"))
-			} else {
-				<div class="stack-sm">
-					for _, q := range d.Questions {
-						<div class="panel row row--between row--wrap" style="gap:12px">
-							<div style="flex:1;min-width:220px">
-								<div class="tiny muted">
-									<span aria-hidden="true">{ q.CategoryIcon }</span>
-									{ q.CategoryName }
-								</div>
-								<div class="small">
-									@questionRef(c, q.ID, q.Prompt)
-									{ " " }
-									{ q.Prompt }
-								</div>
-							</div>
-							<div class="row" style="gap:10px;align-items:center">
-								<span class="stars stars--static" aria-hidden="true">
-									for i := 1; i <= models.MaxStars; i++ {
-										<span class={ "stars__one", templ.KV("is-on", i <= q.Stars()) }>★</span>
-									}
-								</span>
-								<span class="tag tag--danger num">
-									{ c.T("admin.rated.average", fmt.Sprintf("%.1f", q.Average)) }
-								</span>
-								<span class="tiny muted">{ c.T("admin.rated.votes", q.Votes) }</span>
-								<form
-									method="post"
-									action={ templ.SafeURL(fmt.Sprintf("/admin/rated/%d/dismiss", q.ID)) }
-								>
-									<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-									<button class="btn btn--ghost btn--sm" type="submit">
-										{ c.T("admin.rated.dismiss") }
-									</button>
-								</form>
-								<a
-									class="btn btn--soft btn--sm"
-									href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }
-								>
-									{ c.T("common.edit") }
-								</a>
-							</div>
-						</div>
+			<div class={ "kpi", templ.KV("is-attention", d.Pager.Total > 0) }>
+				<div class="kpi-label">
+					@adminIcon("i-thumbs-down", "")
+					{ c.T("admin.rated.belowThreshold") }
+				</div>
+				<div class="kpi-value">{ fmt.Sprint(d.Pager.Total) }</div>
+				<div class="kpi-meta">{ c.T("admin.rated.belowMeta", d.Threshold, d.MinVotes) }</div>
+			</div>
+			<div class="kpi">
+				<div class="kpi-label">
+					@adminIcon("i-star", "")
+					{ c.T("admin.rated.averageOverall") }
+				</div>
+				<div class="kpi-value">
+					if d.Overall.Votes == 0 {
+						{ "—" }
+					} else {
+						{ fmt.Sprintf("%.1f", d.Overall.Average) }
 					}
 				</div>
-				@PagerBar(c, d.Pager)
+				<div class="kpi-meta">{ c.T("admin.rated.outOf", models.MaxStars) }</div>
+			</div>
+		</div>
+		<div class="callout" style="margin-bottom:16px">
+			@adminIcon("i-info", "")
+			<div>{ c.T("admin.rated.help", d.Threshold, d.MinVotes) }</div>
+		</div>
+		<section class="panel">
+			<div class="panel-head">
+				<div>
+					<h2>{ c.T("admin.rated.toFix") }</h2>
+					<p class="hint">{ c.T("admin.rated.sortedBy") }</p>
+				</div>
+				if len(d.Questions) > 0 {
+					<span class="badge badge-danger no-dot">{ fmt.Sprint(len(d.Questions)) }</span>
+				}
+			</div>
+			if len(d.Questions) == 0 {
+				@adminEmpty(c, "i-thumbs-up", c.T("admin.rated.none"), c.T("admin.rated.noneSub"))
+			} else {
+				for _, q := range d.Questions {
+					<div class="rating-row">
+						<div class="cell-main" style="min-width:0;align-items:flex-start">
+							<span class="cat-tile" aria-hidden="true">{ q.CategoryIcon }</span>
+							<div style="min-width:0">
+								<div class="t">{ q.Prompt }</div>
+								<div class="s">
+									<a class="qid" href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }>
+										{ fmt.Sprintf("#%d", q.ID) }
+									</a>
+									{ " · " + q.CategoryName + " · " }
+									{ c.T("admin.rated.votes", q.Votes) }
+								</div>
+							</div>
+						</div>
+						// The design's split bar, filled from the star average
+						// rather than from thumbs: this bank is rated one to
+						// five and there is no up-or-down to draw. The share
+						// is the average as a proportion of five, which is the
+						// same quantity the threshold is set against.
+						<div>
+							<div class="rating-split">
+								<span class="up" style={ fmt.Sprintf("--up:%d%%", ratingShare(q.Average)) }></span>
+								<span class="down" style={ fmt.Sprintf("--down:%d%%", 100-ratingShare(q.Average)) }></span>
+							</div>
+							<div class="rating-nums">
+								<span class="row" style="gap:4px">
+									@adminIcon("i-star", "icon-sm")
+									{ c.T("admin.rated.average", fmt.Sprintf("%.1f", q.Average)) }
+								</span>
+								<span class="row" style="gap:4px;color:var(--danger-ink)">
+									{ fmt.Sprintf("%d%%", 100-ratingShare(q.Average)) }
+									@adminIcon("i-thumbs-down", "icon-sm")
+								</span>
+							</div>
+						</div>
+						<div class="btn-group r-acts">
+							<a
+								class="btn btn-soft btn-sm"
+								href={ templ.SafeURL(fmt.Sprintf("/admin/questions/%d/edit", q.ID)) }
+							>
+								@adminIcon("i-edit", "")
+								{ c.T("admin.rated.fix") }
+							</a>
+							// "Reviewed" rather than "dismiss": the question
+							// comes back the moment somebody rates it again,
+							// so this records a judgement rather than hiding a
+							// row.
+							<form
+								method="post"
+								action={ templ.SafeURL(fmt.Sprintf("/admin/rated/%d/dismiss", q.ID)) }
+							>
+								<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+								<button class="btn btn-ghost btn-sm" type="submit">
+									@adminIcon("i-check", "")
+									{ c.T("admin.rated.dismiss") }
+								</button>
+							</form>
+						</div>
+					</div>
+				}
+				@adminPager(c, d.Pager)
 			}
 		</section>
 	}
@@ -407,36 +1154,28 @@ templ AdminRated(c Ctx, a AdminChrome, d AdminRatedData) {
 // weaker one", neither of which destroys anybody's history.
 templ duplicatePair(c Ctx, d AdminIntegrityData, pair *models.DuplicatePair) {
 	{{ anchor := DuplicateAnchor(pair.LeftID, pair.RightID) }}
-	<div class="dup-pair">
-		<div class="dup-pair__head">
-			<span class="tag tag--danger num">{ fmt.Sprintf("%d%%", pair.Percent()) }</span>
-			<div class="dup-pair__actions">
-				if d.Comparable(pair.LeftID, pair.RightID) {
-					// Opens in place, below this pair. The anchor is the pair
-					// itself, so the address bar names what you are reading.
-					<a class="dup-choice__open" href={ templ.SafeURL("#" + anchor) }>
-						{ c.T("common.compare") }
-					</a>
-				}
-				@duplicateVerdict(c, pair, "distinct", 0, "btn--ghost", c.T("admin.integrity.notDuplicate"))
-			</div>
+	// The kit's own duplicate card: a head carrying the score and the verdict
+	// that settles the pair, then one row per question with the verdict that
+	// retires that one. Its names rather than a parallel set of mine — this is
+	// the component the kit drew, and five shim classes beside it would be five
+	// things to keep in step with it.
+	<div class="dup-card" data-dismissable>
+		<div class="dup-head">
+			<span class="badge badge-danger">{ fmt.Sprintf("%d%%", pair.Percent()) }</span>
+			<span class="muted">{ c.T("admin.integrity.pairIn", localeName(c, pair.Locale)) }</span>
+			<span class="spacer"></span>
+			if d.Comparable(pair.LeftID, pair.RightID) {
+				// Opens in place, below this pair. The anchor is the pair
+				// itself, so the address bar names what you are reading.
+				<a class="btn btn-ghost btn-sm" href={ templ.SafeURL("#" + anchor) }>
+					@adminIcon("i-git-compare", "icon-sm")
+					{ c.T("common.compare") }
+				</a>
+			}
+			@duplicateVerdict(c, pair, "distinct", 0, "btn-ghost", c.T("admin.integrity.notDuplicate"))
 		</div>
-		<div class="dup-pair__side">
-			<div class="tiny">
-				@questionRef(c, pair.LeftID, pair.LeftPrompt)
-				{ " " }
-				{ pair.LeftPrompt }
-			</div>
-			@duplicateVerdict(c, pair, "retire", pair.LeftID, "btn--soft", c.T("admin.integrity.retireThis"))
-		</div>
-		<div class="dup-pair__side">
-			<div class="tiny">
-				@questionRef(c, pair.RightID, pair.RightPrompt)
-				{ " " }
-				{ pair.RightPrompt }
-			</div>
-			@duplicateVerdict(c, pair, "retire", pair.RightID, "btn--soft", c.T("admin.integrity.retireThis"))
-		</div>
+		@duplicateSide(c, pair, pair.LeftID, pair.LeftPrompt)
+		@duplicateSide(c, pair, pair.RightID, pair.RightPrompt)
 		if cmp := d.CompareFor(pair.LeftID, pair.RightID); cmp != nil {
 			@comparePanel(c, cmp, CompareChrome{
 				Anchor:    anchor,
@@ -444,6 +1183,20 @@ templ duplicatePair(c Ctx, d AdminIntegrityData, pair *models.DuplicatePair) {
 				CloseHref: "#duplicates",
 			})
 		}
+	</div>
+}
+
+// duplicateSide is one of the two questions, with the one verdict that is
+// about it alone: retire this one and keep the other.
+templ duplicateSide(c Ctx, pair *models.DuplicatePair, id int, prompt string) {
+	<div class="dup-q">
+		<div class="txt">
+			<div>{ prompt }</div>
+			<div class="meta">
+				@questionRef(c, id, "")
+			</div>
+		</div>
+		@duplicateVerdict(c, pair, "retire", id, "btn-soft", c.T("admin.integrity.retireThis"))
 	</div>
 }
 
@@ -458,6 +1211,6 @@ templ duplicateVerdict(c Ctx, pair *models.DuplicatePair, verdict string, retire
 		if retire > 0 {
 			<input type="hidden" name="retire" value={ fmt.Sprint(retire) }/>
 		}
-		<button class={ "btn", "btn--sm", variant } type="submit">{ label }</button>
+		<button class={ "btn", "btn-sm", variant } type="submit">{ label }</button>
 	</form>
 }

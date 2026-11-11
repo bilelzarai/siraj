@@ -28,30 +28,131 @@ func (r *Repo) Audit(ctx context.Context, e models.AuditEntry) error {
 	return err
 }
 
-// CountAuditEntries is how many lines the trail holds, so the screen can page
-// through it instead of stopping silently at the first two hundred — which is
-// exactly the wrong behaviour for the record you consult after something went
-// wrong.
-func (r *Repo) CountAuditEntries(ctx context.Context) (int, error) {
+// AuditFilter narrows the trail. The screen that reads it is the one you open
+// after something went wrong, and "everything, newest first" is the wrong tool
+// for that: you know roughly who, roughly what, and roughly when.
+type AuditFilter struct {
+	// Query matches the action, the target id or the label recorded with it.
+	Query string
+	// Actor is one person's username, or "" for anybody. Matched on the
+	// username column rather than the id so an entry survives the account:
+	// actor_id is set null when a user is deleted and the trail must still
+	// name who acted.
+	Actor string
+	// Area is one of models.AuditAreas, or "" for all of them.
+	Area string
+	// Since drops everything older. Zero keeps the whole trail.
+	Since time.Time
+	// Sort is which column the trail is ordered by, zero for newest first.
+	Sort   Sort
+	Limit  int
+	Offset int
+}
+
+// auditWhere builds the clause shared by the count and the page, so the pager
+// can never be counting a different set than the one on screen.
+func auditWhere(f AuditFilter) (string, []any) {
+	where := []string{"true"}
+	var args []any
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+
+	if q := strings.TrimSpace(f.Query); q != "" {
+		add(`(action ILIKE '%%' || $%d || '%%' OR target_id ILIKE '%%' || $%[1]d || '%%'
+		      OR COALESCE(detail->>'label', '') ILIKE '%%' || $%[1]d || '%%')`, q)
+	}
+	if f.Actor != "" {
+		add("actor_username = $%d", f.Actor)
+	}
+	if !f.Since.IsZero() {
+		add("created_at >= $%d", f.Since)
+	}
+	// The area is derived from the target kind and the action prefix, the same
+	// way models.AuditEntry.Area derives it. Expressed here rather than stored
+	// so the two cannot drift apart into a filter that hides rows the screen
+	// would have grouped under the chosen area.
+	switch f.Area {
+	case models.AuditAreaReview:
+		where = append(where, "(action LIKE 'translation.%' OR action LIKE 'duplicate.%')")
+	case models.AuditAreaUsers:
+		where = append(where, "target_kind = 'user'")
+	case models.AuditAreaSupport:
+		where = append(where, "target_kind = 'ticket'")
+	case models.AuditAreaTaxonomy:
+		where = append(where, "target_kind IN ('category', 'domain')")
+	case models.AuditAreaQuestions:
+		where = append(where,
+			"target_kind IN ('question', 'import') AND action NOT LIKE 'translation.%' AND action NOT LIKE 'duplicate.%'")
+	case models.AuditAreaComments:
+		where = append(where, "target_kind = 'comment'")
+	case models.AuditAreaOther:
+		where = append(where,
+			"target_kind NOT IN ('user', 'ticket', 'category', 'domain', 'question', 'import', 'comment')")
+	}
+
+	return strings.Join(where, " AND "), args
+}
+
+// CountAuditEntries is how many lines the filter matches, so the screen can
+// page through it instead of stopping silently at the first two hundred —
+// which is exactly the wrong behaviour for the record you consult after
+// something went wrong.
+func (r *Repo) CountAuditEntries(ctx context.Context, f AuditFilter) (int, error) {
+	clause, args := auditWhere(f)
 	var n int
-	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM admin_audit`).Scan(&n)
+	err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM admin_audit WHERE `+clause, args...).Scan(&n)
 	return n, err
 }
 
 // AuditPage is one page of the trail.
-func (r *Repo) AuditPage(ctx context.Context, limit, offset int) ([]*models.AuditEntry, error) {
-	return r.auditQuery(ctx, limit, offset)
+func (r *Repo) AuditPage(ctx context.Context, f AuditFilter) ([]*models.AuditEntry, error) {
+	return r.auditQuery(ctx, f)
 }
 
 func (r *Repo) AuditTrail(ctx context.Context, limit int) ([]*models.AuditEntry, error) {
-	return r.auditQuery(ctx, limit, 0)
+	return r.auditQuery(ctx, AuditFilter{Limit: limit})
 }
 
-func (r *Repo) auditQuery(ctx context.Context, limit, offset int) ([]*models.AuditEntry, error) {
+// AuditActors is every person who has ever appeared in the trail, for the
+// filter's list. Read from the entries rather than from the staff table: an
+// admin whose account is gone still has rows here, and those rows are the
+// reason the trail exists.
+func (r *Repo) AuditActors(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT DISTINCT actor_username FROM admin_audit
+		  WHERE actor_username <> '' ORDER BY actor_username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repo) auditQuery(ctx context.Context, f AuditFilter) ([]*models.AuditEntry, error) {
+	if f.Limit <= 0 || f.Limit > 500 {
+		f.Limit = 50
+	}
+	clause, args := auditWhere(f)
+	args = append(args, f.Limit, f.Offset)
+
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, actor_id, actor_username, action, target_kind, target_id,
 		       detail, ip, created_at
-		  FROM admin_audit ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+		  FROM admin_audit WHERE `+clause+
+		orderBy(f.Sort, auditSortColumns, "created_at DESC", "id DESC")+`
+		 LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -74,12 +175,19 @@ func (r *Repo) auditQuery(ctx context.Context, limit, offset int) ([]*models.Aud
 // AdminUserFilter is the filter set for the admin user directory. Unlike the
 // player-facing search this one may legitimately list everyone.
 type AdminUserFilter struct {
-	Query   string
+	Query string
+	// Kind is the directory's own split: "player" or "staff", where staff is
+	// every role that can change something. Role is the exact one, which the
+	// row's select sets; the two are separate because the screen filters by
+	// the first and edits the second.
+	Kind    string
 	Role    string
 	Status  string
 	Country string
-	Limit   int
-	Offset  int
+	// Sort is which column the directory is ordered by, zero for newest first.
+	Sort   Sort
+	Limit  int
+	Offset int
 }
 
 func (r *Repo) AdminUsers(ctx context.Context, f AdminUserFilter) ([]*models.AdminUser, int, error) {
@@ -90,7 +198,7 @@ func (r *Repo) AdminUsers(ctx context.Context, f AdminUserFilter) ([]*models.Adm
 	// Accounts only. Temporary players are swept on a timer and have no
 	// address, no role and nothing to administer; listing them would fill the
 	// screen with rows whose every action is meaningless.
-	where := []string{"NOT is_temporary"}
+	where := []string{"NOT u.is_temporary"}
 	args := []any{}
 	add := func(clause string, value any) {
 		args = append(args, value)
@@ -98,33 +206,54 @@ func (r *Repo) AdminUsers(ctx context.Context, f AdminUserFilter) ([]*models.Adm
 	}
 
 	if q := strings.TrimSpace(f.Query); q != "" {
-		add("(username ILIKE '%%' || $%d || '%%' OR display_name ILIKE '%%' || $%[1]d || '%%' OR COALESCE(email::text, '') ILIKE '%%' || $%[1]d || '%%')", q)
+		add("(u.username ILIKE '%%' || $%d || '%%' OR u.display_name ILIKE '%%' || $%[1]d || '%%' OR COALESCE(u.email::text, '') ILIKE '%%' || $%[1]d || '%%')", q)
 	}
 	if f.Role != "" {
-		add("role = $%d::user_role", f.Role)
+		add("u.role = $%d::user_role", f.Role)
+	}
+	switch f.Kind {
+	case "player":
+		where = append(where, "u.role = 'player'")
+	case "staff":
+		where = append(where, "u.role <> 'player'")
 	}
 	if f.Status != "" {
-		add("status = $%d", f.Status)
+		add("u.status = $%d", f.Status)
 	}
 	if f.Country != "" {
-		add("country = $%d", f.Country)
+		add("u.country = $%d", f.Country)
 	}
 
 	clause := strings.Join(where, " AND ")
 
 	var total int
 	if err := r.pool.QueryRow(ctx,
-		`SELECT count(*) FROM users WHERE `+clause, args...).Scan(&total); err != nil {
+		`SELECT count(*) FROM users u WHERE `+clause, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	args = append(args, f.Limit, f.Offset)
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, username, display_name, avatar_seed, COALESCE(email::text, ''), role::text, status,
-		       suspended_reason, country, locale, xp, games_played,
-		       created_at, last_seen_at
-		  FROM users WHERE `+clause+`
-		 ORDER BY created_at DESC
+		SELECT u.id, u.username, u.display_name, u.avatar_seed,
+		       COALESCE(u.email::text, ''), u.role::text, u.status,
+		       u.suspended_reason, u.country, u.locale, u.xp, u.games_played,
+		       u.best_streak,
+		       COALESCE(a.answered, 0), COALESCE(a.correct, 0),
+		       u.created_at, u.last_seen_at
+		  FROM users u
+		  -- How well they actually play, which is what the directory reports
+		  -- beside how much. Aggregated in a lateral rather than joined and
+		  -- grouped: a GROUP BY would have to carry every column above through
+		  -- it for the sake of two counts.
+		  LEFT JOIN LATERAL (
+		        SELECT count(*)::int AS answered,
+		               count(*) FILTER (WHERE ga.is_correct)::int AS correct
+		          FROM game_answers ga
+		          JOIN game_sessions gs ON gs.id = ga.session_id
+		         WHERE gs.user_id = u.id
+		  ) a ON true
+		 WHERE `+clause+
+		orderBy(f.Sort, userSortColumns, "u.created_at DESC", "u.id")+`
 		 LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
 		return nil, 0, err
@@ -136,12 +265,27 @@ func (r *Repo) AdminUsers(ctx context.Context, f AdminUserFilter) ([]*models.Adm
 		var u models.AdminUser
 		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.AvatarSeed, &u.Email,
 			&u.Role, &u.Status, &u.SuspendedReason, &u.Country, &u.Locale,
-			&u.XP, &u.GamesPlayed, &u.CreatedAt, &u.LastSeenAt); err != nil {
+			&u.XP, &u.GamesPlayed, &u.BestStreak,
+			&u.Answered, &u.Correct,
+			&u.CreatedAt, &u.LastSeenAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, &u)
 	}
 	return out, total, rows.Err()
+}
+
+// UserCounts is how the directory splits, for the numbers beside its tabs.
+// One query rather than three: the tabs are read together and a count per tab
+// would be three scans of the same table to answer one question.
+func (r *Repo) UserCounts(ctx context.Context) (models.UserCounts, error) {
+	var c models.UserCounts
+	err := r.pool.QueryRow(ctx, `
+		SELECT count(*)::int,
+		       count(*) FILTER (WHERE role = 'player')::int,
+		       count(*) FILTER (WHERE role <> 'player')::int
+		  FROM users WHERE NOT is_temporary`).Scan(&c.Total, &c.Players, &c.Staff)
+	return c, err
 }
 
 // CreateUserWithRole is the admin-side account creation path. It mirrors
@@ -240,13 +384,23 @@ func (r *Repo) DeleteUserAsAdmin(ctx context.Context, id uuid.UUID) error {
 func (r *Repo) AdminUser(ctx context.Context, id uuid.UUID) (*models.AdminUser, error) {
 	var u models.AdminUser
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, username, display_name, avatar_seed, COALESCE(email::text, ''), role::text, status,
-		       suspended_reason, country, locale, xp, games_played,
-		       created_at, last_seen_at
-		  FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Role, &u.Status,
-		&u.SuspendedReason, &u.Country, &u.Locale, &u.XP, &u.GamesPlayed,
-		&u.CreatedAt, &u.LastSeenAt)
+		SELECT u.id, u.username, u.display_name, u.avatar_seed,
+		       COALESCE(u.email::text, ''), u.role::text, u.status,
+		       u.suspended_reason, u.country, u.locale, u.xp, u.games_played,
+		       u.best_streak, COALESCE(a.answered, 0), COALESCE(a.correct, 0),
+		       u.created_at, u.last_seen_at
+		  FROM users u
+		  LEFT JOIN LATERAL (
+		        SELECT count(*)::int AS answered,
+		               count(*) FILTER (WHERE ga.is_correct)::int AS correct
+		          FROM game_answers ga
+		          JOIN game_sessions gs ON gs.id = ga.session_id
+		         WHERE gs.user_id = u.id
+		  ) a ON true
+		 WHERE u.id = $1`, id,
+	).Scan(&u.ID, &u.Username, &u.DisplayName, &u.AvatarSeed, &u.Email, &u.Role, &u.Status,
+		&u.SuspendedReason, &u.Country, &u.Locale, &u.XP, &u.GamesPlayed, &u.BestStreak,
+		&u.Answered, &u.Correct, &u.CreatedAt, &u.LastSeenAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -280,10 +434,25 @@ func (r *Repo) CountriesInUse(ctx context.Context) ([]string, error) {
 type AdminQuestionFilter struct {
 	Query      string
 	CategoryID int
+	// DomainID narrows to every category filed under one subject area. The
+	// question browser offers both levels because a category list long enough
+	// to need a filter is also long enough to need grouping, and the admin who
+	// knows which domain they are working in should not have to recognise its
+	// categories by name first.
+	DomainID   int
 	Difficulty int
 	Locale     string
 	OnlyReview bool
 	OnlyActive bool
+	// OnlyRetired is the other half of OnlyActive, and both default off so
+	// "no state chosen" means the whole bank. A single tri-state would have to
+	// pick one of them as its zero value, and the zero value of a filter has
+	// to be "everything".
+	OnlyRetired bool
+	// OnlyNoted keeps only questions a reviewer has sent back with a request.
+	OnlyNoted bool
+	// Sort is which column the browser is ordered by, zero for newest first.
+	Sort Sort
 	// MinLocales, when positive, keeps only questions with fewer translations
 	// than that — the queue of things still to be written or translated. The
 	// number is passed in rather than read from i18n so this package stays
@@ -320,11 +489,21 @@ func questionWhere(f AdminQuestionFilter) (clause string, args []any) {
 	if f.CategoryID > 0 {
 		add("q.category_id = $%d", f.CategoryID)
 	}
+	if f.DomainID > 0 {
+		add("EXISTS (SELECT 1 FROM categories dc WHERE dc.id = q.category_id AND dc.domain_id = $%d)", f.DomainID)
+	}
 	if f.Difficulty > 0 {
 		add("q.difficulty = $%d", f.Difficulty)
 	}
 	if f.OnlyActive {
 		where = append(where, "q.is_active")
+	}
+	if f.OnlyRetired {
+		where = append(where, "NOT q.is_active")
+	}
+	if f.OnlyNoted {
+		where = append(where,
+			"EXISTS (SELECT 1 FROM question_translations nt WHERE nt.question_id = q.id AND nt.review_note <> '')")
 	}
 	if f.OnlyReview {
 		where = append(where,
@@ -388,6 +567,9 @@ func (r *Repo) AdminQuestions(ctx context.Context, f AdminQuestionFilter) ([]*mo
 		       (SELECT count(*) FROM question_translations x WHERE x.question_id = q.id AND x.needs_review),
 		       ARRAY(SELECT x.locale FROM question_translations x
 		              WHERE x.question_id = q.id AND x.needs_review ORDER BY x.locale),
+		       (SELECT count(*) FROM question_translations x
+		          WHERE x.question_id = q.id AND x.review_note <> ''),
+		       COALESCE(a.plays, 0), COALESCE(a.correct, 0),
 		       q.created_at
 		  FROM questions q
 		  JOIN categories c ON c.id = q.category_id
@@ -397,8 +579,17 @@ func (r *Repo) AdminQuestions(ctx context.Context, f AdminQuestionFilter) ([]*mo
 		        SELECT prompt FROM question_translations
 		         WHERE question_id = q.id ORDER BY locale LIMIT 1
 		  ) any_t ON true
-		 WHERE `+clause+`
-		 ORDER BY q.id DESC
+		  -- How often it has been met and how often answered right. Aggregated
+		  -- in a lateral rather than joined and grouped: a GROUP BY over the
+		  -- answer rows would have to carry every column above through it, and
+		  -- the arrays in this select list are not groupable.
+		  LEFT JOIN LATERAL (
+		        SELECT count(*)::int AS plays,
+		               count(*) FILTER (WHERE ga.is_correct)::int AS correct
+		          FROM game_answers ga WHERE ga.question_id = q.id
+		  ) a ON true
+		 WHERE `+clause+
+		orderBy(f.Sort, questionSortColumns, "q.id DESC", "q.id")+`
 		 LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
 		return nil, 0, err
@@ -411,7 +602,8 @@ func (r *Repo) AdminQuestions(ctx context.Context, f AdminQuestionFilter) ([]*mo
 		if err := rows.Scan(&q.ID, &q.CategoryID, &q.CategoryName, &q.CategoryIcon,
 			&q.Difficulty, &q.Points, &q.CorrectIndex, &q.IsActive,
 			&q.Prompt, &q.PresentLocales, &q.PendingReview,
-			&q.PendingLocales, &q.CreatedAt); err != nil {
+			&q.PendingLocales, &q.Noted, &q.Plays, &q.Correct,
+			&q.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		q.LocaleCount = len(q.PresentLocales)
@@ -563,7 +755,15 @@ func (r *Repo) UpsertQuestion(ctx context.Context, q *models.QuestionDraft) (int
 					choices      = EXCLUDED.choices,
 					explanation  = EXCLUDED.explanation,
 					source       = EXCLUDED.source,
-					needs_review = EXCLUDED.needs_review`,
+					needs_review = EXCLUDED.needs_review,
+					-- Rewriting the text answers the request that was made
+					-- about it. Keeping the note would leave a reviewer's
+					-- complaint about wording attached to wording that no
+					-- longer exists — and the 0039 check refuses a note on a
+					-- row this write may be publishing.
+					review_note    = '',
+					review_note_by = NULL,
+					review_note_at = NULL`,
 				id, locale, t.Prompt, t.Choices, t.Explanation, t.Source, t.NeedsReview)
 			if err != nil {
 				return err
@@ -643,7 +843,8 @@ func (r *Repo) QuestionDraftByID(ctx context.Context, id int) (*models.QuestionD
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT locale, prompt, choices, explanation, source, needs_review
+		SELECT locale, prompt, choices, explanation, source, needs_review,
+		       review_note
 		  FROM question_translations WHERE question_id = $1`, id)
 	if err != nil {
 		return nil, err
@@ -654,7 +855,7 @@ func (r *Repo) QuestionDraftByID(ctx context.Context, id int) (*models.QuestionD
 		var locale string
 		var t models.TranslationDraft
 		if err := rows.Scan(&locale, &t.Prompt, &t.Choices, &t.Explanation,
-			&t.Source, &t.NeedsReview); err != nil {
+			&t.Source, &t.NeedsReview, &t.ReviewNote); err != nil {
 			return nil, err
 		}
 		d.Translations[locale] = t
@@ -662,11 +863,79 @@ func (r *Repo) QuestionDraftByID(ctx context.Context, id int) (*models.QuestionD
 	return d, rows.Err()
 }
 
-// ApproveTranslation clears the review flag so players can finally see it.
-func (r *Repo) ApproveTranslation(ctx context.Context, questionID int, locale string, reviewer uuid.UUID) error {
+// RequestTranslationChanges is the third verdict: the text stays, the flag
+// stays, and the reviewer says what is wrong with it.
+//
+// Approve publishes and reject deletes, which left the common case homeless —
+// a reviewer who can see the problem but is not the person who should fix it
+// had to choose between shipping text they do not stand behind and throwing
+// away a draft that was nearly right. The note rides on the translation row
+// because the fault is in one language, not in the question.
+func (r *Repo) RequestTranslationChanges(ctx context.Context, questionID int,
+	locale, note string, by uuid.UUID) error {
+
+	// needs_review is forced rather than assumed. The row is normally already
+	// pending, but a reviewer reading a published translation can find a fault
+	// in it too, and the note means nothing unless the queue shows the row
+	// again — which is also what the 0039 check constraint insists on.
 	ct, err := r.pool.Exec(ctx, `
 		UPDATE question_translations
-		   SET needs_review = false, reviewed_by = $3, reviewed_at = now()
+		   SET review_note = $3, review_note_by = $4, review_note_at = now(),
+		       needs_review = true
+		 WHERE question_id = $1 AND locale = $2`, questionID, locale, note, by)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// NotedTranslations is every translation with changes requested, longest
+// waiting first — the author's side of the review queue.
+func (r *Repo) NotedTranslations(ctx context.Context, locale string, limit int) ([]*models.ReviewNote, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT qt.question_id, qt.locale, qt.review_note, qt.review_note_at,
+		       COALESCE(u.display_name, u.username, ''),
+		       qt.prompt, COALESCE(ct.name, c.slug), c.icon
+		  FROM question_translations qt
+		  JOIN questions q   ON q.id = qt.question_id
+		  JOIN categories c  ON c.id = q.category_id
+		  LEFT JOIN users u  ON u.id = qt.review_note_by
+		  LEFT JOIN category_translations ct
+		         ON ct.category_id = c.id AND ct.locale = $1
+		 WHERE qt.review_note <> '' AND q.author_id IS NULL
+		 ORDER BY qt.review_note_at
+		 LIMIT $2`, locale, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*models.ReviewNote
+	for rows.Next() {
+		var n models.ReviewNote
+		if err := rows.Scan(&n.QuestionID, &n.Locale, &n.Note, &n.NotedAt,
+			&n.NotedBy, &n.Prompt, &n.CategoryName, &n.CategoryIcon); err != nil {
+			return nil, err
+		}
+		out = append(out, &n)
+	}
+	return out, rows.Err()
+}
+
+// ApproveTranslation clears the review flag so players can finally see it.
+func (r *Repo) ApproveTranslation(ctx context.Context, questionID int, locale string, reviewer uuid.UUID) error {
+	// The note goes with it. A note on published text is a request nobody can
+	// see any more, and the 0039 constraint refuses the combination outright.
+	ct, err := r.pool.Exec(ctx, `
+		UPDATE question_translations
+		   SET needs_review = false, reviewed_by = $3, reviewed_at = now(),
+		       review_note = '', review_note_by = NULL, review_note_at = NULL
 		 WHERE question_id = $1 AND locale = $2`, questionID, locale, reviewer)
 	if err != nil {
 		return err
@@ -707,7 +976,9 @@ func (r *Repo) PlatformStats(ctx context.Context, locale string) (*models.Platfo
 			(SELECT count(*) FROM users WHERE created_at > now() - interval '7 days' AND NOT is_temporary),
 			(SELECT count(*) FROM questions WHERE author_id IS NULL),
 			(SELECT count(*) FROM questions WHERE is_active AND author_id IS NULL),
-			(SELECT count(*) FROM categories WHERE is_active),
+			(SELECT count(*) FROM categories c
+			  JOIN domains d ON d.id = c.domain_id AND d.is_active
+			 WHERE c.is_active),
 			(SELECT count(*) FROM question_translations),
 			(SELECT count(*) FROM question_translations WHERE needs_review),
 			(SELECT count(*) FROM game_sessions WHERE status = 'finished'),
@@ -909,6 +1180,18 @@ func (r *Repo) IntegrityIssues(ctx context.Context) ([]*models.IntegrityIssue, e
 			SELECT q.id, 'category is inactive'
 			  FROM questions q JOIN categories c ON c.id = q.category_id
 			 WHERE q.is_active AND NOT c.is_active`},
+
+		// One level up, and worth its own line rather than being folded into
+		// the one above: a live question in a live category inside a retired
+		// subject area is invisible to every player, and the category screen
+		// gives no hint why. Without this the sweep reported the bank as
+		// healthy while none of it could be drawn.
+		{"orphan_domain", `
+			SELECT q.id, 'subject area ' || d.slug || ' is inactive'
+			  FROM questions q
+			  JOIN categories c ON c.id = q.category_id
+			  JOIN domains d ON d.id = c.domain_id
+			 WHERE q.is_active AND c.is_active AND NOT d.is_active`},
 	}
 
 	var out []*models.IntegrityIssue

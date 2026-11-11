@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -550,7 +549,7 @@ func TestARoomMateCanBeChallengedWithoutBeingAFriend(t *testing.T) {
 // people asks the picker endpoint the way the dialog does.
 func (a *app) people(t *testing.T, scope, query string) string {
 	t.Helper()
-	_, body := a.get("/api/people?scope=" + scope + "&q=" + url.QueryEscape(query))
+	_, body := a.get("/ui/people?scope=" + scope + "&q=" + url.QueryEscape(query))
 	return body
 }
 
@@ -1234,17 +1233,14 @@ func TestTeamsNeedMoreThanTwoPlayers(t *testing.T) {
 // The number the form shuts the Teams option on is the number the server
 // refuses below, so the two cannot drift apart unnoticed.
 func TestTheFormAndTheServerAgreeOnTheTeamMinimum(t *testing.T) {
-	script, err := os.ReadFile(repoRoot(t) + "/static/js/app.js")
-	if err != nil {
-		t.Fatalf("reading the script: %v", err)
-	}
+	script := clientSources(t)
 	perSide := fmt.Sprintf("const MIN_PER_SIDE = %d;", models.MinPerSide)
-	if !strings.Contains(string(script), perSide) {
+	if !strings.Contains(script, perSide) {
 		t.Errorf("the form and the server disagree on how many a side needs: looked for %q", perSide)
 	}
 
 	want := fmt.Sprintf("const MIN_TEAM_PLAYERS = %d;", models.MinTeamPlayers)
-	if !strings.Contains(string(script), want) {
+	if !strings.Contains(script, want) {
 		t.Errorf("the script does not carry %q — the form would offer teams the server refuses", want)
 	}
 }

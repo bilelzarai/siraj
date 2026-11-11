@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bilelzarai/siraj/internal/config"
 	"github.com/bilelzarai/siraj/internal/i18n"
 	"github.com/bilelzarai/siraj/internal/models"
 	"github.com/bilelzarai/siraj/internal/service"
@@ -304,24 +305,59 @@ func Logger(next http.Handler) http.Handler {
 // for styles is the cost of server-rendered markup, while every line of
 // JavaScript lives in /static and needs no exception. There is no CDN, no
 // remote font and no third-party frame, so everything else is 'self' or 'none'.
-const contentSecurityPolicy = "default-src 'self'; " +
-	"script-src 'self'; " +
-	"style-src 'self' 'unsafe-inline'; " +
-	// blob: is for the profile-photo preview, which shows the picture you
-	// picked before it has been anywhere near the server.
-	"img-src 'self' data: blob:; " +
-	"font-src 'self'; " +
-	"connect-src 'self'; " +
-	"form-action 'self'; " +
-	"frame-ancestors 'none'; " +
-	"base-uri 'none'; " +
-	"object-src 'none'"
+// It is a function of the configuration rather than a constant for one reason:
+// the asset dev server serves modules from its own origin and talks to the page
+// over a websocket, and admitting those is a development-only widening. In
+// production the dev origin is ignored however it was set, so the string below
+// is the same bytes it has always been — asserted by a test, not by reading.
+func contentSecurityPolicy(cfg *config.Config) string {
+	script, connect := "'self'", "'self'"
+	if cfg != nil && !cfg.IsProduction() {
+		if dev := strings.TrimRight(cfg.ViteDevServer, "/"); dev != "" {
+			script += " " + dev
+			connect += " " + dev + " " + websocketOrigin(dev)
+		}
+	}
 
-// SecureHeaders sets a conservative baseline.
-func SecureHeaders(next http.Handler) http.Handler {
+	return "default-src 'self'; " +
+		"script-src " + script + "; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		// blob: is for the profile-photo preview, which shows the picture you
+		// picked before it has been anywhere near the server.
+		"img-src 'self' data: blob:; " +
+		"font-src 'self'; " +
+		"connect-src " + connect + "; " +
+		"form-action 'self'; " +
+		"frame-ancestors 'none'; " +
+		"base-uri 'none'; " +
+		"object-src 'none'"
+}
+
+// websocketOrigin is the same origin spoken over ws, which is how the dev
+// server pushes a replaced module.
+func websocketOrigin(origin string) string {
+	switch {
+	case strings.HasPrefix(origin, "https://"):
+		return "wss://" + strings.TrimPrefix(origin, "https://")
+	case strings.HasPrefix(origin, "http://"):
+		return "ws://" + strings.TrimPrefix(origin, "http://")
+	default:
+		return origin
+	}
+}
+
+// SecureHeaders sets a conservative baseline. The policy is computed once, at
+// wiring time, rather than per request.
+func SecureHeaders(policy string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return secureHeaders(policy, next)
+	}
+}
+
+func secureHeaders(policy string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hdr := w.Header()
-		hdr.Set("Content-Security-Policy", contentSecurityPolicy)
+		hdr.Set("Content-Security-Policy", policy)
 		hdr.Set("X-Content-Type-Options", "nosniff")
 		hdr.Set("X-Frame-Options", "DENY")
 		hdr.Set("Referrer-Policy", "strict-origin-when-cross-origin")

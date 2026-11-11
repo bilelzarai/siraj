@@ -7,7 +7,7 @@ TEMPL   := $(shell $(GO) env GOPATH)/bin/templ
 # aimed at a deployment. repository_test falls back to .env when this is unset,
 # and .env holds whatever the last deploy was pointed at. Override to use
 # another server: make test TEST_DATABASE_URL=...
-TEST_DATABASE_URL ?= postgres://islamic:islamic@localhost:5434/islamic_game?sslmode=disable
+TEST_DATABASE_URL ?= postgres://siraj:siraj@localhost:5434/siraj-db?sslmode=disable
 
 .PHONY: help
 help:
@@ -22,30 +22,38 @@ tools: ## Install the templ CLI
 generate: ## Regenerate *_templ.go from *.templ
 	$(TEMPL) generate
 
+.PHONY: assets
+assets: ## Build the frontend assets into static/dist
+	@command -v npm >/dev/null 2>&1 || { \
+		echo "npm not found — skipping the asset build; pages will have no styles"; \
+		exit 0; }
+	@test -d node_modules || npm install
+	npm run build
+
 .PHONY: build
-build: generate ## Build the server and the admin CLI
+build: generate assets ## Build the server and the admin CLI
 	$(GO) build -o $(BIN) ./cmd/server
 	$(GO) build -o $(CTL) ./cmd/sirajctl
 
 .PHONY: run
-run: generate ## Run the server (assets served from disk)
+run: generate assets ## Run the server (assets served from disk)
 	STATIC_DIR=./static $(GO) run ./cmd/server
 
 .PHONY: db-up
 db-up: ## Start PostgreSQL in Docker
-	docker compose up -d db
+	docker compose -f deploy/compose.yaml up -d db
 
 .PHONY: db-down
 db-down: ## Stop PostgreSQL
-	docker compose down
+	docker compose -f deploy/compose.yaml down
 
 .PHONY: db-reset
 db-reset: ## Drop and recreate the database volume
-	docker compose down -v && docker compose up -d db
+	docker compose -f deploy/compose.yaml down -v && docker compose -f deploy/compose.yaml up -d db
 
 .PHONY: db-shell
 db-shell: ## Open psql against the dev database
-	docker compose exec db psql -U islamic -d islamic_game
+	docker compose -f deploy/compose.yaml exec db psql -U siraj -d siraj-db
 
 .PHONY: test
 test: generate ## Run the test suite

@@ -1,3 +1,20 @@
+# ---- assets ------------------------------------------------------------
+# This stage runs BEFORE the compile stage, not beside it. The asset tree is
+# embedded into the binary at compile time, so a parallel stage produces an
+# image with an empty asset directory and a page that links nothing.
+FROM node:22-alpine AS assets
+
+WORKDIR /src
+
+# The lockfile first, so a source-only change reuses the install layer. `npm ci`
+# rather than `npm install`: the lockfile is the input, exactly.
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY vite.config.js ./
+COPY web ./web
+RUN npm run build
+
 # ---- build -------------------------------------------------------------
 FROM golang:1.26-alpine AS build
 
@@ -8,6 +25,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+
+# The built assets, in before the compiler runs. The build context excludes
+# static/dist/, so this copy is the only one and a stale local build cannot
+# shadow it.
+COPY --from=assets /src/static/dist ./static/dist
 
 # templ output is committed, so the image does not need the templ CLI.
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server

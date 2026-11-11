@@ -868,7 +868,7 @@ func seatStanding(c Ctx, rows []SeatScore) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "\"><span class=\"row\" style=\"gap:8px;min-width:0\"><span class=\"avatar avatar--xs\" style=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "\"><span class=\"row\" style=\"gap:var(--s-4);min-width:0\"><span class=\"avatar avatar--xs\" style=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

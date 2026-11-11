@@ -1,3 +1,9 @@
+// The stylesheet is imported here rather than listed as its own bundler input,
+// so the build records it under this entry and the server can resolve its
+// hashed filename from one lookup.
+import "../css/app.css";
+import { $, $$, csrfToken, postJSON, postForm, toast, tmplText } from "./helpers.js";
+
 /* =============================================================================
    Sirāj — client runtime
    No framework, no external dependencies. Each block is an independent
@@ -7,96 +13,6 @@
 (function () {
   "use strict";
 
-  const $  = (sel, root) => (root || document).querySelector(sel);
-  const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
-
-  /* ------------------------------------------------------------- helpers */
-
-  function csrfToken() {
-    const match = document.cookie.match(/(?:^|;\s*)siraj_csrf=([^;]+)/);
-    return match ? decodeURIComponent(match[1]) : "";
-  }
-
-  async function postJSON(url, body) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "X-Requested-With": "fetch",
-        "X-CSRF-Token": csrfToken(),
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      // The server says why a refusal happened — too large, wrong kind — in
-      // the reader's own language. Throwing a generic failure over the top of
-      // it turns an answerable problem into a shrug.
-      let said = "";
-      try {
-        said = ((await res.json()) || {}).error || "";
-      } catch (e) {}
-      const err = new Error(said || "request failed");
-      err.status = res.status;
-      err.said = Boolean(said);
-      throw err;
-    }
-    return res.json();
-  }
-
-  async function postForm(url, data) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Accept": "application/json",
-        "X-Requested-With": "fetch",
-        "X-CSRF-Token": csrfToken(),
-      },
-      body: data,
-    });
-    if (!res.ok) {
-      // The server says why a refusal happened — too large, wrong kind — in
-      // the reader's own language. Throwing a generic failure over the top of
-      // it turns an answerable problem into a shrug.
-      let said = "";
-      try {
-        said = ((await res.json()) || {}).error || "";
-      } catch (e) {}
-      const err = new Error(said || "request failed");
-      err.status = res.status;
-      err.said = Boolean(said);
-      throw err;
-    }
-    return res.json();
-  }
-
-  function toast(text, kind) {
-    const host = $("#toasts");
-    if (!host) return;
-    const el = document.createElement("div");
-    el.className = "toast" + (kind ? " toast--" + kind : "");
-    el.textContent = text;
-    host.appendChild(el);
-    setTimeout(() => {
-      el.style.transition = "opacity .3s, transform .3s";
-      el.style.opacity = "0";
-      el.style.transform = "translateY(8px)";
-      setTimeout(() => el.remove(), 320);
-    }, 3200);
-  }
-
-  // The server hands the browser its strings in <template> elements, so no
-  // English is written in this file. A template's children live in .content,
-  // not as child nodes — reading .textContent off the element itself returns
-  // the empty string, which is what every one of these was doing: the verdict
-  // after an answer, "message withdrawn", the saved and error notices. All
-  // silently blank, because an empty string is a plausible-looking label.
-  function tmplText(name) {
-    const el = $("[data-i18n-" + name + "]");
-    if (!el) return "";
-    const source = el.content || el;
-    return (source.textContent || "").trim();
-  }
 
   /* --------------------------------------------------------------- theme */
 
@@ -144,7 +60,11 @@
 
     function syncSegments(value) {
       $$("[data-theme-set]").forEach((btn) => {
-        btn.classList.toggle("is-active", btn.dataset.themeSet === value);
+        const on = btn.dataset.themeSet === value;
+        btn.classList.toggle("is-active", on);
+        // The server rendered this correctly; a press has to keep it that
+        // way, or the group looks right and announces the old answer.
+        if (btn.getAttribute("role") === "radio") btn.setAttribute("aria-checked", on ? "true" : "false");
       });
     }
 
@@ -255,154 +175,15 @@
 
   /* ---------------------------------------------------- password reveal */
 
-  (function passwordReveal() {
-    $$("[data-password-toggle]").forEach((btn) => {
-      const field = btn.closest(".field__control");
-      const input = field && $("[data-password-input]", field);
-      if (!input) return;
-
-      function paint(revealed) {
-        $$("[data-reveal-slot]", btn).forEach((slot) => {
-          slot.hidden = slot.dataset.revealSlot !== (revealed ? "hide" : "show");
-        });
-        const label = revealed ? btn.dataset.labelHide : btn.dataset.labelShow;
-        btn.setAttribute("aria-label", label);
-        btn.title = label;
-        btn.setAttribute("aria-pressed", String(revealed));
-      }
-
-      btn.addEventListener("click", () => {
-        const reveal = input.type === "password";
-        input.type = reveal ? "text" : "password";
-        paint(reveal);
-
-        // Keep the caret where the user left it rather than jumping to the end.
-        const pos = input.selectionStart;
-        input.focus();
-        if (pos !== null) {
-          try { input.setSelectionRange(pos, pos); } catch (e) {}
-        }
-      });
-
-      // Never leave a password on screen after the form is submitted.
-      const form = input.form;
-      if (form) {
-        form.addEventListener("submit", () => {
-          input.type = "password";
-          paint(false);
-        });
-      }
-    });
-  })();
 
   /* ------------------------------------------------------ question notes */
 
-  (function questionNote() {
-    const note = $("[data-note]");
-    if (!note) return;
-
-    const root   = $("[data-round]");
-    const body   = $("[data-note-body]", note);
-    const save   = $("[data-note-save]", note);
-    const status = $("[data-note-status]", note);
-    if (!root || !body || !save) return;
-
-    save.addEventListener("click", async () => {
-      const text = body.value.trim();
-      if (text.length < 2) return;
-
-      window.sirajBusy.mark(save);
-      try {
-        // The server resolves the position to a question and refuses unless
-        // that position has already been answered, so this cannot be used to
-        // ask about a question before seeing it.
-        await postJSON("/play/comment", {
-          position: Number(root.dataset.position),
-          body: text,
-        });
-        if (status) status.textContent = tmplText("note-saved");
-        note.open = false;
-      } catch (err) {
-        if (status) status.textContent = tmplText("error");
-      } finally {
-        window.sirajBusy.clear(save);
-      }
-    });
-  })();
 
   /* ---------------------------------------------------- question rating */
 
-  (function questionRating() {
-    const rate = $("[data-rate]");
-    if (!rate) return;
-
-    const root   = $("[data-round]");
-    const status = $("[data-rate-status]", rate);
-    const stars  = $$("[data-star]", rate);
-    if (!root || !stars.length) return;
-
-    let chosen = 0;
-    let sending = false;
-
-    // Paint up to n, so hovering the third star lights the first three — the
-    // gesture people already expect from a star row.
-    function paint(n) {
-      stars.forEach((s) => {
-        const on = Number(s.dataset.star) <= n;
-        s.classList.toggle("is-on", on);
-        s.setAttribute("aria-checked", String(Number(s.dataset.star) === chosen));
-      });
-    }
-
-    stars.forEach((star) => {
-      star.addEventListener("mouseenter", () => !sending && paint(Number(star.dataset.star)));
-      star.addEventListener("focus", () => !sending && paint(Number(star.dataset.star)));
-      star.addEventListener("click", async () => {
-        if (sending) return;
-        sending = true;
-        chosen = Number(star.dataset.star);
-        paint(chosen);
-        rate.classList.add("is-sending");
-        try {
-          const res = await postJSON("/play/rate", {
-            position: Number(root.dataset.position),
-            stars: chosen,
-          });
-          if (status) {
-            status.textContent = res.votes > 1
-              ? tmplText("rate-thanks") + " " + res.average.toFixed(1) + "/5"
-              : tmplText("rate-thanks");
-          }
-        } catch (err) {
-          chosen = 0;
-          paint(0);
-          if (status) status.textContent = tmplText("error");
-        } finally {
-          sending = false;
-          rate.classList.remove("is-sending");
-        }
-      });
-    });
-
-    rate.addEventListener("mouseleave", () => paint(chosen));
-  })();
 
   /* ------------------------------------------------- support canned replies */
 
-  (function cannedReplies() {
-    const box = $("[data-reply-box]");
-    if (!box) return;
-
-    $$("[data-canned]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const text = btn.dataset.canned || "";
-        // Insert rather than replace: staff often personalise a saved reply.
-        box.value = box.value.trim() ? box.value.trimEnd() + "\n\n" + text : text;
-        box.focus();
-        box.setSelectionRange(box.value.length, box.value.length);
-      });
-    });
-  })();
 
   /* --------------------------------------------------------- round setup */
 
@@ -422,29 +203,40 @@
     }
     if (!table || !Array.isArray(table.entries)) return;
 
-    // (category, difficulty) -> count
+    // what-was-picked -> count, keyed by the radio's own value ("all", "c:12",
+    // "d:7"). Keying on the category id alone stopped working when a round
+    // could also be drawn from a whole subject area: two different picks would
+    // have collapsed onto the same key.
     const counts = new Map();
-    table.entries.forEach((e) => counts.set(e.category + ":" + e.difficulty, e.count));
-    const countFor = (category, difficulty) =>
-      counts.get(category + ":" + difficulty) || 0;
+    table.entries.forEach((e) => counts.set((e.pick || e.category) + ":" + e.difficulty, e.count));
+    const countFor = (pick, difficulty) => counts.get(pick + ":" + difficulty) || 0;
 
     const note = $("[data-setup-note]", form);
     const lengths = $("[data-setup-count]", form);
+    const submit = $("[data-setup-submit]", form);
     const tooFew = tmplText("setup-too-few");
     const capped = tmplText("setup-capped");
 
-    function selectedCategory() {
+    function selectedPick() {
       const on = $("[data-setup-category]:checked", form);
-      return on ? parseInt(on.value, 10) || 0 : 0;
+      return on ? on.value : "all";
+    }
+
+    // The bank is only one of the three sources, and the counts below describe
+    // the bank alone. A set brings its own questions, so what the bank holds
+    // says nothing about how long that round can be.
+    function fromBank() {
+      const on = $('input[name="source"]:checked', form);
+      return !on || on.value === "bank";
     }
 
     function sync() {
-      const category = selectedCategory();
+      const pick = selectedPick();
       let checkedDifficulty = null;
 
       $$("[data-setup-difficulty]", form).forEach((input) => {
         const difficulty = parseInt(input.value, 10) || 0;
-        const available = countFor(category, difficulty);
+        const available = countFor(pick, difficulty);
         const playable = available >= table.min;
 
         input.disabled = !playable;
@@ -467,7 +259,9 @@
         }
       }
 
-      const available = countFor(category, checkedDifficulty === null ? 0 : checkedDifficulty);
+      const available = fromBank()
+        ? countFor(pick, checkedDifficulty === null ? 0 : checkedDifficulty)
+        : Infinity;
       syncLengths(available);
       syncNote(available);
     }
@@ -477,6 +271,9 @@
       let fallback = null;
 
       Array.from(lengths.options).forEach((option) => {
+        // The placeholder is not a length. It is what the closed menu shows
+        // when none of them is reachable, and it stays out of this.
+        if ("placeholder" in option.dataset) return;
         const wanted = parseInt(option.value, 10) || 0;
         option.disabled = wanted > available;
         if (!option.disabled) fallback = option;
@@ -485,6 +282,18 @@
       if (lengths.selectedOptions[0] && lengths.selectedOptions[0].disabled && fallback) {
         fallback.selected = true;
       }
+
+      // Not one length is reachable. A select whose every option is disabled
+      // draws as an empty box — no number in it, nothing to open — and submits
+      // no length at all, so it goes dead as a whole and takes the button it
+      // feeds with it, rather than leaving a round to be offered and refused.
+      const dead = !fallback;
+      lengths.disabled = dead;
+      if (dead) {
+        const placeholder = $("option[data-placeholder]", lengths);
+        if (placeholder) placeholder.selected = true;
+      }
+      if (submit) submit.disabled = dead;
     }
 
     function syncNote(available) {
@@ -506,7 +315,7 @@
     }
 
     form.addEventListener("change", (e) => {
-      if (e.target.matches("[data-setup-category], [data-setup-difficulty]")) sync();
+      if (e.target.matches('[data-setup-category], [data-setup-difficulty], input[name="source"]')) sync();
     });
     sync();
   })();
@@ -527,6 +336,13 @@
       });
     });
   })();
+
+  /* --------------------------------------------------------- colour field */
+
+  // The category colour is one value with two controls: a text box holding the
+  // six characters, and the native swatch beside it. Each follows the other.
+  // The text box is the field that submits, so with no script the pair still
+  // works — the swatch is the convenience, not the input.
 
   /* ------------------------------------------------- busy state on buttons */
 
@@ -2103,77 +1919,12 @@
   // The three sources are exclusive, so the form shows one at a time. Without
   // JavaScript every pane stays visible and the radio still decides on the
   // server — the panes are a tidier way to ask, not the rule itself.
-  (function questionSource() {
-    const pick = $("[data-source-pick]");
-    if (!pick) return;
-
-    const panes = $$("[data-source-pane]");
-
-    function show(source) {
-      panes.forEach((pane) => {
-        // A pane can belong to more than one source: the round length applies
-        // to anything drawn, but not to questions written here and now.
-        const owners = pane.dataset.sourcePane.split(" ");
-        pane.hidden = !owners.includes(source);
-      });
-    }
-
-    $$('input[name="source"]', pick).forEach((radio) => {
-      radio.addEventListener("change", () => radio.checked && show(radio.value));
-    });
-
-    const chosen = $('input[name="source"]:checked', pick);
-    show(chosen ? chosen.value : "bank");
-  })();
 
   /* ============================================= writing your own questions */
 
   // "Add another" clones the row that is already there and clears it. The first
   // row is rendered by the server, so the markup lives in one place and this
   // does not have to know what a question looks like.
-  (function authoredQuestions() {
-    const add = $("[data-authored-add]");
-    const rows = $("[data-authored]");
-    if (!add || !rows) return;
-
-    const MAX = 10;
-
-    add.addEventListener("click", () => {
-      const all = $$(".authored__row", rows);
-      if (all.length >= MAX) {
-        add.disabled = true;
-        return;
-      }
-      const index = all.length;
-      const copy = all[all.length - 1].cloneNode(true);
-      copy.classList.remove("authored__row--bad");
-      copy.dataset.row = String(index);
-
-      // The radio group is per row. Cloning without renaming would put the new
-      // row in the previous row's group, so marking an answer here would unmark
-      // the one above — which is exactly what one shared name did to the whole
-      // form before this.
-      $$("input", copy).forEach((input) => {
-        if (input.type === "radio") {
-          input.name = "q_correct_" + index;
-          input.checked = input.value === "0";
-        } else {
-          input.value = "";
-        }
-      });
-      // Any error left from the row it was cloned from belongs to that row.
-      $$("p", copy).forEach((p) => p.remove());
-
-      const legend = $("legend", copy);
-      if (legend) {
-        legend.textContent = legend.textContent.replace(/\d+/, String(index + 1));
-      }
-      rows.appendChild(copy);
-      if (all.length + 1 >= MAX) add.disabled = true;
-      const first = $("input[type=text]", copy);
-      if (first) first.focus();
-    });
-  })();
 
   /* ========================================== the panel of people, live */
 
@@ -2322,7 +2073,7 @@
 
     const refreshCounts = debounce(async () => {
       try {
-        const res = await fetch("/api/counts", {
+        const res = await fetch("/ui/counts", {
           headers: { "Accept": "application/json", "X-Requested-With": "fetch" },
         });
         if (!res.ok) return;
@@ -2613,7 +2364,7 @@
         lastAsked = q;
         try {
           const res = await fetch(
-            "/api/people?scope=" + encodeURIComponent(scope) + "&q=" + encodeURIComponent(q),
+            "/ui/people?scope=" + encodeURIComponent(scope) + "&q=" + encodeURIComponent(q),
             { headers: { "Accept": "application/json", "X-Requested-With": "fetch" } });
           if (!res.ok) return;
           const found = ((await res.json()) || {}).people || [];
@@ -2729,18 +2480,6 @@
   // The team panel is only a question if the answer is "teams". Shown and
   // hidden here rather than left on screen greyed out, because a set of
   // side-pickers that do nothing is a set of controls that lie.
-  (function matchFormat() {
-    const pick = $("[data-format-pick]");
-    const pane = $("[data-team-pane]");
-    if (!pick || !pane) return;
-
-    function sync() {
-      const chosen = $("input[name=format]:checked", pick);
-      pane.hidden = !chosen || chosen.value !== "team";
-    }
-    pick.addEventListener("change", sync);
-    sync();
-  })();
 
 
 
@@ -2931,21 +2670,6 @@
   // Without a script every pane is visible and the server still reads only the
   // field that belongs to the kind — the panes are a tidier way to ask, not the
   // rule itself.
-  (function ticketKind() {
-    const picker = $("[data-ticket-kind]");
-    if (!picker) return;
-    const panes = $$("[data-ticket-pane]");
-
-    function sync() {
-      const chosen = $("input[name=kind]:checked", picker);
-      const kind = chosen ? chosen.value : "";
-      panes.forEach((pane) => {
-        pane.hidden = !pane.dataset.ticketPane.split(" ").includes(kind);
-      });
-    }
-    picker.addEventListener("change", sync);
-    sync();
-  })();
 
   // Something changed that the page cannot draw where it stands. A bar the
   // reader can act on, rather than a reload that decides for them.

@@ -31,6 +31,10 @@ type Ctx struct {
 	Dir    string
 	Theme  string
 	AssetV string
+	// Assets resolves a bundler entry to the URL the page links. Declared as
+	// an interface here rather than importing the build package, so the view
+	// layer keeps depending on nothing but models and i18n.
+	Assets AssetLinks
 
 	UnreadMessages    int
 	PendingChallenges int
@@ -91,6 +95,52 @@ func (c Ctx) AriaCurrent(prefix string) string {
 		return "page"
 	}
 	return "false"
+}
+
+// AssetLinks answers where a built asset lives. The dev server and the build
+// both satisfy it; a tree with neither answers "not found", and the page then
+// renders without that asset rather than refusing to answer at all.
+type AssetLinks interface {
+	Script(entry string) (string, bool)
+	Stylesheets(entry string) []string
+	Copied(name string) string
+	DevClient() string
+}
+
+// Script is the URL of a bundled entry — "js/app.js" — or false when nothing
+// built it.
+func (c Ctx) Script(entry string) (string, bool) {
+	if c.Assets == nil {
+		return "", false
+	}
+	return c.Assets.Script(entry)
+}
+
+// Stylesheets are the sheets belonging to an entry. Empty is a legitimate
+// answer: the dev server delivers styles through the module graph.
+func (c Ctx) Stylesheets(entry string) []string {
+	if c.Assets == nil {
+		return nil
+	}
+	return c.Assets.Stylesheets(entry)
+}
+
+// DevClient is the dev server's own module, the one that performs the
+// replacement when a source file changes. Empty on every deployment.
+func (c Ctx) DevClient() string {
+	if c.Assets == nil {
+		return ""
+	}
+	return c.Assets.DevClient()
+}
+
+// Copied is a file the bundler copies verbatim rather than naming — boot.js,
+// which has to stay a classic blocking script.
+func (c Ctx) Copied(name string) string {
+	if c.Assets == nil {
+		return ""
+	}
+	return c.Assets.Copied(name)
 }
 
 // Asset appends the build's content hash to a static URL, so a stylesheet or

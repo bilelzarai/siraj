@@ -16,7 +16,7 @@ const ticketColumns = `
 	t.id, t.user_id, t.kind::text, t.status::text, t.priority::text, t.subject,
 	t.locale, t.category_id, t.question_id, t.page_path, t.reported_user_id, t.assigned_to,
 	t.last_message_at, t.last_sender, t.user_unread, t.staff_unread,
-	t.message_count, t.created_at, t.updated_at, t.resolved_at,
+	t.message_count, t.created_at, t.updated_at, t.resolved_at, t.user_agent,
 	u.username, u.display_name, u.avatar_seed,
 	COALESCE(a.username, ''), COALESCE(cat.slug, ''),
 	COALESCE(rep.username, ''), COALESCE(rep.display_name, '')`
@@ -32,7 +32,7 @@ func scanTicket(row pgx.Row) (*models.Ticket, error) {
 	err := row.Scan(&t.ID, &t.UserID, &t.Kind, &t.Status, &t.Priority, &t.Subject,
 		&t.Locale, &t.CategoryID, &t.QuestionID, &t.PagePath, &t.ReportedUserID, &t.AssignedTo,
 		&t.LastMessageAt, &t.LastSender, &t.UserUnread, &t.StaffUnread,
-		&t.MessageCount, &t.CreatedAt, &t.UpdatedAt, &t.ResolvedAt,
+		&t.MessageCount, &t.CreatedAt, &t.UpdatedAt, &t.ResolvedAt, &t.UserAgent,
 		&t.Username, &t.DisplayName, &t.AvatarSeed,
 		&t.AssigneeUsername, &t.CategorySlug,
 		&t.ReportedUsername, &t.ReportedDisplayName)
@@ -52,11 +52,12 @@ func (r *Repo) CreateTicket(ctx context.Context, t *models.Ticket, body string) 
 		err := tx.QueryRow(ctx, `
 			INSERT INTO support_tickets
 				(user_id, kind, status, priority, subject, locale,
-				 category_id, question_id, page_path, reported_user_id, message_count)
-			VALUES ($1, $2::ticket_kind, 'open', $3::ticket_priority, $4, $5, $6, $7, $8, $9, 1)
+				 category_id, question_id, page_path, reported_user_id,
+				 user_agent, message_count)
+			VALUES ($1, $2::ticket_kind, 'open', $3::ticket_priority, $4, $5, $6, $7, $8, $9, $10, 1)
 			RETURNING id, created_at, updated_at, last_message_at`,
 			t.UserID, t.Kind, t.Priority, t.Subject, t.Locale,
-			t.CategoryID, t.QuestionID, t.PagePath, t.ReportedUserID,
+			t.CategoryID, t.QuestionID, t.PagePath, t.ReportedUserID, t.UserAgent,
 		).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt, &t.LastMessageAt)
 		if err != nil {
 			return err

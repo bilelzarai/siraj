@@ -78,6 +78,8 @@ func TestEveryAdminScreenAnswers(t *testing.T) {
 
 	pages := []string{
 		"/admin", "/admin/users", "/admin/users?role=admin", "/admin/users/new",
+		"/admin/domains", "/admin/domains/new", "/admin/domains/1/edit",
+		"/admin/categories", "/admin/categories/new", "/admin/categories/1/edit",
 		"/admin/questions", "/admin/questions?review=1", "/admin/questions/new",
 		"/admin/questions/import", "/admin/questions/import/template.csv",
 		"/admin/review", "/admin/rated", "/admin/integrity",
@@ -116,6 +118,15 @@ func TestModeratorIsKeptOutOfAccountManagement(t *testing.T) {
 	}
 	if status, _ := a.get("/admin/audit"); status != http.StatusNotFound {
 		t.Errorf("GET /admin/audit as a moderator → %d, want 404", status)
+	}
+	// The taxonomy's second level is structural, so it is drawn on the same
+	// line as account management rather than beside the category screens a
+	// moderator does reach (D11).
+	if status, _ := a.get("/admin/domains"); status != http.StatusNotFound {
+		t.Errorf("GET /admin/domains as a moderator → %d, want 404", status)
+	}
+	if status, _ := a.get("/admin/domains/new"); status != http.StatusNotFound {
+		t.Errorf("GET /admin/domains/new as a moderator → %d, want 404", status)
 	}
 	// Bulk question actions moved behind full admin this week.
 	status, _ := a.post("/admin/questions/bulk", url.Values{

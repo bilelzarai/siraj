@@ -193,7 +193,7 @@ func notificationRow(c Ctx, n *models.Notification) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "\" style=\"gap:12px;align-items:center\" href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "\" style=\"gap:var(--s-6);align-items:center\" href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -206,7 +206,7 @@ func notificationRow(c Ctx, n *models.Notification) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\"><span class=\"row\" style=\"gap:12px;align-items:center;min-width:0\"><span class=\"notif__icon\" aria-hidden=\"true\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\"><span class=\"row\" style=\"gap:var(--s-6);align-items:center;min-width:0\"><span class=\"notif__icon\" aria-hidden=\"true\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -219,7 +219,7 @@ func notificationRow(c Ctx, n *models.Notification) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</span> <span class=\"stack-sm\" style=\"min-width:0;gap:2px\"><span class=\"small bold truncate\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</span> <span class=\"stack-sm\" style=\"min-width:0;gap:var(--s-1)\"><span class=\"small bold truncate\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

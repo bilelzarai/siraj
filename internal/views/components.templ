@@ -39,7 +39,9 @@ templ AvatarWithPresence(u *models.UserCard, size string) {
 templ PasswordField(c Ctx, f PasswordFieldOpts) {
 	<div class="field">
 		<label class="label" for={ f.ID }>{ f.Label }</label>
-		<div class="field__control">
+		// The component's scope: it holds the input and the button that
+		// reveals it, which is the smallest element that contains both.
+		<div class="field__control" x-data="passwordReveal">
 			if f.MinLength > 0 {
 				<input
 					class="input input--with-action"
@@ -64,12 +66,18 @@ templ PasswordField(c Ctx, f PasswordFieldOpts) {
 					aria-invalid={ boolAttr(f.Error != "") }
 					aria-describedby={ describedBy(f.ID, f.Error != "") }
 					data-password-input
+					x-ref="input"
 				/>
 			}
 			<button
 				class="field__reveal"
 				type="button"
 				data-password-toggle
+				x-ref="button"
+				x-on:click="toggle"
+				x-bind:aria-pressed="pressed"
+				x-bind:aria-label="label"
+				x-bind:title="label"
 				aria-pressed="false"
 				aria-controls={ f.ID }
 				aria-label={ c.T("auth.showPassword") }
@@ -77,10 +85,10 @@ templ PasswordField(c Ctx, f PasswordFieldOpts) {
 				data-label-show={ c.T("auth.showPassword") }
 				data-label-hide={ c.T("auth.hidePassword") }
 			>
-				<span class="reveal-icon" data-reveal-slot="show">
+				<span class="reveal-icon" data-reveal-slot="show" x-show="showingSlot">
 					@IconEye()
 				</span>
-				<span class="reveal-icon" data-reveal-slot="hide" hidden>
+				<span class="reveal-icon" data-reveal-slot="hide" x-show="hidingSlot" hidden>
 					@IconEyeOff()
 				</span>
 			</button>
@@ -375,7 +383,12 @@ templ LevelBar(c Ctx, u *models.User) {
 }
 
 // CategoryCard is the tile used on the dashboard and the setup screen.
-templ CategoryCard(c Ctx, cat *models.Category) {
+// CategoryCard is one category on the dashboard. count is how many questions
+// it can draw in this language — the same number the setup screen puts on its
+// chips. Passing it here is the whole point of the card: choosing a subject
+// with no idea what is behind it is a choice made blind, and the answer
+// arrived one screen too late.
+templ CategoryCard(c Ctx, cat *models.Category, count int) {
 	<a
 		class="cat-card"
 		href={ templ.SafeURL(fmt.Sprintf("/play?category=%d", cat.ID)) }
@@ -383,7 +396,12 @@ templ CategoryCard(c Ctx, cat *models.Category) {
 	>
 		<div class="cat-card__icon" aria-hidden="true">{ cat.Icon }</div>
 		<div class="cat-card__name">{ cat.Name }</div>
-		<div class="cat-card__desc truncate">{ cat.Description }</div>
+		<div class="cat-card__desc">{ cat.Description }</div>
+		<div class="cat-card__count tiny muted">
+			<b class="num">{ fmt.Sprint(count) }</b>
+			{ " " }
+			{ c.T("landing.stats.questions") }
+		</div>
 	</a>
 }
 
@@ -434,7 +452,7 @@ templ teamStanding(c Ctx, ch *models.Challenge) {
 						}
 					}
 				</div>
-				<div class="row" style="gap:8px;align-items:baseline">
+				<div class="row" style="gap:var(--s-4);align-items:baseline">
 					<b class="num">{ fmt.Sprint(side.Score) }</b>
 					if !side.Done {
 						<span class="tiny muted">{ c.T("challenge.stillPlaying") }</span>

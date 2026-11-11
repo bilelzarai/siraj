@@ -2,6 +2,8 @@ package views
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/bilelzarai/siraj/internal/models"
 )
@@ -18,172 +20,367 @@ type AdminUsersData struct {
 	Status    string
 	Country   string
 	Countries []string
+	// Kind is the Everyone / Players / Staff tab, and Counts the numbers
+	// beside them — read once for the whole directory rather than per tab.
+	Kind   string
+	Counts models.UserCounts
 	// ConfirmDeleteID is the account whose delete button has been pressed once
 	// and is now asking for its username to be typed back.
 	ConfirmDeleteID string
+	// Sorting is which column the directory is ordered by and how to change
+	// it. Server-side, because the list is paged: sorting the forty rows on
+	// screen would answer a different question in the same shape.
+	Sorting SortState
+}
+
+// userKindTabs is the Everyone / Players / Staff control. Staff is the two
+// roles that can change something, which is the distinction the directory is
+// actually used to make.
+var userKindTabs = []struct{ Value, LabelKey string }{
+	{"", "admin.users.everyone"},
+	{"player", "admin.users.playersOnly"},
+	{"staff", "admin.users.staffOnly"},
+}
+
+// KindCount is the number beside a tab, zero where there is nothing to say.
+func (d AdminUsersData) KindCount(kind string) int {
+	switch kind {
+	case "":
+		return d.Counts.Total
+	case "player":
+		return d.Counts.Players
+	case "staff":
+		return d.Counts.Staff
+	}
+	return 0
+}
+
+// Filtered reports whether anything is narrowing the directory, which decides
+// whether a way to clear it is offered.
+func (d AdminUsersData) Filtered() bool {
+	return d.Query != "" || d.Kind != "" || d.Status != "" || d.Country != ""
+}
+
+// FilterQuery is the current filter as a query string, so the export button
+// downloads what the screen is showing rather than the whole table.
+func (d AdminUsersData) FilterQuery() string {
+	v := url.Values{}
+	for name, value := range map[string]string{
+		"q": d.Query, "kind": d.Kind, "status": d.Status, "country": d.Country,
+	} {
+		if value != "" {
+			v.Set(name, value)
+		}
+	}
+	return v.Encode()
 }
 
 templ AdminUsers(c Ctx, a AdminChrome, d AdminUsersData) {
 	@adminShell(c, a, c.T("admin.nav.users")) {
-		<div class="row row--between row--wrap">
-			<span class="muted small">{ c.T("admin.users.count", d.Total) }</span>
-			<a class="btn btn--primary btn--sm" href="/admin/users/new">
-				<span aria-hidden="true">＋</span> { c.T("admin.users.new") }
+		@adminPageHead(c, c.T("admin.nav.users"), c.T("admin.users.sub")) {
+			<a class="btn" href={ templ.SafeURL("/admin/users/export.csv?" + d.FilterQuery()) }>
+				@adminIcon("i-download", "")
+				{ c.T("common.export") }
 			</a>
-		</div>
-		<form method="get" action="/admin/users" class="card row row--wrap" style="gap:10px">
-			<input
-				class="input"
-				name="q"
-				type="search"
-				value={ d.Query }
-				placeholder={ c.T("admin.users.searchPlaceholder") }
-				style="flex:2;min-width:180px"
-			/>
-			<select class="select" name="role" style="flex:1;min-width:130px">
-				<option value="">{ c.T("admin.users.anyRole") }</option>
-				for _, role := range []string{models.RolePlayer, models.RoleModerator, models.RoleAdmin} {
-					<option value={ role } selected?={ d.Role == role }>
-						{ c.T(models.RoleLabelKey(role)) }
-					</option>
-				}
-			</select>
-			<select class="select" name="status" style="flex:1;min-width:130px">
-				<option value="">{ c.T("admin.users.anyStatus") }</option>
-				<option value="active" selected?={ d.Status == "active" }>{ c.T("admin.users.active") }</option>
-				<option value="suspended" selected?={ d.Status == "suspended" }>{ c.T("admin.users.suspended") }</option>
-			</select>
-			if len(d.Countries) > 0 {
-				<select class="select" name="country" style="flex:1;min-width:130px">
-					<option value="">{ c.T("admin.users.anyCountry") }</option>
-					for _, country := range d.Countries {
-						<option value={ country } selected?={ d.Country == country }>{ country }</option>
-					}
-				</select>
-			}
-			<button class="btn btn--primary" type="submit">{ c.T("common.search") }</button>
-		</form>
-		if len(d.Users) == 0 {
-			@Empty("🔍", c.T("friends.search.empty"))
-		} else {
-			<div class="card card--flush scroll-x">
-				<table class="table">
-					<thead>
-						<tr>
-							<th>{ c.T("leaderboard.player") }</th>
-							<th>{ c.T("admin.users.role") }</th>
-							<th>{ c.T("admin.users.status") }</th>
-							<th class="num">{ c.T("leaderboard.xp") }</th>
-							<th>{ c.T("admin.users.joined") }</th>
-							<th></th>
-						</tr>
-					</thead>
-					<tbody>
-						for _, u := range d.Users {
-							@adminUserRow(c, u, d.ConfirmDeleteID)
-						}
-					</tbody>
-				</table>
-			</div>
-			@PagerBar(c, d.Pager)
+			<a class="btn btn-primary" href="/admin/users/new">
+				@adminIcon("i-plus", "")
+				{ c.T("admin.users.new") }
+			</a>
 		}
+		<section class="panel">
+			// Server-side, because the directory is paged: filtering in the
+			// browser would narrow the forty rows on screen and silently
+			// ignore the two thousand behind them.
+			<form class="toolbar" method="get" action="/admin/users" role="search">
+				<label class="input-icon">
+					@adminIcon("i-search", "")
+					<span class="sr-only">{ c.T("admin.users.searchPlaceholder") }</span>
+					<input
+						class="input input-sm"
+						type="search"
+						name="q"
+						value={ d.Query }
+						placeholder={ c.T("admin.users.searchPlaceholder") }
+					/>
+				</label>
+				// Everyone / Players / Staff rather than a role select. Staff
+				// is the two roles that can change something, which is the
+				// distinction this screen is actually used to make; the exact
+				// role is on each row and changed there.
+				<div class="segmented" role="radiogroup" aria-label={ c.T("admin.users.role") }>
+					for _, tab := range userKindTabs {
+						<label class={ "seg-radio", templ.KV("is-on", d.Kind == tab.Value) }>
+							<input
+								type="radio"
+								name="kind"
+								value={ tab.Value }
+								checked?={ d.Kind == tab.Value }
+								onchange="this.form.submit()"
+							/>
+							<span>
+								{ c.T(tab.LabelKey) }
+								if n := d.KindCount(tab.Value); n > 0 {
+									<span class="n">{ fmt.Sprint(n) }</span>
+								}
+							</span>
+						</label>
+					}
+				</div>
+				<select class="select input-sm" name="status" aria-label={ c.T("admin.users.status") }>
+					<option value="">{ c.T("admin.users.anyStatus") }</option>
+					<option value={ models.StatusUserActive } selected?={ d.Status == models.StatusUserActive }>
+						{ c.T("admin.users.active") }
+					</option>
+					<option value={ models.StatusUserSuspended } selected?={ d.Status == models.StatusUserSuspended }>
+						{ c.T("admin.users.suspended") }
+					</option>
+				</select>
+				if len(d.Countries) > 0 {
+					<select class="select input-sm" name="country" aria-label={ c.T("admin.users.anyCountry") }>
+						<option value="">{ c.T("admin.users.anyCountry") }</option>
+						for _, country := range d.Countries {
+							<option value={ country } selected?={ d.Country == country }>{ country }</option>
+						}
+					</select>
+				}
+				<span class="spacer"></span>
+				<button class="btn btn-sm btn-primary" type="submit">{ c.T("common.search") }</button>
+				if d.Filtered() {
+					<a class="btn btn-sm btn-ghost" href="/admin/users">{ c.T("admin.filters.clear") }</a>
+				}
+			</form>
+			if len(d.Users) == 0 {
+				@adminEmpty(c, "i-search", c.T("admin.users.noneTitle"), c.T("admin.users.noneSub")) {
+					if d.Filtered() {
+						<a class="btn btn-sm" href="/admin/users">{ c.T("admin.filters.clear") }</a>
+					}
+				}
+			} else {
+				<div class="table-wrap">
+					<table class="table stack-sm">
+						<caption class="sr-only">{ c.T("admin.nav.users") }</caption>
+						<thead>
+							<tr>
+								@sortHeader(c, d.Sorting, SortCol{Column: "name", Label: c.T("leaderboard.player")})
+								@sortHeader(c, d.Sorting, SortCol{Column: "role", Label: c.T("admin.users.role")})
+								@sortHeader(c, d.Sorting, SortCol{Column: "status", Label: c.T("admin.users.status")})
+								@sortHeader(c, d.Sorting, SortCol{Column: "lang", Label: c.T("settings.language"), Class: "hide-md"})
+								@sortHeader(c, d.Sorting, SortCol{Column: "rounds", Label: c.T("admin.stat.rounds"), DescFirst: true, Numeric: true})
+								@sortHeader(c, d.Sorting, SortCol{Column: "accuracy", Label: c.T("admin.dash.accuracy"), DescFirst: true})
+								@sortHeader(c, d.Sorting, SortCol{Column: "streak", Label: c.T("admin.users.streak"), DescFirst: true, Numeric: true, Class: "hide-md"})
+								@sortHeader(c, d.Sorting, SortCol{Column: "seen", Label: c.T("admin.users.lastSeen"), DescFirst: true, Class: "hide-sm"})
+								<th scope="col"><span class="sr-only">{ c.T("common.actions") }</span></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, u := range d.Users {
+								@adminUserRow(c, u, d.ConfirmDeleteID)
+							}
+						</tbody>
+					</table>
+				</div>
+				@adminPager(c, d.Pager)
+			}
+		</section>
+		// One drawer for the whole list, filled when a row's eye is pressed.
+		// Fifty drawers rendered with the page would be fifty aggregates
+		// computed to show one.
+		<aside
+			class="drawer"
+			id="user-drawer"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="user-drawer-title"
+			aria-hidden="true"
+			data-panel-host
+		></aside>
 	}
 }
 
-// confirmDeleteID is the account whose delete button has been pressed once
-// and is now asking for its username to be typed back.
 templ adminUserRow(c Ctx, u *models.AdminUser, confirmDeleteID string) {
 	<tr>
-		<td>
-			<div class="row" style="gap:10px">
+		<td class="cell-first" data-label={ c.T("leaderboard.player") }>
+			<div class="cell-main">
 				<span
-					class={ "avatar", "avatar--xs", templ.KV("avatar--photo", HasAvatarPhoto(u.AvatarSeed)) }
+					class={ "avatar", templ.KV("avatar--photo", HasAvatarPhoto(u.AvatarSeed)) }
 					style={ AvatarStyle(AvatarSeedFor(u.ID, u.AvatarSeed, u.Username)) }
+					aria-hidden="true"
 				>
 					if !HasAvatarPhoto(u.AvatarSeed) {
 						{ Initial(u.DisplayName) }
 					}
 				</span>
 				<div style="min-width:0">
-					<a class="bold small truncate" href={ templ.SafeURL("/u/" + u.Username) }>
-						{ u.DisplayName }
-					</a>
-					<div class="tiny muted truncate">{ u.Email }</div>
+					<div class="t truncate">
+						<a href={ templ.SafeURL("/u/" + u.Username) }>{ u.DisplayName }</a>
+					</div>
+					<div class="s truncate" dir="ltr">
+						{ "@" + u.Username }
+						if u.Email != "" {
+							{ " · " + u.Email }
+						}
+					</div>
 				</div>
 			</div>
 		</td>
-		<td>
+		<td data-label={ c.T("admin.users.role") }>
+			// The role select submits on change rather than waiting for a save
+			// button the row has no space for. It is its own form so changing
+			// one person's role cannot carry another row's fields with it.
 			<form method="post" action={ templ.SafeURL("/admin/users/" + u.ID.String() + "/role") }>
 				<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-				<select class="select select--sm" name="role" onchange="this.form.submit()">
-					for _, role := range []string{models.RolePlayer, models.RoleModerator, models.RoleAdmin} {
+				<select
+					class="select input-sm"
+					name="role"
+					aria-label={ c.T("admin.users.roleFor", u.DisplayName) }
+					onchange="this.form.submit()"
+				>
+					for _, role := range models.AssignableRoles {
 						<option value={ role } selected?={ u.Role == role }>
 							{ c.T(models.RoleLabelKey(role)) }
 						</option>
 					}
 				</select>
+				<noscript>
+					<button class="btn btn-sm" type="submit">{ c.T("common.save") }</button>
+				</noscript>
 			</form>
 		</td>
-		<td>
+		<td data-label={ c.T("admin.users.status") }>
 			if u.IsSuspended() {
-				<span class="tag tag--danger" title={ u.SuspendedReason }>
+				<span class="badge badge-danger" title={ u.SuspendedReason }>
 					{ c.T("admin.users.suspended") }
 				</span>
 			} else {
-				<span class="tag tag--success">{ c.T("admin.users.active") }</span>
+				<span class="badge badge-live">{ c.T("admin.users.active") }</span>
 			}
 		</td>
-		<td class="num">{ fmt.Sprint(u.XP) }</td>
-		<td class="tiny muted">{ c.Tr.Date(u.CreatedAt) }</td>
-		<td>
-			<div class="row" style="gap:6px;justify-content:flex-end">
-				if u.IsSuspended() {
-					@adminUserAction(c, u.ID.String(), "reinstate", "btn--soft", c.T("admin.users.reinstate"))
-				} else {
-					@adminUserAction(c, u.ID.String(), "suspend", "btn--ghost", c.T("admin.users.suspend"))
-				}
-				// Two presses, and the second one costs the admin the username.
-				// Pre-filling the confirmation — which is what this used to do —
-				// meant the server check could never fail, leaving a stray click
-				// as the only thing between an admin and a cascade delete.
-				<form
-					class="row"
-					style="gap:6px"
-					method="post"
-					action={ templ.SafeURL("/admin/users/" + u.ID.String() + "/delete") }
-					data-confirm={ c.T("admin.users.deleteConfirm", u.Username) }
+		<td class="hide-md" data-label={ c.T("settings.language") }>
+			<span class="lang">{ strings.ToUpper(u.Locale) }</span>
+		</td>
+		<td class="t-num" data-label={ c.T("admin.stat.rounds") } data-value={ fmt.Sprint(u.GamesPlayed) }>
+			{ fmt.Sprint(u.GamesPlayed) }
+		</td>
+		<td data-label={ c.T("admin.dash.accuracy") } data-value={ fmt.Sprint(u.Accuracy()) }>
+			// Nothing answered has no accuracy. A bar at zero would read as a
+			// player who gets everything wrong, which is a different person.
+			if u.Answered == 0 {
+				<span class="faint">—</span>
+			} else {
+				@adminMeter(u.Accuracy())
+			}
+		</td>
+		<td class="t-num hide-md" data-label={ c.T("admin.users.streak") } data-value={ fmt.Sprint(u.BestStreak) }>
+			if u.BestStreak > 0 {
+				{ fmt.Sprint(u.BestStreak) }
+			} else {
+				<span class="faint">—</span>
+			}
+		</td>
+		<td class="hide-sm" data-label={ c.T("admin.users.lastSeen") } data-value={ fmt.Sprint(u.LastSeenAt.Unix()) }>
+			<span class="s">{ c.Tr.RelativeTime(u.LastSeenAt) }</span>
+		</td>
+		<td class="cell-actions">
+			<div class="btn-group">
+				// Opens the panel over the list rather than navigating away:
+				// looking at one account is usually a step in working through
+				// several, and leaving the directory loses your place in it.
+				// With no script it is a link to the profile, which is the
+				// nearest thing that works without one.
+				<a
+					class="icon-btn sm"
+					href={ templ.SafeURL("/u/" + u.Username) }
+					data-panel={ templ.SafeURL("/admin/users/" + u.ID.String() + "/panel") }
+					aria-label={ c.T("admin.users.view", u.DisplayName) }
+					title={ c.T("admin.users.view", u.DisplayName) }
 				>
-					<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-					if confirmDeleteID == u.ID.String() {
-						<input
-							class="input input--sm"
-							type="text"
-							name="confirm"
-							style="max-width:16ch"
-							autocomplete="off"
-							autofocus
-							aria-label={ c.T("admin.users.typeUsername", u.Username) }
-							placeholder={ u.Username }
-						/>
-						<button class="btn btn--danger btn--sm" type="submit">
-							{ c.T("admin.users.deleteAnyway") }
-						</button>
-					} else {
-						<button class="btn btn--ghost btn--sm" type="submit">
-							{ c.T("common.delete") }
-						</button>
-					}
-				</form>
+					@adminIcon("i-eye", "")
+				</a>
+				// A disclosure rather than the kit's menu: two of these
+				// actions ask for something to be typed first — a suspension's
+				// reason, and the username that confirms a delete — and the
+				// kit's menu is closed by its own click handler as soon as a
+				// field inside it is focused.
+				<details class="menu-wrap disclosure">
+					<summary
+						class="icon-btn sm"
+						aria-label={ c.T("admin.users.moreFor", u.DisplayName) }
+					>
+						@adminIcon("i-more", "")
+					</summary>
+					<div class="menu">
+						if u.IsSuspended() {
+							<form method="post" action={ templ.SafeURL("/admin/users/" + u.ID.String() + "/reinstate") }>
+								<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+								<button type="submit">
+									@adminIcon("i-restore", "")
+									{ c.T("admin.users.reinstate") }
+								</button>
+							</form>
+						} else {
+							// The reason travels with the press rather than
+							// through a second screen: it is the one thing the
+							// suspended person is told, and a suspension with
+							// no reason recorded is one nobody can review.
+							<form
+								class="menu-form"
+								method="post"
+								action={ templ.SafeURL("/admin/users/" + u.ID.String() + "/suspend") }
+							>
+								<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+								<input
+									class="input input-sm"
+									type="text"
+									name="reason"
+									maxlength="200"
+									autocomplete="off"
+									placeholder={ c.T("admin.users.reason") }
+									aria-label={ c.T("admin.users.reasonFor", u.DisplayName) }
+								/>
+								<button type="submit">
+									@adminIcon("i-clock", "")
+									{ c.T("admin.users.suspend") }
+								</button>
+							</form>
+						}
+						<hr/>
+						// Two presses, and the second one costs the admin the
+						// username. Pre-filling the confirmation — which is
+						// what this used to do — meant the server check could
+						// never fail, leaving a stray click as the only thing
+						// between an admin and a cascade delete.
+						<form
+							class="menu-form"
+							method="post"
+							action={ templ.SafeURL("/admin/users/" + u.ID.String() + "/delete") }
+						>
+							<input type="hidden" name="csrf_token" value={ c.CSRF }/>
+							if confirmDeleteID == u.ID.String() {
+								<input
+									class="input input-sm"
+									type="text"
+									name="confirm"
+									autocomplete="off"
+									autofocus
+									aria-label={ c.T("admin.users.typeUsername", u.Username) }
+									placeholder={ u.Username }
+								/>
+								<button class="danger" type="submit">
+									@adminIcon("i-trash", "")
+									{ c.T("admin.users.deleteAnyway") }
+								</button>
+							} else {
+								<button class="danger" type="submit">
+									@adminIcon("i-trash", "")
+									{ c.T("common.delete") }
+								</button>
+							}
+						</form>
+					</div>
+				</details>
 			</div>
 		</td>
 	</tr>
-}
-
-templ adminUserAction(c Ctx, id, action, variant, label string) {
-	<form method="post" action={ templ.SafeURL("/admin/users/" + id + "/" + action) }>
-		<input type="hidden" name="csrf_token" value={ c.CSRF }/>
-		<button class={ "btn", "btn--sm", variant } type="submit">{ label }</button>
-	</form>
 }
 
 // -------------------------------------------------------------- new user --
@@ -201,9 +398,16 @@ type AdminNewUserData struct {
 
 templ AdminNewUser(c Ctx, a AdminChrome, d AdminNewUserData) {
 	@adminShell(c, a, c.T("admin.users.new")) {
-		@BackLink(c, "/admin/users", c.T("admin.nav.users"))
+		<div class="page-head">
+			<div class="actions">
+				<a class="btn btn-ghost btn-sm" href="/admin/users">
+					@adminIcon("i-chevron-left", "icon-sm icon-flip")
+					{ c.T("admin.nav.users") }
+				</a>
+			</div>
+		</div>
 		@FormProblems(c, d.Error, d.Problems(c))
-		<form method="post" action="/admin/users/new" class="card card--pad-lg stack" novalidate>
+		<form method="post" action="/admin/users/new" class="panel panel-body stack" novalidate>
 			<input type="hidden" name="csrf_token" value={ c.CSRF }/>
 			@TextField(c, TextFieldOpts{
 				ID: "display_name", Name: "display_name", Required: true,
@@ -230,7 +434,7 @@ templ AdminNewUser(c Ctx, a AdminChrome, d AdminNewUserData) {
 			<div class="field">
 				<span class="label">{ c.T("admin.users.role") }</span>
 				<div class="choice-grid">
-					for _, role := range []string{models.RolePlayer, models.RoleModerator, models.RoleAdmin} {
+					for _, role := range models.AssignableRoles {
 						<label class="chip-radio">
 							<input type="radio" name="role" value={ role } checked?={ d.Role == role }/>
 							<span class="chip-radio__face">
@@ -240,9 +444,9 @@ templ AdminNewUser(c Ctx, a AdminChrome, d AdminNewUserData) {
 						</label>
 					}
 				</div>
-				<span class="tiny faint">{ c.T("admin.users.roleHelp") }</span>
+				<span class="faint">{ c.T("admin.users.roleHelp") }</span>
 			</div>
-			<div class="row row--wrap" style="gap:12px">
+			<div class="row row-wrap">
 				<div class="field" style="flex:1;min-width:160px">
 					<label class="label" for="country">{ c.T("profile.field.country") }</label>
 					<input class="input" id="country" name="country" type="text" maxlength="60" value={ d.Country }/>
@@ -256,9 +460,9 @@ templ AdminNewUser(c Ctx, a AdminChrome, d AdminNewUserData) {
 					</select>
 				</div>
 			</div>
-			<div class="row" style="gap:10px">
-				<button class="btn btn--primary" type="submit">{ c.T("admin.users.create") }</button>
-				<a class="btn btn--ghost" href="/admin/users">{ c.T("common.cancel") }</a>
+			<div class="row">
+				<button class="btn btn-primary" type="submit">{ c.T("admin.users.create") }</button>
+				<a class="btn btn-ghost" href="/admin/users">{ c.T("common.cancel") }</a>
 			</div>
 		</form>
 	}

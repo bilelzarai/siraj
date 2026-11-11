@@ -185,7 +185,10 @@ func (cm *Comparer) Draft(ctx context.Context, draft *models.QuestionDraft,
 // categorySlugs maps a category id back to the slug a file would name it by, so
 // both sides of a comparison speak the same language about categories.
 func (cm *Comparer) categorySlugs(ctx context.Context) (map[int]string, error) {
-	categories, err := cm.repo.Categories(ctx, "en")
+	// The admin list: this panel is shown to a moderator comparing two bank
+	// questions, and one of them may sit under a retired domain. The player's
+	// filtered list would leave its category blank.
+	categories, err := cm.repo.AdminCategories(ctx, "en")
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +258,7 @@ func fillLocales(cmp *models.QuestionCompare, left, right map[string]models.Tran
 		}
 
 		block := models.CompareLocale{
-			Code: loc.Code, Name: loc.Name, Dir: loc.Dir, Flag: loc.Flag,
+			Code: loc.Code, Name: loc.Name, Dir: loc.Dir,
 			InLeft: inLeft, InRight: inRight,
 			Prompt:      textPair(leftT.Prompt, rightT.Prompt),
 			Explanation: textPair(leftT.Explanation, rightT.Explanation),

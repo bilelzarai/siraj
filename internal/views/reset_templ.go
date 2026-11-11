@@ -215,6 +215,16 @@ func (d ResetData) Problems(c Ctx) []FieldProblem {
 	return out
 }
 
+// resetTitle names the screen for what it actually is. An expired link shows
+// the expiry notice and nothing to fill in, so titling it "Choose a new
+// password" contradicted the only thing on the page.
+func resetTitle(c Ctx, d ResetData) string {
+	if d.Expired {
+		return c.T("auth.reset.expiredTitle")
+	}
+	return c.T("auth.reset.title")
+}
+
 func Reset(c Ctx, d ResetData) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -268,7 +278,7 @@ func Reset(c Ctx, d ResetData) templ.Component {
 				var templ_7745c5c3_Var11 string
 				templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(c.T("auth.reset.expiredTitle"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 89, Col: 67}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 99, Col: 67}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 				if templ_7745c5c3_Err != nil {
@@ -281,7 +291,7 @@ func Reset(c Ctx, d ResetData) templ.Component {
 				var templ_7745c5c3_Var12 string
 				templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(c.T("auth.reset.expiredBody", int(service.ResetTTL.Minutes())))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 90, Col: 93}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 100, Col: 93}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 				if templ_7745c5c3_Err != nil {
@@ -294,7 +304,7 @@ func Reset(c Ctx, d ResetData) templ.Component {
 				var templ_7745c5c3_Var13 string
 				templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(c.T("auth.forgot.title"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 92, Col: 74}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 102, Col: 74}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 				if templ_7745c5c3_Err != nil {
@@ -312,7 +322,7 @@ func Reset(c Ctx, d ResetData) templ.Component {
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(c.T("auth.reset.title"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 95, Col: 60}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 105, Col: 60}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -325,7 +335,7 @@ func Reset(c Ctx, d ResetData) templ.Component {
 				var templ_7745c5c3_Var15 string
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(c.T("auth.reset.subtitle"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 96, Col: 57}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 106, Col: 57}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 				if templ_7745c5c3_Err != nil {
@@ -346,7 +356,7 @@ func Reset(c Ctx, d ResetData) templ.Component {
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.ResolveAttributeValue(c.CSRF)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 100, Col: 59}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 110, Col: 59}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var16)
 				if templ_7745c5c3_Err != nil {
@@ -359,7 +369,7 @@ func Reset(c Ctx, d ResetData) templ.Component {
 				var templ_7745c5c3_Var17 string
 				templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.Token)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 101, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 111, Col: 55}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var17)
 				if templ_7745c5c3_Err != nil {
@@ -401,7 +411,7 @@ func Reset(c Ctx, d ResetData) templ.Component {
 				var templ_7745c5c3_Var18 string
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(c.T("auth.reset.submit"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 122, Col: 33}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/views/reset.templ`, Line: 132, Col: 33}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
@@ -418,7 +428,7 @@ func Reset(c Ctx, d ResetData) templ.Component {
 			}
 			return nil
 		})
-		templ_7745c5c3_Err = Base(c, c.T("auth.reset.title")).Render(templ.WithChildren(ctx, templ_7745c5c3_Var10), templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = Base(c, resetTitle(c, d)).Render(templ.WithChildren(ctx, templ_7745c5c3_Var10), templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

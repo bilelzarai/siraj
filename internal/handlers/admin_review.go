@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -43,11 +45,51 @@ func (h *Handlers) AdminReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The third list: translations a reviewer has sent back with a note. They
+	// are still pending, so they appear in the queue above as well — but the
+	// queue says "somebody has to decide about this" and these say "somebody
+	// already did, and asked for a change", which is a different job.
+	noted, err := h.repo.NotedTranslations(r.Context(), c.Locale, adminPageSize)
+	if err != nil {
+		h.serverError(w, r, err)
+		return
+	}
+
+	// The one being read, in full. The queue is a list of rows; the pane beside
+	// it shows every language of one question with its answers, which needs the
+	// draft rather than the listing.
+	open := 0
+	if n := queryInt(r, "q", 0); n > 0 {
+		open = n
+	} else if len(questions) > 0 {
+		// Opening on the first is what the queue is for: a reviewer arrives to
+		// work through it, not to choose where to start.
+		open = questions[0].ID
+	}
+	var draft *models.QuestionDraft
+	if open > 0 {
+		draft, err = h.repo.QuestionDraftByID(r.Context(), open)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			h.serverError(w, r, err)
+			return
+		}
+	}
+	// What the automatic checks say about it, which is the half of the pane
+	// that is not the text itself.
+	var checks []models.ReviewCheck
+	if draft != nil {
+		checks = models.CheckQuestion(draft, models.ShippedLocales)
+	}
+
 	h.render(w, r, http.StatusOK, views.AdminReview(c, chrome, views.AdminReviewData{
+		Open:            draft,
+		OpenID:          open,
+		Checks:          checks,
 		Questions:       questions,
 		Total:           total,
 		Incomplete:      incomplete,
 		IncompleteTotal: incompleteTotal,
+		Noted:           noted,
 		Translator:      h.translator.Provider(),
 		Available:       h.translator.Available(),
 	}))
@@ -83,13 +125,30 @@ func (h *Handlers) AdminReviewAction(w http.ResponseWriter, r *http.Request) {
 				map[string]any{"locale": locale})
 			h.flash(w, "info", c.T("admin.review.rejected", locale))
 		}
+	case "changes":
+		// The answer between the other two: the draft stays, the queue keeps
+		// showing it, and the note says what to change. Refused without a
+		// note — "changes requested" with nothing written is indistinguishable
+		// from leaving the row alone, except that it looks like it was handled.
+		note := clip(strings.TrimSpace(r.PostFormValue("note")), 2000)
+		if note == "" {
+			h.flash(w, "error", c.T("admin.review.noteRequired"))
+			redirect(w, r, backTo(r, "/admin/review"))
+			return
+		}
+		if err = h.repo.RequestTranslationChanges(r.Context(), id, locale, note, c.User.ID); err == nil {
+			h.audit(r, "translation.changes", "question", chi.URLParam(r, "id"),
+				map[string]any{"locale": locale, "note": note})
+			h.flash(w, "info", c.T("admin.review.changesRequested", locale))
+		}
+
 	default:
 		h.NotFound(w, r)
 		return
 	}
 
 	if err != nil {
-		h.serverError(w, r, err)
+		h.notFoundOrError(w, r, err)
 		return
 	}
 	redirect(w, r, backTo(r, "/admin/review"))

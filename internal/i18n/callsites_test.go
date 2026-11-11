@@ -90,3 +90,61 @@ func repoRoot(t *testing.T) string {
 	t.Fatal("could not find the module root")
 	return ""
 }
+
+// And the reverse: a key with no format verb, called with arguments.
+//
+// fmt appends "%!(EXTRA string=…)" to the rendered string, so the screen shows
+// the label followed by a parser error. It has happened twice — a "Points"
+// column label called with a number, and a "Joined" label called with a date —
+// because the catalogue is flat and a key that reads like a sentence and one
+// that reads like a column header look the same at the call site.
+func TestNoPlainKeyIsCalledWithArguments(t *testing.T) {
+	bundle, err := i18n.New(i18n.DefaultLocale)
+	if err != nil {
+		t.Fatalf("loading catalogs: %v", err)
+	}
+
+	// c.T("some.key", …) — a call that passes at least one argument.
+	withArgs := regexp.MustCompile(`\bc\.T\(\s*"([^"]+)"\s*,`)
+	verb := regexp.MustCompile(`%[^%]`)
+
+	root := repoRoot(t)
+	for _, dir := range []string{"internal", "cmd"} {
+		err := filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return err
+			}
+			name := info.Name()
+			if !strings.HasSuffix(name, ".templ") && !strings.HasSuffix(name, ".go") {
+				return nil
+			}
+			if strings.HasSuffix(name, "_templ.go") || strings.HasSuffix(name, "_test.go") {
+				return nil
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, m := range withArgs.FindAllStringSubmatch(string(body), -1) {
+				key := m[1]
+				for _, loc := range i18n.Supported {
+					text := bundle.Printer(loc.Code).T(key)
+					// A key the catalogue does not define comes back as
+					// itself; the completeness test owns that case.
+					if text == key {
+						continue
+					}
+					if !verb.MatchString(text) {
+						t.Errorf("%s calls %q with arguments, but its %s text is %q — "+
+							"fmt appends a parser error to it",
+							name, key, loc.Code, text)
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walking %s: %v", dir, err)
+		}
+	}
+}

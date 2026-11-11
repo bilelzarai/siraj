@@ -458,7 +458,7 @@
     "id": 801, "category": "akhlaq", "difficulty": 1, "correct": 1,
     "t": {
       "ar": { "prompt": "ما تحية المسلم لأخيه المسلم؟", "choices": ["أهلًا وسهلًا", "السلام عليكم", "صباح الخير", "حيّاك الله"], "explanation": "التحية الشرعية «السلام عليكم ورحمة الله وبركاته»، وإفشاء السلام من موجبات المحبة." },
-      "en": { "prompt": "What is the Islamic greeting between Muslims?", "choices": ["Ahlan wa sahlan", "As-salamu 'alaykum", "Sabah al-khayr", "Hayyaka Allah"], "explanation": "The prescribed greeting is \"As-salamu 'alaykum wa rahmatullahi wa barakatuh\"; spreading it builds mutual love." },
+      "en": { "prompt": "What is the Siraj greeting between Muslims?", "choices": ["Ahlan wa sahlan", "As-salamu 'alaykum", "Sabah al-khayr", "Hayyaka Allah"], "explanation": "The prescribed greeting is \"As-salamu 'alaykum wa rahmatullahi wa barakatuh\"; spreading it builds mutual love." },
       "fr": { "prompt": "Quelle est la salutation islamique entre musulmans ?", "choices": ["Ahlan wa sahlan", "As-salamu 'alaykum", "Sabah al-khayr", "Hayyaka Allah"], "explanation": "La salutation prescrite est « As-salamu 'alaykum wa rahmatullahi wa barakatuh » ; la répandre nourrit l'amour fraternel." }
     }
   },

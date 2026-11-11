@@ -1,0 +1,82 @@
+# The published contract for the public surface. Versioned with it: the prefix
+# is the version, a field may be added, and one is never removed or given a new
+# meaning without a new one.
+openapi: 3.1.0
+info:
+  title: Sirāj
+  version: "1.0.0"
+  description: >
+    One read-only, credentialed route over the question bank. It serves the
+    same rows the game draws from, under the same conditions — including that
+    nothing awaiting review is ever served.
+servers:
+  - url: /api/v1
+security:
+  - bearerKey: []
+paths:
+  /questions:
+    get:
+      summary: One page of the question bank
+      parameters:
+        - { name: locale,     in: query, schema: { type: string, enum: [ar, en, fr], default: ar } }
+        - { name: category,   in: query, schema: { type: string }, description: Category slug }
+        - { name: domain,     in: query, schema: { type: string }, description: Subject-area slug }
+        - { name: difficulty, in: query, schema: { type: integer, minimum: 1, maximum: 3 } }
+        - { name: limit,      in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor,     in: query, schema: { type: string }, description: Opaque, from the previous response }
+      responses:
+        "200":
+          description: A page, and the total the filter matches
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuestionPage" }
+        "400": { description: A parameter this endpoint cannot act on, $ref: "#/components/responses/Error" }
+        "401": { description: No key, or one this system does not know, $ref: "#/components/responses/Error" }
+        "403": { description: A revoked key, $ref: "#/components/responses/Error" }
+        "429": { description: Too many requests for this key, $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    bearerKey:
+      type: http
+      scheme: bearer
+      description: Minted with `sirajctl apikey new`. Shown once, stored only as a hash.
+  responses:
+    Error:
+      description: Something the caller has to change
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    TaxonomyRef:
+      type: object
+      required: [slug, name, icon]
+      properties:
+        slug: { type: string }
+        name: { type: string, description: Resolved for the asked locale, falling back to Arabic }
+        icon: { type: string }
+    Question:
+      type: object
+      required: [id, category, domain, difficulty, points, prompt, choices, correct_index, explanation, locale]
+      properties:
+        id:            { type: integer }
+        category:      { $ref: "#/components/schemas/TaxonomyRef" }
+        domain:        { $ref: "#/components/schemas/TaxonomyRef" }
+        difficulty:    { type: integer, minimum: 1, maximum: 3 }
+        points:        { type: integer }
+        prompt:        { type: string }
+        choices:       { type: array, items: { type: string } }
+        correct_index: { type: integer, minimum: 0, maximum: 3 }
+        explanation:   { type: string }
+        locale:        { type: string }
+    QuestionPage:
+      type: object
+      required: [data, total]
+      properties:
+        data:        { type: array, items: { $ref: "#/components/schemas/Question" } }
+        next_cursor: { type: string, description: Present only when a full page came back }
+        total:       { type: integer }

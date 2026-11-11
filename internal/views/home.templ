@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/bilelzarai/siraj/internal/models"
+	"github.com/bilelzarai/siraj/internal/repository"
 )
 
 type HomeData struct {
@@ -11,6 +12,9 @@ type HomeData struct {
 	DailyPlayed bool
 
 	Categories    []*models.Category
+	// Availability is how many questions each category can draw, so a card
+	// can say what it holds before it is chosen rather than after.
+	Availability  repository.Availability
 	Resume        *models.GameSession
 	Recent        []*models.GameSession
 	FriendsOnline []*models.UserCard
@@ -18,12 +22,56 @@ type HomeData struct {
 	Rank          int
 }
 
+// CategoryGroup is one subject area and the categories filed under it, which
+// is how the home grid is laid out once there is more than one.
+type CategoryGroup struct {
+	ID         int
+	Name       string
+	Icon       string
+	Categories []*models.Category
+}
+
+// GroupedCategories reports whether the grid shows subject areas at all. One
+// area is a label over the whole page rather than a grouping.
+func (d HomeData) GroupedCategories() bool {
+	first := 0
+	for _, cat := range d.Categories {
+		if first == 0 {
+			first = cat.DomainID
+		}
+		if cat.DomainID != first {
+			return true
+		}
+	}
+	return false
+}
+
+// CategoryGroups preserves the order the repository returned — by the subject
+// area's position, then the category's — so the grid reads the same way as the
+// setup screen.
+func (d HomeData) CategoryGroups() []CategoryGroup {
+	var out []CategoryGroup
+	for _, cat := range d.Categories {
+		if n := len(out); n > 0 && out[n-1].ID == cat.DomainID {
+			out[n-1].Categories = append(out[n-1].Categories, cat)
+			continue
+		}
+		out = append(out, CategoryGroup{
+			ID:         cat.DomainID,
+			Name:       cat.DomainName,
+			Icon:       cat.Icon,
+			Categories: []*models.Category{cat},
+		})
+	}
+	return out
+}
+
 templ Home(c Ctx, d HomeData) {
 	@Base(c, c.T("nav.home")) {
 		<div class="shell stack-lg" data-live="challenge.received challenge.completed challenge.cancelled friend.accepted">
 			<section class="card card--pad-lg">
-				<div class="row row--between row--wrap" style="gap:20px">
-					<div class="row" style="gap:16px;min-width:0">
+				<div class="row row--between row--wrap" style="gap:var(--s-8)">
+					<div class="row" style="gap:var(--s-7);min-width:0">
 						<span
 							class={ "avatar", "avatar--lg", templ.KV("avatar--photo", HasAvatarPhoto(c.User.AvatarSeed)) }
 							style={ AvatarStyle(AvatarSeedFor(c.User.ID, c.User.AvatarSeed, c.User.Username)) }
@@ -56,7 +104,7 @@ templ Home(c Ctx, d HomeData) {
 			if c.IsGuest() {
 				<section class="alert alert--info" style="align-items:center">
 					<span aria-hidden="true" style="font-size:1.3rem">✨</span>
-					<div style="flex:1;min-width:0">
+					<div class="alert__body">
 						<div class="bold">{ c.T("guest.temporary") }</div>
 						<p class="small muted">{ c.T("guest.keepProgress") }</p>
 					</div>
@@ -66,7 +114,7 @@ templ Home(c Ctx, d HomeData) {
 			if d.Resume != nil {
 				<section class="alert alert--info" style="align-items:center">
 					<span aria-hidden="true" style="font-size:1.3rem">⏸️</span>
-					<div style="flex:1">
+					<div class="alert__body">
 						<div class="bold">{ c.T("home.resume.title") }</div>
 						<div class="small">
 							{ c.T("home.resume.body", d.Resume.Cursor + 1, d.Resume.TotalQuestions) }
@@ -101,10 +149,10 @@ templ Home(c Ctx, d HomeData) {
 				@StatTile("🪙", fmt.Sprint(c.User.Coins), c.T("profile.stat.coins"))
 			</section>
 			// Today's round: the same questions for everyone, once a day.
-			<section class="card row row--between row--wrap" style="gap:12px;align-items:center">
-				<span class="row" style="gap:12px;align-items:center;min-width:0">
+			<section class="card row row--between row--wrap" style="gap:var(--s-6);align-items:center">
+				<span class="row" style="gap:var(--s-6);align-items:center;min-width:0">
 					<span class="notif__icon" aria-hidden="true">🗓️</span>
-					<span class="stack-sm" style="min-width:0;gap:2px">
+					<span class="stack-sm" style="min-width:0;gap:var(--s-1)">
 						<span class="bold">{ c.T("home.daily.title") }</span>
 						<span class="tiny muted">{ c.T("home.daily.body") }</span>
 					</span>
@@ -127,17 +175,43 @@ templ Home(c Ctx, d HomeData) {
 					<h2 style="font-size:1.15rem">{ c.T("home.categories.title") }</h2>
 					<a class="btn btn--soft btn--sm" href="/play">{ c.T("home.quickplay") }</a>
 				</div>
-				<div class="grid grid--3">
-					for _, cat := range d.Categories {
-						@CategoryCard(c, cat)
+				// Grouped by subject area once there is more than one. With a
+				// single area the heading would be a label over the whole page,
+				// which is noise; with several, an ungrouped grid of twenty
+				// cards is a list the eye cannot find anything in.
+				if d.GroupedCategories() {
+					for _, group := range d.CategoryGroups() {
+						<div class="stack-sm">
+							<span class="eyebrow">
+								<span aria-hidden="true">{ group.Icon }</span> { group.Name }
+							</span>
+							<div class="grid grid--3">
+								for _, cat := range group.Categories {
+									@CategoryCard(c, cat, d.Availability.Count(cat.ID, 0))
+								}
+							</div>
+						</div>
 					}
-				</div>
+				} else {
+					<div class="grid grid--3">
+						for _, cat := range d.Categories {
+							@CategoryCard(c, cat, d.Availability.Count(cat.ID, 0))
+						}
+					</div>
+				}
+				if len(d.Categories) == 0 {
+					// Every subject area retired, or none with a category in
+					// it. Every neighbouring section on this screen says when
+					// it has nothing; this one used to render a heading over
+					// an empty grid.
+					@Empty("🌐", c.T("home.categories.empty"))
+				}
 			</section>
 			<div class="grid grid--2">
 				<section class="card card--flush">
 					<div class="card__head" style="padding:18px 20px 0;margin:0">
 						<span class="card__title">{ c.T("home.activity.title") }</span>
-						<a class="tiny bold" style="color:var(--accent)" href="/history">
+						<a class="tiny bold accent" href="/history">
 							{ c.T("common.viewAll") }
 						</a>
 					</div>
@@ -157,7 +231,7 @@ templ Home(c Ctx, d HomeData) {
 					<section class="card card--flush">
 						<div class="card__head" style="padding:18px 20px 0;margin:0">
 							<span class="card__title">{ c.T("home.friends.title") }</span>
-							<a class="tiny bold" style="color:var(--accent)" href="/friends">
+							<a class="tiny bold accent" href="/friends">
 								{ c.T("common.viewAll") }
 							</a>
 						</div>
@@ -201,7 +275,7 @@ templ incomingChallengeCard(c Ctx, ch *models.Challenge) {
 		if ch.Message != "" {
 			<p class="small muted">{ ch.Message }</p>
 		}
-		<div class="row" style="gap:8px">
+		<div class="row gap-4">
 			<form
 				method="post"
 				action={ templ.SafeURL("/challenges/" + ch.ID.String() + "/accept") }
@@ -274,12 +348,21 @@ func gameIcon(g *models.GameSession) string {
 	if g.CategoryIcon != "" {
 		return g.CategoryIcon
 	}
+	if g.DomainIcon != "" {
+		return g.DomainIcon
+	}
 	return "🎲"
 }
 
+// gameTitle names what a round was drawn from. A round drawn from a whole
+// subject area says so — "All of Sport" — rather than "All categories", which
+// would claim it could have asked about anything in the bank.
 func gameTitle(c Ctx, g *models.GameSession) string {
 	if g.CategoryName != "" {
 		return g.CategoryName
+	}
+	if g.DomainName != "" {
+		return c.T("game.setup.domain.all", g.DomainName)
 	}
 	return c.T("game.setup.category.all")
 }

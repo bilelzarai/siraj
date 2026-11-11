@@ -10,18 +10,40 @@ import (
 	"github.com/bilelzarai/siraj/internal/models"
 )
 
+// The filter set, which every read of the bank copies and none re-derives:
+// an active question, translated into the asked language, past review, in an
+// active category, in an active domain. Five conditions since the taxonomy
+// gained a level; they appear in the availability count, the round draw and the
+// daily draw, and the three have to agree — a count that disagrees with the
+// draw is worse than no count at all.
+//
 // Categories returns every active category with names resolved for locale,
-// falling back to the Arabic name when a translation is missing.
-func (r *Repo) Categories(ctx context.Context, locale string) ([]*models.Category, error) {
+// falling back to the Arabic name when a translation is missing. It carries the
+// domain condition too: a category whose domain is retired can never be drawn
+// from, so offering it is offering a dead end.
+//
+// domainID narrows the list to one subject area; zero means every active one.
+// It is a parameter rather than a second function because the filter belongs
+// inside the query that already carries the rest of the filter set — a second
+// query here is a second place to forget a condition.
+//
+// Each row carries its domain and that domain's name, resolved the same way,
+// so a screen can group by subject area without a second read.
+func (r *Repo) Categories(ctx context.Context, locale string, domainID int) ([]*models.Category, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT c.id, c.slug, c.icon, c.color, c.sort_order,
+		SELECT c.id, c.slug, c.icon, c.color, c.sort_order, c.is_active,
 		       COALESCE(t.name, fb.name, c.slug),
-		       COALESCE(t.description, fb.description, '')
+		       COALESCE(t.description, fb.description, ''),
+		       d.id, d.slug, COALESCE(dt.name, dfb.name, d.slug)
 		  FROM categories c
+		  JOIN domains d ON d.id = c.domain_id AND d.is_active
 		  LEFT JOIN category_translations t  ON t.category_id  = c.id AND t.locale  = $1 AND NOT t.needs_review
 		  LEFT JOIN category_translations fb ON fb.category_id = c.id AND fb.locale = 'ar' AND NOT fb.needs_review
+		  LEFT JOIN domain_translations dt   ON dt.domain_id   = d.id AND dt.locale  = $1 AND NOT dt.needs_review
+		  LEFT JOIN domain_translations dfb  ON dfb.domain_id  = d.id AND dfb.locale = 'ar' AND NOT dfb.needs_review
 		 WHERE c.is_active
-		 ORDER BY c.sort_order`, locale)
+		   AND ($2 = 0 OR c.domain_id = $2)
+		 ORDER BY d.sort_order, c.sort_order, c.id`, locale, domainID)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +53,8 @@ func (r *Repo) Categories(ctx context.Context, locale string) ([]*models.Categor
 	for rows.Next() {
 		var c models.Category
 		if err := rows.Scan(&c.ID, &c.Slug, &c.Icon, &c.Color, &c.SortOrder,
-			&c.Name, &c.Description); err != nil {
+			&c.IsActive, &c.Name, &c.Description,
+			&c.DomainID, &c.DomainSlug, &c.DomainName); err != nil {
 			return nil, err
 		}
 		out = append(out, &c)
@@ -49,6 +72,11 @@ func (r *Repo) Categories(ctx context.Context, locale string) ([]*models.Categor
 type Availability struct {
 	// ByCategory[categoryID][difficulty] — difficulty 0 is every difficulty.
 	ByCategory map[int]map[int]int
+	// ByDomain[domainID][difficulty] — what a whole-subject-area round could
+	// draw. Not derivable from ByCategory by the caller: the screen would have
+	// to know which categories sit in which domain to add them up, and a count
+	// assembled in a template is a count that can disagree with the draw.
+	ByDomain map[int]map[int]int
 	// Any[difficulty] — across all categories. Index 0 is the grand total.
 	Any map[int]int
 }
@@ -65,36 +93,65 @@ func (a Availability) Count(categoryID, difficulty int) int {
 	return a.ByCategory[categoryID][difficulty]
 }
 
+// InDomain answers the same question one level up: how many a round drawn from
+// a whole subject area could find. Zero on either axis means "any".
+func (a Availability) InDomain(domainID, difficulty int) int {
+	if domainID <= 0 {
+		return a.Count(0, difficulty)
+	}
+	if a.ByDomain == nil {
+		return 0
+	}
+	return a.ByDomain[domainID][difficulty]
+}
+
 // AvailableCounts totals the drawable questions per category and difficulty.
 //
 // The filters mirror PickQuestionIDs exactly — active question, translation
-// present in this locale, translation not awaiting review — because a count
-// that does not match what the draw will find is worse than no count at all.
+// present in this locale, translation not awaiting review, active category,
+// active domain — because a count that does not match what the draw will find
+// is worse than no count at all.
+//
+// The category's own flag is one of them. Retiring a category took it out of
+// the picker and left its questions in the bank, so they went on being dealt
+// into every "all categories" round and into the daily one: a category could
+// be switched off and still be most of what a player saw.
 func (r *Repo) AvailableCounts(ctx context.Context, locale string) (Availability, error) {
-	out := Availability{ByCategory: map[int]map[int]int{}, Any: map[int]int{}}
+	out := Availability{
+		ByCategory: map[int]map[int]int{},
+		ByDomain:   map[int]map[int]int{},
+		Any:        map[int]int{},
+	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT q.category_id, q.difficulty, count(*)
+		SELECT q.category_id, c.domain_id, q.difficulty, count(*)
 		  FROM questions q
+		  JOIN categories c ON c.id = q.category_id AND c.is_active
+		  JOIN domains d ON d.id = c.domain_id AND d.is_active
 		  JOIN question_translations t ON t.question_id = q.id AND t.locale = $1
 		                                 AND NOT t.needs_review
 		 WHERE q.is_active
-		 GROUP BY q.category_id, q.difficulty`, locale)
+		 GROUP BY q.category_id, c.domain_id, q.difficulty`, locale)
 	if err != nil {
 		return out, err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var categoryID, difficulty, n int
-		if err := rows.Scan(&categoryID, &difficulty, &n); err != nil {
+		var categoryID, domainID, difficulty, n int
+		if err := rows.Scan(&categoryID, &domainID, &difficulty, &n); err != nil {
 			return out, err
 		}
 		if out.ByCategory[categoryID] == nil {
 			out.ByCategory[categoryID] = map[int]int{}
 		}
+		if out.ByDomain[domainID] == nil {
+			out.ByDomain[domainID] = map[int]int{}
+		}
 		out.ByCategory[categoryID][difficulty] += n
 		out.ByCategory[categoryID][0] += n
+		out.ByDomain[domainID][difficulty] += n
+		out.ByDomain[domainID][0] += n
 		out.Any[difficulty] += n
 		out.Any[0] += n
 	}
@@ -103,17 +160,24 @@ func (r *Repo) AvailableCounts(ctx context.Context, locale string) (Availability
 
 // PickQuestionIDs draws a random set of question ids for a new round.
 // Selection happens in SQL so the whole bank is eligible without loading it.
-func (r *Repo) PickQuestionIDs(ctx context.Context, categoryID *int, difficulty, count int, locale string) ([]int, error) {
+// A round names a category or a subject area, never both: choosing a category
+// has already chosen the domain above it, and accepting both would let the two
+// disagree. domainID is nil for every round that names a category, and for the
+// ones that name neither — the whole bank.
+func (r *Repo) PickQuestionIDs(ctx context.Context, categoryID, domainID *int, difficulty, count int, locale string) ([]int, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT q.id
 		  FROM questions q
-		  JOIN question_translations t ON t.question_id = q.id AND t.locale = $4
+		  JOIN categories c ON c.id = q.category_id AND c.is_active
+		  JOIN domains d ON d.id = c.domain_id AND d.is_active
+		  JOIN question_translations t ON t.question_id = q.id AND t.locale = $5
 		                                 AND NOT t.needs_review
 		 WHERE q.is_active
 		   AND ($1::int IS NULL OR q.category_id = $1)
-		   AND ($2::int = 0   OR q.difficulty  = $2)
+		   AND ($2::int IS NULL OR c.domain_id   = $2)
+		   AND ($3::int = 0     OR q.difficulty  = $3)
 		 ORDER BY random()
-		 LIMIT $3`, categoryID, difficulty, count, locale)
+		 LIMIT $4`, categoryID, domainID, difficulty, count, locale)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +204,8 @@ func (r *Repo) PickDailyQuestionIDs(ctx context.Context, day string, count int, 
 	rows, err := r.pool.Query(ctx, `
 		SELECT q.id
 		  FROM questions q
+		  JOIN categories c ON c.id = q.category_id AND c.is_active
+		  JOIN domains d ON d.id = c.domain_id AND d.is_active
 		  JOIN question_translations t ON t.question_id = q.id AND t.locale = $3
 		                                 AND NOT t.needs_review
 		 WHERE q.is_active
@@ -216,8 +282,18 @@ func (r *Repo) Question(ctx context.Context, id int, locale, second string) (*mo
 }
 
 // TotalQuestions powers the landing-page counter.
+//
+// A player's number, so it carries the taxonomy conditions the draw carries: a
+// question in a retired category, or in a live category inside a retired
+// subject area, is one no visitor can ever be asked. Counting it on the
+// landing page promises a bank that is bigger than the one being played.
 func (r *Repo) TotalQuestions(ctx context.Context) (int, error) {
 	var n int
-	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM questions WHERE is_active AND author_id IS NULL`).Scan(&n)
+	err := r.pool.QueryRow(ctx, `
+		SELECT count(*)
+		  FROM questions q
+		  JOIN categories c ON c.id = q.category_id AND c.is_active
+		  JOIN domains d ON d.id = c.domain_id AND d.is_active
+		 WHERE q.is_active AND q.author_id IS NULL`).Scan(&n)
 	return n, err
 }

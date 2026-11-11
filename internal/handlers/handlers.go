@@ -14,6 +14,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
+	"github.com/bilelzarai/siraj/internal/assets"
 	"github.com/bilelzarai/siraj/internal/config"
 	"github.com/bilelzarai/siraj/internal/i18n"
 	"github.com/bilelzarai/siraj/internal/models"
@@ -70,6 +71,9 @@ type Handlers struct {
 
 	// assetV is the static-asset content hash, set once in Routes().
 	assetV string
+	// links resolves a bundler entry to the URL a page should link, set in the
+	// same place and from the same filesystem the assets are served from.
+	links assets.Links
 }
 
 func New(
@@ -150,6 +154,7 @@ func (h *Handlers) viewCtx(w http.ResponseWriter, r *http.Request) views.Ctx {
 		Dir:    i18n.DirOf(locale),
 		Theme:  themeFrom(r, user),
 		AssetV: h.assetV,
+		Assets: h.links,
 	}
 
 	// Every badge in one query. Five of them, asked one after another, is five

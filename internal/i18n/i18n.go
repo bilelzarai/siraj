@@ -20,14 +20,19 @@ type Locale struct {
 	Name        string // endonym, shown in the switcher
 	EnglishName string
 	Dir         string // "rtl" or "ltr"
-	Flag        string
 }
+
+// Tag is the short mark for a language where a name would not fit — a table
+// column, a completeness dot. Deliberately the language code and not a flag:
+// a flag names a country, and no country owns a language. Arabic in
+// particular is spoken across dozens of them.
+func (l Locale) Tag() string { return strings.ToUpper(l.Code) }
 
 // Supported is ordered as the language switcher renders it.
 var Supported = []Locale{
-	{Code: "ar", Name: "العربية", EnglishName: "Arabic", Dir: "rtl", Flag: "🇸🇦"},
-	{Code: "en", Name: "English", EnglishName: "English", Dir: "ltr", Flag: "🇬🇧"},
-	{Code: "fr", Name: "Français", EnglishName: "French", Dir: "ltr", Flag: "🇫🇷"},
+	{Code: "ar", Name: "العربية", EnglishName: "Arabic", Dir: "rtl"},
+	{Code: "en", Name: "English", EnglishName: "English", Dir: "ltr"},
+	{Code: "fr", Name: "Français", EnglishName: "French", Dir: "ltr"},
 }
 
 const DefaultLocale = "ar"

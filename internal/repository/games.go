@@ -17,12 +17,20 @@ const gameColumns = `
 	g.locale, g.question_ids, g.cursor, g.total_questions, g.correct_count,
 	g.best_streak, g.score, g.xp_earned, g.duration_ms, g.challenge_id,
 	g.started_at, g.finished_at, g.served_at, g.elapsed_ms, g.deadline_at,
-	COALESCE(ct.name, cfb.name, c.slug, ''), COALESCE(c.icon, '')`
+	COALESCE(ct.name, cfb.name, c.slug, ''), COALESCE(c.icon, ''),
+	g.domain_id, COALESCE(dt.name, dfb.name, d.slug, ''), COALESCE(d.icon, '')`
 
+// The domain is joined the same way the category is, and for the same reason:
+// a finished round has to read back as what it was drawn from, whatever has
+// happened to the taxonomy since — including a domain that was retired after
+// the round was played.
 const gameJoins = `
 	  LEFT JOIN categories c ON c.id = g.category_id
 	  LEFT JOIN category_translations ct  ON ct.category_id  = c.id AND ct.locale  = $1
-	  LEFT JOIN category_translations cfb ON cfb.category_id = c.id AND cfb.locale = 'ar'`
+	  LEFT JOIN category_translations cfb ON cfb.category_id = c.id AND cfb.locale = 'ar'
+	  LEFT JOIN domains d ON d.id = g.domain_id
+	  LEFT JOIN domain_translations dt  ON dt.domain_id  = d.id AND dt.locale  = $1
+	  LEFT JOIN domain_translations dfb ON dfb.domain_id = d.id AND dfb.locale = 'ar'`
 
 func scanGame(row pgx.Row) (*models.GameSession, error) {
 	var g models.GameSession
@@ -30,7 +38,8 @@ func scanGame(row pgx.Row) (*models.GameSession, error) {
 		&g.Difficulty, &g.Locale, &g.QuestionIDs, &g.Cursor, &g.TotalQuestions,
 		&g.CorrectCount, &g.BestStreak, &g.Score, &g.XPEarned, &g.DurationMS,
 		&g.ChallengeID, &g.StartedAt, &g.FinishedAt, &g.ServedAt, &g.ElapsedMS,
-		&g.DeadlineAt, &g.CategoryName, &g.CategoryIcon)
+		&g.DeadlineAt, &g.CategoryName, &g.CategoryIcon,
+		&g.DomainID, &g.DomainName, &g.DomainIcon)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -46,12 +55,12 @@ func scanGame(row pgx.Row) (*models.GameSession, error) {
 func (r *Repo) CreateGame(ctx context.Context, g *models.GameSession) error {
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO game_sessions
-			(user_id, mode, category_id, difficulty, locale, question_ids,
-			 total_questions, challenge_id)
-		VALUES ($1, $2::game_mode, $3, $4, $5, $6, $7, $8)
+			(user_id, mode, category_id, domain_id, difficulty, locale,
+			 question_ids, total_questions, challenge_id)
+		VALUES ($1, $2::game_mode, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, started_at`,
-		g.UserID, g.Mode, g.CategoryID, g.Difficulty, g.Locale, g.QuestionIDs,
-		g.TotalQuestions, g.ChallengeID,
+		g.UserID, g.Mode, g.CategoryID, g.DomainID, g.Difficulty, g.Locale,
+		g.QuestionIDs, g.TotalQuestions, g.ChallengeID,
 	).Scan(&g.ID, &g.StartedAt)
 
 	if isUniqueViolation(err) {

@@ -49,9 +49,43 @@ ul, ol { list-style: none; padding: 0; }
 /* ------------------------------------------------------------------ theme */
 
 :root {
-  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, "Noto Naskh Arabic", "Amiri", sans-serif;
   --font-ar: "Noto Naskh Arabic", "Amiri", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+
+  /* spacing — the only way to express a repeating gap.
+     Measured, not invented: these are the eight values the markup was already
+     using, counted. A literal is allowed once; the second use of one is a
+     token, because two places that must stay equal and are written twice are
+     two places that drift. */
+  --s-1:  2px;
+  --s-2:  4px;
+  --s-3:  6px;
+  --s-4:  8px;
+  --s-5: 10px;
+  --s-6: 12px;
+  --s-7: 16px;
+  --s-8: 20px;
+  --s-9: 28px;
+
+  /* type — a scale rather than a literal per rule. Named for what they are
+     for, not for their size, so a heading that needs to be smaller changes
+     here and not in forty places. */
+  --t-tiny:    .72rem;
+  --t-small:   .82rem;
+  --t-body:    1rem;
+  --t-lead:    1.15rem;
+  --t-title:   1.4rem;
+  --t-display: 1.9rem;
+  --line-tight: 1.25;
+  --line-body:  1.6;
+
+  /* the four named widths, so a query cannot invent a fifth by accident.
+     Custom properties cannot be used in a media query — these are here to be
+     read, and the queries below spell the same numbers. */
+  --w-compact: 360px;
+  --w-phone:   560px;
+  --w-tablet:  860px;
 
   /* brand */
   --brand-50:  #ecfdf7;
@@ -223,6 +257,28 @@ html[lang="ar"] body {
 
 html[lang="ar"] .num,
 .num { font-variant-numeric: tabular-nums; font-family: var(--font-sans); }
+
+/* -----------------------------------------------------------------------
+   The handful of shapes the markup repeated as inline styles.
+
+   An inline style must be dynamic — a colour computed per row, a width from a
+   score. A fixed gap is not dynamic, and 224 of them were the reason the style
+   policy has to keep 'unsafe-inline'. These are the repeats, counted: every
+   one below appeared five times or more.
+   -------------------------------------------------------------------- */
+.gap-3  { gap: var(--s-3); }
+.gap-4  { gap: var(--s-4); }
+.gap-5  { gap: var(--s-5); }
+.gap-6  { gap: var(--s-6); }
+.flush  { margin: 0; }
+/* A flex child that may shrink below its content: without min-width:0 a long
+   word stops the whole row from fitting, which is the single most common
+   layout fault in this codebase. */
+.grow   { flex: 1; min-width: 0; }
+.shrink { min-width: 0; }
+.accent { color: var(--accent); }
+.title-lg { font-size: var(--t-title); }
+.middle { align-items: center; }
 
 /* --------------------------------------------------------------- surface */
 
@@ -423,7 +479,20 @@ h4 { font-size: 1rem; }
 .nav__link:hover { background: var(--surface-2); color: var(--text); }
 .nav__link[aria-current="page"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
 
-.nav__actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+/* Pushed to the inline end of the header.
+   .nav__links carries flex: 1 and was what did the pushing, so below the
+   tabbar breakpoint — where the links are display: none — a signed-in header
+   collapsed into the mark and three round buttons bunched against the start
+   with the rest of the row empty. The signed-out header has a .spacer and was
+   never wrong; the margin resolves to zero whenever either of those is there
+   to absorb the free space, so it only takes effect where the bug was. */
+.nav__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-inline-start: auto;
+}
 
 
 /* mobile tab bar */
@@ -435,7 +504,7 @@ h4 { font-size: 1rem; }
   z-index: 60;
   height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  background: color-mix(in srgb, var(--surface) 98%, transparent);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border-block-start: 1px solid var(--border);
@@ -528,6 +597,12 @@ h4 { font-size: 1rem; }
 .btn--soft { background: var(--accent-soft); color: var(--accent-ink); }
 .btn--soft:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-soft) 70%, var(--accent) 12%); }
 
+/* A destructive action that is still only one press from routine ones.
+ * Ghost weight so it does not compete for attention, danger colour so it is
+ * never mistaken for the Deactivate button it sits beside. */
+.btn.is-danger { color: var(--danger); }
+.btn.is-danger:hover { background: var(--danger-soft); color: var(--danger-ink); }
+
 .btn--danger { background: var(--danger-soft); color: var(--danger-ink); }
 .btn--danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger-soft) 70%, var(--danger) 18%); }
 
@@ -546,6 +621,10 @@ h4 { font-size: 1rem; }
   color: var(--text-muted);
   display: flex;
   align-items: center;
+  /* A label and the hint beside it are a sentence, not two columns. Without
+     the wrap they split a phone-width field down the middle and each half set
+     one or two words a line. */
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -708,6 +787,36 @@ h4 { font-size: 1rem; }
 .choice-grid--tight .chip-radio__face { gap: 5px; padding: 9px 8px; font-size: .78rem; }
 .choice-grid--tight .chip-radio__count { padding: 1px 4px; font-size: .66rem; }
 
+/* Clipped to one line, a name stopped being a name: "Prophetic Bio…",
+   "Stories of th…". The tile is a deliberate fixed width, so the give comes
+   from its height instead — the grid row stretches its siblings to match, so a
+   wrapped name does not stagger the row. */
+.choice-grid--tight .chip-radio__face .truncate {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: break-word;
+  line-height: 1.3;
+}
+
+/* Category names are the only labels in this form as long as the thing they
+   name, and the card around them is a fixed column at every screen — so the
+   desktop was the worst case, not the phone: four tracks in 540px gave each
+   name 105px and clipped all eight to an ellipsis. Above phone width they get
+   one track fewer and a wider tile. Below it nothing changes: two columns is
+   already all a phone has room for, and the difficulty row beside them keeps
+   its four, whose labels are one short word each. */
+@media (min-width: 560px) {
+  .choice-grid--names { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+}
+
+/* And the other end of the same problem. On the narrowest phones two tracks
+   leave a name 52px — less than one word — and it comes apart mid-word:
+   "Prophet / ic / Biograp / hy". One track at that width is nine rows instead
+   of five, which is a scroll; two tracks is nine names nobody can read. */
+@media (max-width: 360px) {
+  .choice-grid--names { grid-template-columns: 1fr; }
+}
+
 .chip-radio { position: relative; }
 .chip-radio input { position: absolute; opacity: 0; pointer-events: none; }
 .chip-radio__face {
@@ -723,6 +832,9 @@ h4 { font-size: 1rem; }
   cursor: pointer;
   transition: all .15s var(--ease);
 }
+/* P2: names that wrap to two lines left their row ragged, because a chip was
+ * only as tall as its own text. */
+.chip-radio__face { min-height: 48px; }
 .chip-radio__face:hover { border-color: var(--accent); }
 .chip-radio input:checked + .chip-radio__face {
   border-color: var(--accent);
@@ -748,13 +860,6 @@ h4 { font-size: 1rem; }
   color: var(--accent-ink);
 }
 
-/* A choice the bank cannot fill stays visible and readable — the thinness is
-   information — but is plainly not selectable. */
-
-  cursor: not-allowed;
-  opacity: .5;
-  border-style: dashed;
-}
 .chip-radio.is-empty .chip-radio__face:hover { border-color: var(--border-strong); }
 
 /* --------------------------------------------------------- notifications */
@@ -978,6 +1083,20 @@ h4 { font-size: 1rem; }
   font-weight: 500;
   border: 1px solid transparent;
 }
+/* The sentence an alert is there to say. flex-grow alone is not enough: the
+   action beside it does not shrink, so on a phone the text was handed what was
+   left after a button — a column two words wide, one word a line at 320px. */
+.alert__body { flex: 1 1 auto; min-width: 0; }
+
+/* Below this the action goes under the sentence rather than beside it. The
+   basis is the row minus the icon and its gap, so the icon and the text still
+   share the first line and only the button is pushed down. */
+@media (max-width: 560px) {
+  .alert { flex-wrap: wrap; }
+  .alert__body { flex-basis: calc(100% - 44px); }
+  .alert > .btn { flex: 1 1 100%; justify-content: center; }
+}
+
 .alert--error   { background: var(--danger-soft);  color: var(--danger-ink);  border-color: color-mix(in srgb, var(--danger) 26%, transparent); }
 .alert--success { background: var(--success-soft); color: var(--success-ink); border-color: color-mix(in srgb, var(--success) 26%, transparent); }
 .alert--info    { background: var(--info-soft);    color: var(--info);        border-color: color-mix(in srgb, var(--info) 26%, transparent); }
@@ -1115,7 +1234,7 @@ h4 { font-size: 1rem; }
   font-size: 1.35rem;
   background: var(--accent-soft);
 }
-.feature h3 { font-size: 1.05rem; }
+.feature h2 { font-size: 1.05rem; }
 .feature p  { color: var(--text-muted); font-size: .92rem; }
 
 .steps { counter-reset: step; display: grid; gap: 16px; }
@@ -1174,7 +1293,64 @@ h4 { font-size: 1rem; }
   background: color-mix(in srgb, var(--cat-color, var(--accent)) 14%, transparent);
 }
 .cat-card__name { font-weight: 700; font-size: .98rem; }
-.cat-card__desc { font-size: .8rem; color: var(--text-muted); }
+/* Two lines, wrapped — not one line clipped.
+ *
+ * It was .truncate, which cut "Prophetic traditions and their narrators" in
+ * the middle of a word and left an ellipsis that reads as a defect. Clamping
+ * to two lines keeps every card the same height and lets the shorter
+ * descriptions finish their sentence. */
+.cat-card__desc {
+  font-size: .8rem;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* What the category holds, so the choice is informed where it is made. */
+.cat-card__count { margin-block-start: auto; padding-block-start: 4px; }
+.cat-card__count .num { color: var(--text); }
+
+/* Coverage cell: a count, the target it is measured against, and a bar.
+ *
+ * Replaces a red tag per cell. The target is 100 and the bank is in single
+ * digits, so every cell graded "danger" and the whole table read as one flat
+ * alarm. A proportional bar says how far off without shouting, and the cell is
+ * a link into the question list filtered to that category and difficulty —
+ * the screen that shows where the gaps are now leads to filling them. */
+.cov {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 74px;
+  padding: 4px 2px;
+  color: var(--text);
+}
+.cov:hover .cov__fill { background: var(--accent); }
+.cov__count { display: flex; align-items: baseline; gap: 4px; }
+.cov__count .num { font-size: .95rem; }
+.cov__target { font-size: .7rem; }
+.cov__bar {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.cov__fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 70%, transparent);
+  transition: background .15s var(--ease);
+}
+/* Nothing at all in it — the one state that is a problem rather than a
+ * distance, and the only one that keeps a colour. */
+.cov--empty .cov__count .num { color: var(--danger); }
+.cov--empty .cov__bar { background: color-mix(in srgb, var(--danger) 18%, transparent); }
 
 /* ============================================================== gameplay */
 
@@ -2081,15 +2257,26 @@ h4 { font-size: 1rem; }
 @media (max-width: 560px) {
   .nav__inner { padding-inline: 14px; gap: 6px; }
   .brand { margin-inline-end: 6px; min-width: 0; }
+  /* Kept on the signed-in header at every width, so it has to be able to give
+     way rather than widen the row past the screen. */
+  .brand > span:not(.brand__mark) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .nav__actions { flex-shrink: 1; min-width: 0; gap: 6px; }
   .nav__actions .btn--sm { padding-inline: 10px; }
 }
 
-@media (max-width: 430px) {
+@media (max-width: 360px) {
   /* The mark alone still identifies the site and is still the link home. The
-     word beside it is what stops two auth buttons fitting in French. */
-  .brand > span:not(.brand__mark) { display: none; }
-  .brand { margin-inline-end: 2px; }
+     word beside it is what stops two auth buttons fitting in French.
+     Signed out only: that header carries "Log in" and "Create an account" and
+     has no room to spare. A signed-in header carries three round buttons and
+     a hidden word there bought nothing — it left a phone showing four
+     unlabelled circles with no sign of whose site they belong to. */
+  .nav--plain .brand > span:not(.brand__mark) { display: none; }
+  .nav--plain .brand { margin-inline-end: 2px; }
   .nav__actions .btn--sm { padding-inline: 8px; font-size: .78rem; }
 }
 
@@ -2097,7 +2284,7 @@ h4 { font-size: 1rem; }
    together are wider than the screen. Log in keeps its label and its place —
    it sheds the button chrome and reads as the link it already was, which is
    what buys the room. Nothing is dropped from the header. */
-@media (max-width: 400px) {
+@media (max-width: 360px) {
   .nav__inner { padding-inline: 8px; gap: 3px; }
   .nav__actions { gap: 3px; }
   /* The round buttons keep their shape. Letting the action row shrink is what
@@ -2119,12 +2306,12 @@ h4 { font-size: 1rem; }
    "Se connecter" and "Créer un compte" beside the mark and two round buttons.
    A couple of points off the mark and the labels is all that is left to give,
    and it is less bad than dropping a control the visitor came for. */
-@media (max-width: 340px) {
+@media (max-width: 360px) {
   .brand__mark { width: 28px; height: 28px; border-radius: 9px; font-size: .92rem; }
   .nav__actions .btn--sm { padding-inline: 4px; font-size: .72rem; }
 }
 
-@media (max-width: 430px) {
+@media (max-width: 360px) {
   .chat__compose { padding-block: 8px; padding-inline: 10px; }
   .chat__row { gap: 6px; }
   .chat__tool { width: 32px; height: 32px; }
@@ -2307,9 +2494,46 @@ h4 { font-size: 1rem; }
     flex-direction: row;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
   }
   .admin__nav-link { white-space: nowrap; }
 }
+
+/* The taxonomy row's mark: the category's own colour behind its own icon, so
+   the list reads the way the category cards on the player's home screen do
+   rather than as a column of hex strings. */
+.cat-swatch {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  font-size: 1.05rem;
+  /* The colour is a player-facing fill, not a text background, and the icon
+     sitting on it is an emoji that brings its own colours. The overlay keeps
+     the mark legible whatever hue is chosen. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08);
+}
+
+/* The native colour control, sized to sit beside the text box that holds the
+   same value. Browsers draw the swatch inside their own padding, which is why
+   the inset is zeroed rather than left to the default. */
+.color-well {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+.color-well::-webkit-color-swatch-wrapper { padding: 0; }
+.color-well::-webkit-color-swatch { border: none; border-radius: 6px; }
+.color-well::-moz-color-swatch { border: none; border-radius: 6px; }
 
 /* ============================================================== support */
 
@@ -2461,7 +2685,7 @@ h4 { font-size: 1rem; }
 
 /* ========================================================== responsive */
 
-@media (max-width: 980px) {
+@media (max-width: 860px) {
   .chat { grid-template-columns: 270px 1fr; }
 }
 
@@ -2508,8 +2732,14 @@ h4 { font-size: 1rem; }
   .grid--badges { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-@media (max-width: 520px) {
+@media (max-width: 560px) {
   .grid--4      { grid-template-columns: repeat(2, 1fr); }
+  /* A trailing odd tile takes the whole row rather than sitting alone in half
+     of one — five stats in two columns left "Coins" stranded. Scoped to this
+     breakpoint because it is the one that pins the grid to two explicit
+     tracks: above it the columns come from auto-fit, where "span to the last
+     line" is not a count anybody can predict. */
+  .grid--4 > :last-child:nth-child(odd) { grid-column: 1 / -1; }
   .grid--stats  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid--badges { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hero__stats { gap: 22px; }
@@ -2699,9 +2929,10 @@ h4 { font-size: 1rem; }
 .ticket-stage--yourturn .ticket-stage__next { color: var(--warning-ink); }
 .ticket-stage--settled { opacity: .85; }
 
-/* A set too small to play is shown and disabled rather than hidden: somebody
-   looking for a set they know they wrote should find it, and be told what it
-   needs. */
+/* A choice the bank cannot fill — a set too small to play, a difficulty with
+   too few questions — is shown and disabled rather than hidden: somebody
+   looking for a set they know they wrote should find it and be told what it
+   needs, and the thinness is itself the information. */
 .chip-radio.is-empty .chip-radio__face {
   opacity: .5;
   cursor: not-allowed;
@@ -2735,7 +2966,7 @@ h4 { font-size: 1rem; }
   color: var(--accent-ink);
 }
 .sets__item .tag { margin-inline-start: auto; }
-@media (max-width: 720px) {
+@media (max-width: 860px) {
   .sets { grid-template-columns: 1fr; }
 }
 
@@ -3383,7 +3614,7 @@ h4 { font-size: 1rem; }
 
 /* Narrow: the label moves onto its own line so the two sides keep their halves
    and stay comparable, which is the whole point of the panel. */
-@media (max-width: 720px) {
+@media (max-width: 860px) {
   .cmp__row { grid-template-columns: 1fr 1fr; }
   .cmp__label { grid-column: 1 / -1; }
 }

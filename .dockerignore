@@ -3,3 +3,14 @@
 bin/
 tmp/
 *.log
+
+# Build output and installed packages: the image builds its own, and a stale
+# local copy must never shadow the stage output.
+node_modules/
+static/dist/
+
+# The long-form documents, now one directory. CLAUDE.md and README.md stay at
+# the root and are excluded by name, because the root is not a documents
+# directory and never becomes one.
+docs/
+*.md

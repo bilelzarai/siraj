@@ -1,6 +1,9 @@
 package views
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Base is the document shell: theme bootstrap, chrome, and the page body.
 templ Base(c Ctx, title string) {
@@ -12,7 +15,7 @@ templ Base(c Ctx, title string) {
 			<meta name="color-scheme" content="light dark"/>
 			<meta name="description" content={ c.T("app.description") }/>
 			<title>{ title } · { c.T("app.name") }</title>
-			<link rel="stylesheet" href={ c.Asset("/static/css/app.css") }/>
+			@styles(c)
 			<link rel="icon" href={ c.Asset("/static/img/favicon.svg") } type="image/svg+xml"/>
 			@themeBoot(c)
 		</head>
@@ -29,7 +32,10 @@ templ Base(c Ctx, title string) {
 				}
 				{ children... }
 			</main>
-			if c.IsAuthed() {
+			// Not under /admin: the admin surface has its own sections, and
+			// stacking the player's tab bar under them put two different
+			// navigations on one small screen.
+			if c.IsAuthed() && !strings.HasPrefix(c.Path, "/admin") {
 				@tabbar(c)
 			}
 			<div class="toast-host" id="toasts" aria-live="polite"></div>
@@ -37,20 +43,54 @@ templ Base(c Ctx, title string) {
 			// English of its own.
 			<template data-i18n-live-changed>{ c.T("common.liveChanged") }</template>
 			<template data-i18n-newmessage>{ c.T("messages.newMessageShort") }</template>
-			<script src={ c.Asset("/static/js/app.js") } defer></script>
+			@script(c)
 		</body>
 	</html>
+}
+
+// styles links the stylesheet the bundler built. It is a loop rather than one
+// tag because the build decides how many sheets an entry has, and the dev
+// server decides there are none — it delivers them through the module graph.
+templ styles(c Ctx) {
+	for _, href := range c.Stylesheets("js/app.js") {
+		<link rel="stylesheet" href={ href }/>
+	}
+}
+
+// script links the client runtime. type=module because that is what the build
+// emits; defer is implied by it and kept for the reader.
+//
+// A tree nobody has built links nothing here, and the page is still correct —
+// every mutation is a form the server can process alone.
+templ script(c Ctx) {
+	// The dev server's own module, which performs the replacement. Present on
+	// a laptop with one pointed at us, and nowhere else.
+	if dev := c.DevClient(); dev != "" {
+		<script src={ dev } type="module"></script>
+	}
+	if src, ok := c.Script("js/app.js"); ok {
+		<script src={ src } type="module" defer></script>
+	}
+	// The component runtime, linked from the first conversion onward. Deferred
+	// like the rest: every page it enhances is complete and usable before it
+	// arrives, which is the contract the whole client is written to.
+	if src, ok := c.Script("js/alpine.js"); ok {
+		<script src={ src } type="module" defer></script>
+	}
 }
 
 // themeBoot applies the stored theme before first paint, so there is no flash.
 //
 // It is a separate file, not an inline script, because the Content-Security-
-// Policy permits scripts from 'self' only. No defer: it has to run before the
-// body paints, which is the entire reason it exists.
+// Policy permits scripts from 'self' only. No defer and no module: both would
+// delay it past first paint, which is the entire reason it exists — so the
+// bundler copies this one verbatim instead of building it.
 //
 // Both layouts share it; two copies is how the two drifted apart before.
 templ themeBoot(c Ctx) {
-	<script src={ c.Asset("/static/js/boot.js") }></script>
+	if src := c.Copied("boot.js"); src != "" {
+		<script src={ src }></script>
+	}
 }
 
 // Bare is used by the play screen, which hides the chrome to stay focused.
@@ -62,7 +102,7 @@ templ Bare(c Ctx, title string) {
 			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 			<meta name="color-scheme" content="light dark"/>
 			<title>{ title } · { c.T("app.name") }</title>
-			<link rel="stylesheet" href={ c.Asset("/static/css/app.css") }/>
+			@styles(c)
 			<link rel="icon" href={ c.Asset("/static/img/favicon.svg") } type="image/svg+xml"/>
 			@themeBoot(c)
 		</head>
@@ -75,13 +115,16 @@ templ Bare(c Ctx, title string) {
 			// English of its own.
 			<template data-i18n-live-changed>{ c.T("common.liveChanged") }</template>
 			<template data-i18n-newmessage>{ c.T("messages.newMessageShort") }</template>
-			<script src={ c.Asset("/static/js/app.js") } defer></script>
+			@script(c)
 		</body>
 	</html>
 }
 
 templ navbar(c Ctx) {
-	<header class="nav">
+	// nav--plain is the signed-out header: a brand and two auth buttons, and
+	// the only one of the two that runs out of room on a phone. The styling
+	// that drops the brand word is scoped to it.
+	<header class={ "nav", templ.KV("nav--plain", !c.IsAuthed()) }>
 		<div class="nav__inner">
 			<a class="brand" href={ templ.SafeURL(homeHref(c)) }>
 				<span class="brand__mark" aria-hidden="true">{ c.T("app.mark") }</span>
@@ -202,7 +245,6 @@ templ localeMenu(c Ctx) {
 						type="submit"
 						aria-current={ boolAttr(loc.Code == c.Locale) }
 					>
-						<span aria-hidden="true">{ loc.Flag }</span>
 						<span>{ loc.Name }</span>
 					</button>
 				</form>

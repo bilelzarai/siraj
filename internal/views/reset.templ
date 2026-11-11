@@ -79,8 +79,18 @@ func (d ResetData) Problems(c Ctx) []FieldProblem {
 	return out
 }
 
+// resetTitle names the screen for what it actually is. An expired link shows
+// the expiry notice and nothing to fill in, so titling it "Choose a new
+// password" contradicted the only thing on the page.
+func resetTitle(c Ctx, d ResetData) string {
+	if d.Expired {
+		return c.T("auth.reset.expiredTitle")
+	}
+	return c.T("auth.reset.title")
+}
+
 templ Reset(c Ctx, d ResetData) {
-	@Base(c, c.T("auth.reset.title")) {
+	@Base(c, resetTitle(c, d)) {
 		<div class="shell shell--narrow stack">
 			@BackLink(c, "/login", c.T("auth.login.title"))
 			<div class="card card--pad-lg stack">

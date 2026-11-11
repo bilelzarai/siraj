@@ -1,0 +1,41 @@
+# The production overlay. It overrides the same service, so there is one
+# container either way, and it expects a TLS terminator in front of it:
+# APP_ENV=production refuses to start without HTTPS — a session cookie without
+# Secure travels in clear over any plain-HTTP hop, and one forgotten variable
+# must not silently downgrade every session on the deployment.
+#
+#   SESSION_SECRET=$(openssl rand -hex 32) BASE_URL=https://siraj.example \
+#     docker compose -f deploy/compose.yaml -f deploy/compose.prod.yaml up -d
+services:
+  # The development mail catcher, kept out of production. A profile nobody
+  # enables is how a service declared in the base file stays unstarted here:
+  # compose merges the two, the profile comes along, and an unselected profile
+  # does not run. It carries no required-variable guard, so it cannot fail the
+  # file before filtering (D3).
+  mail:
+    profiles: ["never-in-production"]
+
+  app:
+    environment:
+      APP_ENV: production
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET — openssl rand -hex 32}
+      # The absolute origin players reach, used in password-reset and invite
+      # links. Must be https:// in production.
+      BASE_URL: ${BASE_URL:?set BASE_URL to the public https:// origin}
+      SECURE_COOKIES: "true"
+      # The development mail catcher is not inherited. Empty means the mailer
+      # logs instead of sending, which is the documented behaviour with nothing
+      # configured; set a real host to turn outbound mail on.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      # One reverse proxy in front, so the peer address is read from the last
+      # X-Forwarded-For entry. Raise it if a CDN sits in front of that proxy;
+      # leave it at 0 when nothing is forwarding, or the rate limiters end up
+      # keyed on an address the caller chose for themselves.
+      TRUSTED_PROXY_HOPS: "1"
+    # The terminator publishes the port. Compose 2.24+ for !reset.
+    ports: !reset []

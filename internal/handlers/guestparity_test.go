@@ -293,7 +293,7 @@ func TestTheChosenPlayerGroupLooksChosen(t *testing.T) {
 		t.Fatal("no group tab is marked as chosen")
 	}
 
-	css, err := os.ReadFile(repoRootOf(t) + "/static/css/app.css")
+	css, err := os.ReadFile(repoRootOf(t) + "/web/src/css/app.css")
 	if err != nil {
 		t.Fatal(err)
 	}

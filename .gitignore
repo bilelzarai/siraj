@@ -23,8 +23,17 @@ data/
 *.out
 coverage.*
 
-# Compiled binaries built into the repository root.
+# Compiled binaries built into the repository root. bin/ is the one home for
+# build output; anything here is a stray that survives every checkout unnoticed.
 /sirajctl
 /server
+
+# An empty directory at the root that shadows internal/i18n/locales, which is
+# where the catalogues actually are. It has been deleted once; this stops it
+# coming back and misfiling the next person's translation keys.
+/locales/
 .neon
 node_modules/
+
+# Build output: the bundler writes it, the binary embeds it.
+static/dist/

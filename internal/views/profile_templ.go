@@ -277,7 +277,7 @@ func Profile(c Ctx, d ProfileData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "</section><div class=\"grid grid--2\"><section class=\"card stack\"><div class=\"card__head\" style=\"margin:0\"><span class=\"card__title\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "</section><div class=\"grid grid--2\"><section class=\"card stack\"><div class=\"card__head flush\"><span class=\"card__title\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -367,7 +367,7 @@ func Profile(c Ctx, d ProfileData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "</section><section class=\"card stack\"><div class=\"card__head\" style=\"margin:0\"><span class=\"card__title\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "</section><section class=\"card stack\"><div class=\"card__head flush\"><span class=\"card__title\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -388,7 +388,7 @@ func Profile(c Ctx, d ProfileData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "</section></div><section class=\"card stack\"><div class=\"card__head\" style=\"margin:0\"><span class=\"card__title\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "</section></div><section class=\"card stack\"><div class=\"card__head flush\"><span class=\"card__title\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -555,7 +555,7 @@ func Profile(c Ctx, d ProfileData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				if d.IsSelf {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<a class=\"tiny bold\" style=\"color:var(--accent)\" href=\"/history\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<a class=\"tiny bold accent\" href=\"/history\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -951,7 +951,7 @@ func EditProfile(c Ctx, d EditProfileData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 72, "</strong><div class=\"row\" style=\"gap:8px;flex-wrap:wrap\"><label class=\"btn btn--soft btn--sm\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 72, "</strong><div class=\"row\" style=\"gap:var(--s-4);flex-wrap:wrap\"><label class=\"btn btn--soft btn--sm\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1067,7 +1067,7 @@ func EditProfile(c Ctx, d EditProfileData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 80, "<div class=\"row\" style=\"gap:10px\"><button class=\"btn btn--primary\" type=\"submit\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 80, "<div class=\"row gap-5\"><button class=\"btn btn--primary\" type=\"submit\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

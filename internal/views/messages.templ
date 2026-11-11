@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/bilelzarai/siraj/internal/models"
+	"github.com/google/uuid"
 )
 
 type MessagesData struct {
@@ -79,7 +79,9 @@ templ Messages(c Ctx, d MessagesData) {
 					</div>
 					@threadSwitch(c, d)
 					<form class="chat__panel-search" method="get" action="/messages" role="search">
-						<span class="chat__panel-search-icon" aria-hidden="true">🔍</span>
+						<span class="chat__panel-search-icon" aria-hidden="true">
+							@IconSearch()
+						</span>
 						<input
 							class="input input--sm"
 							type="search"
@@ -140,9 +142,12 @@ templ Messages(c Ctx, d MessagesData) {
 			if d.Active == nil {
 				<section class="chat__thread">
 					<div class="chat__empty">
-						<div>
+						<div class="stack-sm">
 							<div style="font-size:2.4rem;opacity:.5" aria-hidden="true">💬</div>
 							<p class="muted">{ c.T("messages.selectConversation") }</p>
+							// The pane is the largest thing on the screen and held one
+							// sentence. The action it was describing lives here now.
+							<a class="btn btn--primary btn--sm" href="#start">{ c.T("threads.start") }</a>
 						</div>
 					</div>
 				</section>

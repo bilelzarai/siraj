@@ -63,6 +63,8 @@ func runSuite(ctx context.Context, adminURL string, m *testing.M) (int, error) {
 		admin.Close()
 		return 0, err
 	}
+	sweepLeakedDatabases(ctx, admin, "siraj_test_")
+
 	if _, err := admin.Exec(ctx, `CREATE DATABASE `+quoteIdent(name)); err != nil {
 		admin.Close()
 		return 0, err
@@ -139,4 +141,49 @@ func dotenvDatabaseURL() string {
 		dir = parent
 	}
 	return ""
+}
+
+// sweepLeakedDatabases drops what earlier runs left behind.
+//
+// The harness drops its own database in a deferred call, and a deferred call
+// is exactly what a kill signal skips: ^C during a slow test, a CI job
+// cancelled, an editor stopping a run. Each one leaves a database behind, and
+// they accumulated to 385 of them — 3.9 GB — before anybody noticed, because
+// nothing ever looked.
+//
+// Swept at the start rather than the end: a run that is killed cannot clean up
+// after itself by definition, so the only reliable moment is the next one.
+// Anything still connected is left alone — that is another run in progress,
+// not a leak.
+func sweepLeakedDatabases(ctx context.Context, admin *pgxpool.Pool, prefix string) {
+	rows, err := admin.Query(ctx, `
+		SELECT datname FROM pg_database
+		 WHERE datname LIKE $1
+		   AND NOT EXISTS (
+		         SELECT 1 FROM pg_stat_activity WHERE datname = pg_database.datname)`,
+		prefix+"%")
+	if err != nil {
+		fmt.Println("could not look for leaked test databases:", err)
+		return
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err == nil {
+			names = append(names, name)
+		}
+	}
+	rows.Close()
+
+	var swept int
+	for _, name := range names {
+		if _, err := admin.Exec(ctx, `DROP DATABASE IF EXISTS `+quoteIdent(name)); err == nil {
+			swept++
+		}
+	}
+	// Said out loud: a sweep that reports nothing looks identical to a sweep
+	// that never ran.
+	if swept > 0 {
+		fmt.Printf("swept %d leaked test database(s) left by an interrupted run\n", swept)
+	}
 }

@@ -1,0 +1,345 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/view"
+)
+
+// Bar is one row of a simple CSS bar chart.
+type Bar struct {
+	Label string
+	Value int
+	Max   int
+	Color string
+}
+
+// KPI is one tile of the dashboard.
+type KPI struct {
+	Label     string
+	Icon      string
+	Value     string
+	Delta     int
+	DeltaNote string
+	Attention bool
+}
+
+// Row is one line of "needs attention" and of the activity feed.
+type Row struct {
+	Icon   string
+	Text   string
+	Meta   string
+	Href   string
+	Action string // the button at the end of a "needs attention" row
+	Tone   string // c-lamp | c-info | c-danger | c-brand
+	Count  int
+}
+
+// CatRow is one line of the "Category performance" table (A01).
+type CatRow struct {
+	Name     string
+	Icon     string
+	Color    string
+	Plays    int32
+	Accuracy int32
+}
+
+// DashboardData backs A01.
+type DashboardData struct {
+	Greeting           string
+	Today              string
+	KPIs               []KPI
+	Games              []Bar
+	Attention          []Row
+	ByDomain           []Bar
+	ByLanguage         []Bar
+	Categories         []CatRow
+	Recent             []Row
+	Days               int32 // 7 | 14 | 30, the window of the "Games played" chart
+	IslamicOnlyPercent int
+}
+
+templ Dashboard(v *view.Ctx, s Shell, d DashboardData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div>
+				<h1>{ d.Greeting }</h1>
+				<p class="sub">{ d.Today + ". " + v.Tr("admin.greeting") }</p>
+			</div>
+			<div class="actions">
+				<a class="btn btn-primary" href="/admin/questions/new">
+					@Icon("plus")
+					{ v.Tr("admin.new_question") }
+				</a>
+			</div>
+		</div>
+		<div class="kpis">
+			for _, k := range d.KPIs {
+				<div class={ "kpi", templ.KV("is-attention", k.Attention) }>
+					<div class="kpi-label">
+						@Icon(k.Icon)
+						{ k.Label }
+					</div>
+					<div class="kpi-value">{ k.Value }</div>
+					if k.DeltaNote != "" {
+						<div class="kpi-meta">
+							<span class={ "delta", deltaClass(k.Delta) }>
+								@Icon(deltaIcon(k.Delta))
+								{ fmt.Sprintf("%d%%", abs(k.Delta)) }
+							</span>
+							{ k.DeltaNote }
+						</div>
+					}
+				</div>
+			}
+		</div>
+		<div class="split side-first">
+			<div class="stack">
+				<section class="panel">
+					<div class="panel-head">
+						<div>
+							<h2>{ v.Tr("admin.games_played") }</h2>
+							<p class="hint">{ v.Tr("admin.last_days", "n", d.Days) }</p>
+						</div>
+						<div class="segmented">
+							for _, n := range []int32{7, 14, 30} {
+								<a href={ templ.URL(fmt.Sprintf("/admin?days=%d", n)) } aria-pressed={ fmt.Sprint(d.Days == n) }>
+									{ v.Tr("admin.n_days", "n", n) }
+								</a>
+							}
+						</div>
+					</div>
+					<div class="panel-body">
+						if len(d.Games) == 0 {
+							<p class="muted">{ v.Tr("admin.no_rows") }</p>
+						} else {
+							<div class="bars">
+								for i, b := range d.Games {
+									<div class={ "bar", templ.KV("is-today", i == len(d.Games)-1) }>
+										<i style={ fmt.Sprintf("--h:%d%%", pct(b.Value, b.Max)) } data-v={ fmt.Sprint(b.Value) }></i>
+										<span>{ b.Label }</span>
+									</div>
+								}
+							</div>
+						}
+					</div>
+				</section>
+				<section class="panel">
+					<div class="panel-head">
+						<div>
+							<h2>{ v.Tr("admin.category_performance") }</h2>
+							<p class="hint">{ v.Tr("admin.live_categories_only") }</p>
+						</div>
+						<a class="btn btn-ghost btn-sm" href="/admin/categories">
+							{ v.Tr("admin.all_categories") }
+							@IconClass("chevron-right", "icon-flip")
+						</a>
+					</div>
+					<div class="table-wrap">
+						<table class="table stack-sm">
+							<thead>
+								<tr>
+									<th>{ v.Tr("admin.category") }</th>
+									<th class="t-num">{ v.Tr("admin.plays_today") }</th>
+									<th>{ v.Tr("admin.accuracy") }</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, cat := range d.Categories {
+									<tr>
+										<td class="cell-first" data-label={ v.Tr("admin.category") }>
+											<div class="cell-main">
+												<span class="cat-tile" style={ "--c:" + cat.Color } aria-hidden="true">
+													@AppIcon(cat.Icon)
+												</span>
+												<div class="t">{ cat.Name }</div>
+											</div>
+										</td>
+										<td class="t-num" data-label={ v.Tr("admin.plays_today") }>{ fmt.Sprint(cat.Plays) }</td>
+										<td data-label={ v.Tr("admin.accuracy") }>
+											<div class="meter">
+												<div class={ "meter-bar", templ.KV("warn", cat.Accuracy < 60) }>
+													<i style={ fmt.Sprintf("--v:%d%%", cat.Accuracy) }></i>
+												</div>
+												<span class="v">{ fmt.Sprint(cat.Accuracy) }%</span>
+											</div>
+										</td>
+									</tr>
+								}
+								if len(d.Categories) == 0 {
+									<tr>
+										<td colspan="3" class="muted">{ v.Tr("admin.no_rows") }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</section>
+			</div>
+			<div class="stack">
+				<section class="panel">
+					<div class="panel-head">
+						<h2>{ v.Tr("admin.needs_attention") }</h2>
+						if len(d.Attention) > 0 {
+							<span class="badge badge-lamp no-dot">{ v.Tr("admin.n_items", "n", len(d.Attention)) }</span>
+						}
+					</div>
+					if len(d.Attention) == 0 {
+						<div class="panel-body">
+							<p class="muted">{ v.Tr("admin.nothing_waiting") }</p>
+						</div>
+					} else {
+						<ul class="list">
+							for _, r := range d.Attention {
+								<li class="list-item">
+									<span class={ "tl-dot", r.Tone }>
+										@Icon(r.Icon)
+									</span>
+									<div class="grow">
+										<div class="t">{ r.Text }</div>
+										if r.Meta != "" {
+											<div class="s">{ r.Meta }</div>
+										}
+									</div>
+									<a class="btn btn-sm" href={ templ.URL(r.Href) }>{ r.Action }</a>
+								</li>
+							}
+						</ul>
+					}
+				</section>
+				<section class="panel">
+					<div class="panel-head">
+						<h2>{ v.Tr("admin.players_by_domain") }</h2>
+						<a class="btn btn-ghost btn-sm" href="/admin/domains">{ v.Tr("admin.domains") }</a>
+					</div>
+					<div class="panel-body">
+						@meterList(d.ByDomain, false)
+						<p class="help">{ v.Tr("admin.players_by_domain_help", "percent", d.IslamicOnlyPercent) }</p>
+					</div>
+				</section>
+				<section class="panel">
+					<div class="panel-head">
+						<h2>{ v.Tr("admin.players_by_language") }</h2>
+					</div>
+					<div class="panel-body">
+						@meterList(d.ByLanguage, true)
+					</div>
+				</section>
+				<section class="panel">
+					<div class="panel-head">
+						<h2>{ v.Tr("admin.recent_activity") }</h2>
+						<a class="btn btn-ghost btn-sm" href="/admin/audit">{ v.Tr("admin.audit") }</a>
+					</div>
+					if len(d.Recent) == 0 {
+						<div class="panel-body">
+							<p class="muted">{ v.Tr("admin.no_rows") }</p>
+						</div>
+					} else {
+						<ul class="timeline">
+							for _, r := range d.Recent {
+								<li>
+									<span class={ "tl-dot", r.Tone }>
+										@Icon(r.Icon)
+									</span>
+									<div>
+										<b>{ r.Text }</b>
+										<div class="s">{ r.Meta }</div>
+									</div>
+								</li>
+							}
+						</ul>
+					}
+				</section>
+			</div>
+		</div>
+	}
+}
+
+// meterList is the "Players by domain" / "by language" block: a label, the number and
+// a bar in the domain's own colour.
+templ meterList(bars []Bar, percent bool) {
+	if len(bars) == 0 {
+		<p class="muted">—</p>
+	} else {
+		for _, b := range bars {
+			<div class="field">
+				<div class="row">
+					<span class="label">{ b.Label }</span>
+					<span class="spacer"></span>
+					<span class="num muted">
+						{ fmt.Sprint(b.Value) }
+						if percent {
+							%
+						}
+					</span>
+				</div>
+				<div class="meter-bar thick">
+					<i style={ fmt.Sprintf("--v:%d%%;background:%s", pct(b.Value, b.Max), barColor(b.Color)) }></i>
+				</div>
+			</div>
+		}
+	}
+}
+
+// barChart is the plain label/bar/number list the health page uses.
+templ barChart(bars []Bar) {
+	if len(bars) == 0 {
+		<p class="muted">—</p>
+	} else {
+		<div class="bars-h">
+			for _, b := range bars {
+				<div class="field">
+					<div class="row">
+						<span class="label">{ b.Label }</span>
+						<span class="spacer"></span>
+						<b class="num">{ fmt.Sprint(b.Value) }</b>
+					</div>
+					<div class="meter-bar thick">
+						<i style={ fmt.Sprintf("--v:%d%%;background:%s", pct(b.Value, b.Max), barColor(b.Color)) }></i>
+					</div>
+				</div>
+			}
+		</div>
+	}
+}
+
+func pct(v, max int) int {
+	if max <= 0 {
+		return 0
+	}
+	p := v * 100 / max
+	if p > 100 {
+		return 100
+	}
+	if p < 2 && v > 0 {
+		return 2
+	}
+	return p
+}
+
+func barColor(c string) string {
+	if c == "" {
+		return "var(--brand)"
+	}
+	return c
+}
+
+func deltaClass(d int) string {
+	if d < 0 {
+		return "down"
+	}
+	return "up"
+}
+
+func deltaIcon(d int) string {
+	if d < 0 {
+		return "trend-down"
+	}
+	return "trend-up"
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}

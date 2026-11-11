@@ -1,0 +1,11 @@
+DROP VIEW IF EXISTS leaderboard_periods;
+DROP MATERIALIZED VIEW IF EXISTS leaderboard_alltime;
+DROP MATERIALIZED VIEW IF EXISTS leaderboard_monthly;
+DROP TABLE IF EXISTS leaderboard_weekly;
+DROP TABLE IF EXISTS user_achievements;
+DROP TABLE IF EXISTS achievement_translations;
+DROP TABLE IF EXISTS achievements;
+DROP TABLE IF EXISTS xp_events;
+DROP TABLE IF EXISTS daily_activity;
+DROP TABLE IF EXISTS user_domain_stats;
+DROP TABLE IF EXISTS user_category_stats;

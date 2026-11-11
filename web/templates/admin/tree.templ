@@ -1,0 +1,302 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+)
+
+// The hierarchy screen: one tree, any depth, official and player branches together.
+//
+// It replaces nothing yet — A04 (domains) and A05 (categories) still edit the v1
+// tables while the cut-over happens query by query (checklist AD-2). This is the only
+// screen through which a node below the old second level can be created at all.
+//
+// Children arrive a level at a time over htmx, never the whole subtree: a tree with
+// ten thousand nodes under it must cost the same to open as one with three.
+
+// TreeNode is one row of the tree.
+type TreeNode struct {
+	ID        int64
+	Name      string
+	Slug      string
+	Type      string
+	Icon      string
+	Color     string
+	Status    string
+	Visible   string
+	Depth     int
+	Children  int
+	Questions int
+	Official  bool
+	// Extension is true for a player's branch hanging under an official node.
+	Extension bool
+}
+
+// TreeCrumb is one step of the trail above the list.
+type TreeCrumb struct {
+	ID       int64
+	Name     string
+	Official bool
+}
+
+// TreeData backs the hierarchy screen.
+type TreeData struct {
+	// Parent is the node being looked inside; zero means the roots.
+	Parent   int64
+	Trail    []TreeCrumb
+	Nodes    []TreeNode
+	Page     int
+	Pages    int
+	Total    int
+	From     int
+	To       int
+	Query    string
+	Stats    TreeStats
+	Languages []string
+}
+
+// TreeStats is what the open branch holds.
+type TreeStats struct {
+	Descendants      int
+	DirectQuestions  int
+	SubtreeQuestions int
+}
+
+templ Tree(v *view.Ctx, s Shell, d TreeData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div>
+				<h1>{ v.Tr("admin.hierarchy") }</h1>
+				<p class="sub">{ v.Tr("admin.hierarchy_sub") }</p>
+			</div>
+			<div class="actions">
+				<button class="btn btn-primary" type="button" data-open="node-new">
+					@IconClass("plus", "icon-sm")
+					if d.Parent == 0 {
+						{ v.Tr("admin.new_domain") }
+					} else {
+						{ v.Tr("admin.new_child") }
+					}
+				</button>
+			</div>
+		</div>
+		<section class="panel">
+			<div class="toolbar">
+				@treeTrail(v, d)
+				<span class="spacer"></span>
+				<form class="toolbar-search" method="get" action="/admin/tree">
+					<input type="hidden" name="parent" value={ fmt.Sprint(d.Parent) }/>
+					<div class="input-icon">
+						@IconClass("search", "icon")
+						<input
+							class="input"
+							type="search"
+							name="q"
+							value={ d.Query }
+							placeholder={ v.Tr("admin.search_hierarchy") }
+							aria-label={ v.Tr("admin.search_hierarchy") }
+						/>
+					</div>
+				</form>
+			</div>
+			if d.Parent > 0 {
+				<div class="tree-stats">
+					<span>{ v.Tr("admin.descendants", "n", d.Stats.Descendants) }</span>
+					<span>{ v.Tr("admin.direct_questions", "n", d.Stats.DirectQuestions) }</span>
+					<span>{ v.Tr("admin.subtree_questions", "n", d.Stats.SubtreeQuestions) }</span>
+				</div>
+			}
+			<div class="table-wrap">
+				<table class="table stack-sm">
+					<thead>
+						<tr>
+							<th scope="col">{ v.Tr("admin.name") }</th>
+							<th scope="col">{ v.Tr("admin.owner") }</th>
+							<th scope="col" class="t-num">{ v.Tr("admin.children") }</th>
+							<th scope="col" class="t-num">{ v.Tr("admin.questions") }</th>
+							<th scope="col">{ v.Tr("admin.status") }</th>
+							<th scope="col"><span class="sr-only">{ v.Tr("admin.actions") }</span></th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(d.Nodes) == 0 {
+							<tr>
+								<td colspan="6">
+									<div class="empty"><p>{ v.Tr("admin.no_nodes") }</p></div>
+								</td>
+							</tr>
+						}
+						for _, n := range d.Nodes {
+							<tr>
+								<td data-label={ v.Tr("admin.name") }>
+									<span class="cell-main">
+										<span class="cat-tile" style={ "--c:" + first(n.Color, "var(--brand)") } aria-hidden="true">
+											@AppIcon(first(n.Icon, "book"))
+										</span>
+										<span class="min0">
+											<a class="t" href={ templ.URL(fmt.Sprintf("/admin/tree?parent=%d", n.ID)) }>{ n.Name }</a>
+											<span class="s mono">{ n.Slug }</span>
+										</span>
+									</span>
+								</td>
+								<td data-label={ v.Tr("admin.owner") }>
+									if n.Official {
+										<span class="badge badge-info no-dot">{ v.Tr("admin.official") }</span>
+									} else if n.Extension {
+										<span class="badge badge-lamp no-dot">{ v.Tr("admin.extension") }</span>
+									} else {
+										<span class="badge badge-neutral no-dot">{ v.Tr("admin.player_owned") }</span>
+									}
+								</td>
+								<td data-label={ v.Tr("admin.children") } class="t-num num">{ fmt.Sprint(n.Children) }</td>
+								<td data-label={ v.Tr("admin.questions") } class="t-num num">{ fmt.Sprint(n.Questions) }</td>
+								<td data-label={ v.Tr("admin.status") }>
+									<span class={ "badge", "no-dot", statusBadge(n.Status) }>{ v.Tr("admin.status." + n.Status) }</span>
+								</td>
+								<td class="cell-actions">
+									<a class="btn btn-sm" href={ templ.URL(fmt.Sprintf("/admin/tree?parent=%d", n.ID)) }>
+										{ v.Tr("admin.open") }
+									</a>
+									@treeRowMenu(v, n)
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			<div class="panel-foot">
+				<span class="result-meta">{ v.Tr("admin.showing", "from", d.From, "to", d.To, "total", d.Total) }</span>
+				if d.Pages > 1 {
+					<nav class="pagination" aria-label={ v.Tr("admin.pages") }>
+						for i := 1; i <= d.Pages; i++ {
+							<a
+								class="page-n"
+								href={ templ.URL(fmt.Sprintf("/admin/tree?parent=%d&page=%d", d.Parent, i)) }
+								aria-current={ ariaPage(i == d.Page) }
+							>{ fmt.Sprint(i) }</a>
+						}
+					</nav>
+				}
+			</div>
+		</section>
+		@treeNewDialog(v, d)
+	}
+}
+
+// treeTrail is the breadcrumb: where in the tree this list is.
+templ treeTrail(v *view.Ctx, d TreeData) {
+	<nav class="crumbs" aria-label={ v.Tr("admin.hierarchy") }>
+		<a href="/admin/tree">{ v.Tr("admin.all_domains") }</a>
+		for _, c := range d.Trail {
+			@IconClass("chevron-right", "icon-sm icon-flip")
+			<a href={ templ.URL(fmt.Sprintf("/admin/tree?parent=%d", c.ID)) }>
+				{ c.Name }
+				if !c.Official {
+					{ " " }
+					<span class="badge badge-lamp no-dot">{ v.Tr("admin.player_owned") }</span>
+				}
+			</a>
+		}
+	</nav>
+}
+
+templ treeRowMenu(v *view.Ctx, n TreeNode) {
+	<div class="menu-wrap">
+		<button
+			class="icon-btn sm"
+			type="button"
+			data-menu
+			aria-haspopup="menu"
+			aria-expanded="false"
+			aria-label={ v.Tr("admin.more_actions") }
+		>
+			@IconClass("more", "icon-sm")
+		</button>
+		<div class="menu menu-row" role="menu">
+			<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/tree/%d/status", n.ID)) }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				if n.Status == "published" {
+					<button role="menuitem" type="submit" name="status" value="draft">
+						@IconClass("eye-off", "icon-sm")
+						{ v.Tr("admin.unpublish") }
+					</button>
+				} else {
+					<button role="menuitem" type="submit" name="status" value="published">
+						@IconClass("eye", "icon-sm")
+						{ v.Tr("admin.publish") }
+					</button>
+				}
+			</form>
+			<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/tree/%d/archive", n.ID)) }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button role="menuitem" type="submit" class="danger" data-confirm-text={ v.Tr("admin.archive_branch_confirm") }>
+					@IconClass("archive", "icon-sm")
+					{ v.Tr("admin.archive_branch") }
+				</button>
+			</form>
+		</div>
+	</div>
+}
+
+// treeNewDialog creates a node under whatever the screen is showing — which is how a
+// tenth level gets made: open the ninth, add a child.
+templ treeNewDialog(v *view.Ctx, d TreeData) {
+	<div class="modal" id="node-new" hidden>
+		<form class="modal-card" method="post" action="/admin/tree">
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<input type="hidden" name="parent" value={ fmt.Sprint(d.Parent) }/>
+			<div class="modal-head">
+				<h2>
+					if d.Parent == 0 {
+						{ v.Tr("admin.new_domain") }
+					} else {
+						{ v.Tr("admin.new_child") }
+					}
+				</h2>
+				<button class="icon-btn sm" type="button" data-close aria-label={ v.Tr("action.close") }>
+					@IconClass("x", "icon-sm")
+				</button>
+			</div>
+			<div class="modal-body">
+				<div class="field">
+					<label class="label" for="node-slug">{ v.Tr("admin.slug") }</label>
+					<input class="input" id="node-slug" name="slug" required pattern="[a-z0-9-]+"/>
+					<span class="help">{ v.Tr("admin.slug_help") }</span>
+				</div>
+				for _, lang := range d.Languages {
+					<div class="field">
+						<label class="label" for={ "node-name-" + lang }>
+							{ v.Tr("admin.name") + " · " + i18n.Native[lang] }
+							if lang == i18n.Fallback {
+								{ " *" }
+							}
+						</label>
+						<input
+							class="input"
+							id={ "node-name-" + lang }
+							name={ "name_" + lang }
+							dir={ i18n.Dir(lang) }
+							required?={ lang == i18n.Fallback }
+						/>
+					</div>
+				}
+				<div class="grid grid-2">
+					<div class="field">
+						<label class="label" for="node-type">{ v.Tr("admin.node_type") }</label>
+						<input class="input" id="node-type" name="node_type" value="node"/>
+						<span class="help">{ v.Tr("admin.node_type_help") }</span>
+					</div>
+					<div class="field">
+						<label class="label" for="node-icon">{ v.Tr("admin.icon") }</label>
+						<input class="input" id="node-icon" name="icon" value="book"/>
+					</div>
+				</div>
+			</div>
+			<div class="modal-foot">
+				<button class="btn" type="button" data-close>{ v.Tr("action.cancel") }</button>
+				<button class="btn btn-primary" type="submit">{ v.Tr("action.create") }</button>
+			</div>
+		</form>
+	</div>
+}

@@ -1,0 +1,241 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/view"
+)
+
+// A11, the audit log. The shared table could not draw this screen: the design groups
+// the rows under the day they happened on, puts the actor behind their initials, says
+// which area of the console a change belongs to, and opens the recorded diff in place.
+// It is its own page for those four reasons, and it pages like every other list.
+
+// AuditPerPage is how many entries one page carries. The handler reads it, so the
+// "N entries" line and the rows can never describe different amounts.
+const AuditPerPage = 50
+
+// AuditChange is one field the entry recorded, as "was → now".
+type AuditChange struct {
+	Field string
+	From  string
+	To    string
+}
+
+// AuditEntry is one row of the log.
+type AuditEntry struct {
+	// Day is the heading this row belongs under ("Today", "Yesterday", a date). The
+	// handler sets it on the first row of each day and leaves it empty on the rest.
+	Day      string
+	Time     string
+	Actor    string
+	Initials string
+	Color    string
+	// System is true for the worker's own entries, which have no actor.
+	System  bool
+	Action  string
+	Icon    string
+	Target  string
+	Area    string
+	Changes []AuditChange
+}
+
+// AuditOption is one entry of the actor and area menus.
+type AuditOption struct {
+	Value string
+	Label string
+}
+
+// AuditDay is one day of the log, with the rows that happened on it. The log is read
+// by day, and a day can be folded away when it is not the one being looked at.
+type AuditDay struct {
+	Label   string
+	Entries []AuditEntry
+}
+
+// AuditData backs A11.
+type AuditData struct {
+	Entries []AuditEntry
+	Groups  []AuditDay
+	Actors  []AuditOption
+	Areas   []AuditOption
+	Q       string
+	Actor   string
+	Area    string
+	Days    int
+	Page    int
+	Pages   int
+	Total   int
+	From    int
+	To      int
+	Query   string
+}
+
+templ Audit(v *view.Ctx, s Shell, d AuditData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div>
+				<h1>{ v.Tr("admin.audit") }</h1>
+				<p class="sub">{ v.Tr("admin.audit_sub") }</p>
+			</div>
+			<div class="actions">
+				<a class="btn" href={ templ.URL(auditHref("/admin/audit.csv", d)) }>
+					@IconClass("download", "icon-sm")
+					{ v.Tr("admin.export_csv") }
+				</a>
+			</div>
+		</div>
+		<section class="panel">
+			<div class="toolbar">
+				<form class="toolbar-search" method="get" action="/admin/audit">
+					<input type="hidden" name="days" value={ fmt.Sprint(d.Days) }/>
+					<input type="hidden" name="actor" value={ d.Actor }/>
+					<input type="hidden" name="area" value={ d.Area }/>
+					<div class="input-icon">
+						@IconClass("search", "icon")
+						<input
+							class="input"
+							type="search"
+							name="q"
+							value={ d.Q }
+							placeholder={ v.Tr("admin.search_audit") }
+							aria-label={ v.Tr("admin.search_audit") }
+						/>
+					</div>
+				</form>
+				<select
+					class="select"
+					aria-label={ v.Tr("admin.actor") }
+					onchange="location.href=this.value"
+				>
+					for _, o := range d.Actors {
+						<option value={ auditHref("/admin/audit", d, "actor", o.Value) } selected?={ d.Actor == o.Value }>
+							{ o.Label }
+						</option>
+					}
+				</select>
+				<select
+					class="select"
+					aria-label={ v.Tr("admin.area") }
+					onchange="location.href=this.value"
+				>
+					for _, o := range d.Areas {
+						<option value={ auditHref("/admin/audit", d, "area", o.Value) } selected?={ d.Area == o.Value }>
+							{ o.Label }
+						</option>
+					}
+				</select>
+				<span class="spacer"></span>
+				<div class="segmented" role="group" aria-label={ v.Tr("admin.range") }>
+					for _, r := range []struct {
+						Days  int
+						Label string
+					}{{1, v.Tr("admin.range_24h")}, {7, v.Tr("admin.range_7d")}, {30, v.Tr("admin.range_30d")}} {
+						<a
+							href={ templ.URL(auditHref("/admin/audit", d, "days", fmt.Sprint(r.Days))) }
+							aria-pressed={ fmt.Sprint(d.Days == r.Days) }
+						>{ r.Label }</a>
+					}
+				</div>
+			</div>
+			<div class="table-wrap">
+				<table class="table audit-table stack-sm">
+					<thead>
+						<tr>
+							<th scope="col">{ v.Tr("admin.time") }</th>
+							<th scope="col">{ v.Tr("admin.who") }</th>
+							<th scope="col">{ v.Tr("admin.action") }</th>
+							<th scope="col">{ v.Tr("admin.target") }</th>
+							<th scope="col">{ v.Tr("admin.area") }</th>
+						</tr>
+					</thead>
+					if len(d.Entries) == 0 {
+						<tbody>
+							<tr>
+								<td colspan="5">
+									<div class="empty"><p>{ v.Tr("admin.no_audit") }</p></div>
+								</td>
+							</tr>
+						</tbody>
+					}
+					for _, day := range d.Groups {
+						<tbody data-day>
+							<tr class="day-row">
+								<th colspan="5" scope="colgroup">
+									<button
+										class="day-toggle"
+										type="button"
+										data-day-toggle
+										aria-expanded="true"
+									>
+										@IconClass("chevron-down", "icon-sm")
+										<span>{ day.Label }</span>
+										<span class="tag">{ fmt.Sprint(len(day.Entries)) }</span>
+									</button>
+								</th>
+							</tr>
+							for _, e := range day.Entries {
+								<tr>
+								<td data-label={ v.Tr("admin.time") } class="mono">{ e.Time }</td>
+								<td data-label={ v.Tr("admin.who") }>
+									<span class="cell-main">
+										<span class={ "avatar", "sm", templ.KV("system", e.System) } style={ "--c:" + e.Color }>
+											if e.System {
+												@IconClass("zap", "icon-sm")
+											} else {
+												{ e.Initials }
+											}
+										</span>
+										<b>{ e.Actor }</b>
+									</span>
+								</td>
+								<td data-label={ v.Tr("admin.action") }>
+									<span class="action-cell">
+										<span class="action-name">
+											@IconClass(e.Icon, "icon-sm")
+											{ e.Action }
+										</span>
+										if len(e.Changes) > 0 {
+											<details class="change">
+												<summary>
+													@IconClass("chevron-right", "icon-sm icon-flip")
+													{ v.Tr("admin.show_change") }
+												</summary>
+												<div class="change-diff">
+													for _, c := range e.Changes {
+														if c.From != "" {
+															<span class="was">{ "− " + c.Field + ": " + c.From }</span>
+														}
+														<span class="now">{ "+ " + c.Field + ": " + c.To }</span>
+													}
+												</div>
+											</details>
+										}
+									</span>
+								</td>
+								<td data-label={ v.Tr("admin.target") }>{ e.Target }</td>
+									<td data-label={ v.Tr("admin.area") }>
+										<span class="badge badge-neutral no-dot">{ e.Area }</span>
+									</td>
+								</tr>
+							}
+						</tbody>
+					}
+				</table>
+			</div>
+			<div class="panel-foot">
+				<span class="result-meta">
+					if d.Days > 0 {
+						{ v.Tr("admin.audit_range", "days", d.Days, "total", d.Total) }
+					} else {
+						{ v.Tr("admin.showing", "from", d.From, "to", d.To, "total", d.Total) }
+					}
+				</span>
+				if d.Page < d.Pages {
+					<a class="btn" href={ templ.URL(auditHref("/admin/audit", d, "page", fmt.Sprint(d.Page+1))) }>
+						{ v.Tr("admin.load_older") }
+					</a>
+				}
+			</div>
+		</section>
+	}
+}

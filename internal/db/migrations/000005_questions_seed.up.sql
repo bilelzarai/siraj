@@ -1,0 +1,6 @@
+-- No seed questions. The question bank is real content: staff write and publish it in
+-- the admin console (A06, A07), and players suggest their own sets (T-40).
+--
+-- This file used to insert the sample bank of the v2 prototype. It was removed so that
+-- no database ever serves invented questions to a player. It stays in place, empty,
+-- because the migration version was already applied on existing databases.

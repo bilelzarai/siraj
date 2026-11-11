@@ -1,0 +1,305 @@
+// Package auth holds the entry screens: sign in, sign up, guest name, password reset.
+package auth
+
+import (
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// Form carries what a submitted form has to show again: the values the player typed
+// and the errors the service returned, by field name.
+type Form struct {
+	Values map[string]string
+	Errors map[string]string
+	Error  string // one message above the submit button
+	Google bool   // show the Google button (GOOGLE_CLIENT_ID is set)
+	Guest  bool   // the viewer is a guest turning into an account (RL-04)
+	Token  string // password reset link
+}
+
+func (f Form) Value(name string) string { return f.Values[name] }
+func (f Form) Err(name string) string   { return f.Errors[name] }
+
+templ top(v *view.Ctx, closeTo string) {
+	<div class="row">
+		<a class="brand" href="/">
+			<span class="brand-mark">
+				@components.Lamp()
+			</span>
+			<span class="brand-name">{ v.Tr("app.name") }</span>
+		</a>
+		<span class="spacer"></span>
+		<a class="icon-btn sm" href={ templ.URL(closeTo) } aria-label={ v.Tr("action.close") }>
+			@components.Icon("x")
+		</a>
+	</div>
+}
+
+// field is one labelled input with its inline error (NF-02).
+templ field(id string, label string, kind string, value string, autocomplete string, errMsg string, help string) {
+	@fieldWith(id, label, kind, value, autocomplete, errMsg, help, "")
+}
+
+// fieldWith is the same field with a placeholder, as the design screens show them.
+templ fieldWith(id string, label string, kind string, value string, autocomplete string, errMsg string, help string, placeholder string) {
+	<div class="field">
+		<label class="label" for={ id }>{ label }</label>
+		<input
+			class={ "input", templ.KV("has-error", errMsg != "") }
+			id={ id }
+			name={ id }
+			type={ kind }
+			value={ value }
+			autocomplete={ autocomplete }
+			if placeholder != "" {
+				placeholder={ placeholder }
+			}
+			if errMsg != "" {
+				aria-invalid="true"
+				aria-describedby={ id + "-msg" }
+			}
+		/>
+		if errMsg != "" {
+			<span class="err" id={ id + "-msg" }>{ errMsg }</span>
+		} else if help != "" {
+			<span class="help" id={ id + "-msg" }>{ help }</span>
+		}
+	</div>
+}
+
+// SignIn is prototype screen 2 (AU-02).
+templ SignIn(v *view.Ctx, f Form) {
+	@layouts.Focus(v, v.Tr("action.signin")) {
+		<div class="auth-wrap">
+			<div class="auth-card">
+				@top(v, "/welcome")
+				<h1>{ v.Tr("action.signin") }</h1>
+				<p class="muted">{ v.Tr("signin.subtitle") }</p>
+				<form method="post" action="/signin" class="auth-form" novalidate>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					@field("login", v.Tr("auth.email_or_username"), "text", f.Value("login"), "username", f.Err("login"), "")
+					<div class="field">
+						<div class="row">
+							<label class="label" for="password">{ v.Tr("auth.password") }</label>
+							<span class="spacer"></span>
+							<a class="link-btn sm" href="/forgot-password">{ v.Tr("auth.forgot") }</a>
+						</div>
+						<input class="input" id="password" name="password" type="password" autocomplete="current-password"/>
+					</div>
+					if f.Error != "" {
+						<p class="err" role="alert">{ f.Error }</p>
+					}
+					<button class="btn btn-primary btn-block btn-lg auth-submit" type="submit">{ v.Tr("action.signin") }</button>
+				</form>
+				if f.Google {
+					<div class="or">{ v.Tr("auth.or") }</div>
+					<a class="btn btn-block" href="/auth/google/start">
+						@components.Icon("google")
+						{ v.Tr("auth.google") }
+					</a>
+				}
+				<a class="btn btn-block btn-ghost auth-guest" href="/guest">{ v.Tr("guest.play") }</a>
+				<p class="muted auth-foot">
+					{ v.Tr("signin.new_here") }
+					<a class="link-btn" href="/signup">{ v.Tr("action.signup") }</a>
+				</p>
+			</div>
+		</div>
+	}
+}
+
+// SignUp is prototype screen 3 (AU-02, RL-04): a guest keeps their id and points.
+templ SignUp(v *view.Ctx, f Form) {
+	@layouts.Focus(v, v.Tr("action.signup")) {
+		<div class="auth-wrap">
+			<div class="auth-card">
+				@top(v, guestHome(f))
+				<h1>{ v.Tr("action.signup") }</h1>
+				if f.Guest {
+					<p class="muted">{ v.Tr("signup.subtitle_guest") }</p>
+				} else {
+					<p class="muted">{ v.Tr("signup.subtitle") }</p>
+				}
+				<form method="post" action="/signup" class="auth-form" novalidate>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					@fieldWith("display_name", v.Tr("auth.name"), "text", f.Value("display_name"), "name", f.Err("display_name"), "", v.Tr("auth.name_placeholder"))
+					<div class="field">
+						<label class="label" for="username">{ v.Tr("auth.username") }</label>
+						<div class="input-icon">
+							<span class="at">&#64;</span>
+							<input
+								class={ "input", templ.KV("has-error", f.Err("username") != "") }
+								id="username"
+								name="username"
+								value={ f.Value("username") }
+								autocomplete="username"
+								placeholder={ v.Tr("auth.username_placeholder") }
+								hx-get="/signup/username"
+								hx-trigger="input changed delay:400ms"
+								hx-target="#username-msg"
+								hx-swap="outerHTML"
+							/>
+						</div>
+						if f.Err("username") != "" {
+							<span class="err" id="username-msg">{ f.Err("username") }</span>
+						} else {
+							<span class="help" id="username-msg">{ v.Tr("signup.username_help") }</span>
+						}
+					</div>
+					@fieldWith("email", v.Tr("auth.email"), "email", f.Value("email"), "email", f.Err("email"), "", v.Tr("auth.email_placeholder"))
+					@field("password", v.Tr("auth.password"), "password", "", "new-password", f.Err("password"), v.Tr("auth.password_hint"))
+					<label class="switch auth-terms">
+						<input type="checkbox" name="accept_terms" value="1" checked?={ f.Value("accept_terms") == "1" }/>
+						<span>{ v.Tr("auth.terms") }</span>
+					</label>
+					if f.Err("terms") != "" {
+						<p class="err">{ v.Tr("auth.terms_required") }</p>
+					}
+					if f.Error != "" {
+						<p class="err" role="alert">{ f.Error }</p>
+					}
+					<button class="btn btn-primary btn-block btn-lg auth-submit" type="submit">{ v.Tr("action.signup") }</button>
+				</form>
+				if f.Google {
+					<div class="or">{ v.Tr("auth.or") }</div>
+					<a class="btn btn-block" href="/auth/google/start">
+						@components.Icon("google")
+						{ v.Tr("signup.google") }
+					</a>
+				}
+				<p class="muted auth-foot">
+					{ v.Tr("signup.have_account") }
+					<a class="link-btn" href="/signin">{ v.Tr("action.signin") }</a>
+				</p>
+			</div>
+		</div>
+	}
+}
+
+// UsernameHint is the htmx answer while the player types a username (#10).
+templ UsernameHint(v *view.Ctx, username string, available bool, problem string) {
+	if problem != "" {
+		<span class="err" id="username-msg">{ problem }</span>
+	} else if available {
+		<span class="help good" id="username-msg">{ v.Tr("auth.username_free", "username", "@"+username) }</span>
+	} else {
+		<span class="err" id="username-msg">{ v.Tr("auth.username_taken", "username", "@"+username) }</span>
+	}
+}
+
+func guestHome(f Form) string {
+	if f.Guest {
+		return "/home"
+	}
+	return "/welcome"
+}
+
+// Guest is prototype screen 4 (AU-03, RL-02).
+templ Guest(v *view.Ctx, f Form) {
+	@layouts.Focus(v, v.Tr("guest_name.heading")) {
+		<div class="auth-wrap">
+			<div class="auth-card">
+				@top(v, "/welcome")
+				<h1>{ v.Tr("guest_name.heading") }</h1>
+				<p class="muted">{ v.Tr("guest_name.subtitle") }</p>
+				<form method="post" action="/guest" class="auth-form">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<input type="hidden" name="then" value={ f.Value("then") }/>
+					@field("name", v.Tr("guest_name.display_name"), "text", f.Value("name"), "nickname", f.Err("name"), "")
+					<div class="card pad guest-can">
+						<div class="label">{ v.Tr("guest_name.can.title") }</div>
+						<div class="stack">
+							for _, key := range []string{"guest_name.can.1", "guest_name.can.2", "guest_name.can.3"} {
+								<span class="row">
+									@components.IconClass("check", "i-sm")
+									{ v.Tr(key) }
+								</span>
+							}
+						</div>
+						<div class="label">{ v.Tr("guest_name.account.title") }</div>
+						<div class="stack muted">
+							for _, key := range []string{"guest_name.account.1", "guest_name.account.2", "guest_name.account.3"} {
+								<span class="row">
+									@components.IconClass("lock", "i-sm")
+									{ v.Tr(key) }
+								</span>
+							}
+						</div>
+					</div>
+					<button class="btn btn-primary btn-block btn-lg auth-submit" type="submit">{ v.Tr("guest_name.start") }</button>
+				</form>
+			</div>
+		</div>
+	}
+}
+
+// Forgot is the "send me a link" screen (#8).
+templ Forgot(v *view.Ctx, f Form, sent bool) {
+	@layouts.Focus(v, v.Tr("auth.forgot.title")) {
+		<div class="auth-wrap">
+			<div class="auth-card">
+				@top(v, "/signin")
+				<h1>{ v.Tr("auth.forgot.title") }</h1>
+				if sent {
+					<p class="muted">{ v.Tr("auth.forgot.sent") }</p>
+					<a class="btn btn-primary btn-block btn-lg auth-submit" href="/signin">{ v.Tr("action.signin") }</a>
+				} else {
+					<p class="muted">{ v.Tr("auth.forgot.body") }</p>
+					<form method="post" action="/forgot-password" class="auth-form" novalidate>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						@fieldWith("email", v.Tr("auth.email"), "email", f.Value("email"), "email", f.Err("email"), "", v.Tr("auth.email_placeholder"))
+						<button class="btn btn-primary btn-block btn-lg auth-submit" type="submit">{ v.Tr("action.next") }</button>
+					</form>
+				}
+			</div>
+		</div>
+	}
+}
+
+// Reset is the screen behind the emailed link (#9).
+templ Reset(v *view.Ctx, f Form, done bool) {
+	@layouts.Focus(v, v.Tr("auth.reset.title")) {
+		<div class="auth-wrap">
+			<div class="auth-card">
+				@top(v, "/signin")
+				<h1>{ v.Tr("auth.reset.title") }</h1>
+				if done {
+					<p class="muted">{ v.Tr("auth.reset.done") }</p>
+					<a class="btn btn-primary btn-block btn-lg auth-submit" href="/signin">{ v.Tr("action.signin") }</a>
+				} else {
+					<form method="post" action="/reset-password" class="auth-form" novalidate>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<input type="hidden" name="token" value={ f.Token }/>
+						@field("password", v.Tr("auth.password"), "password", "", "new-password", f.Err("password"), v.Tr("auth.password_hint"))
+						if f.Error != "" {
+							<p class="err" role="alert">{ f.Error }</p>
+						}
+						<button class="btn btn-primary btn-block btn-lg auth-submit" type="submit">{ v.Tr("action.save") }</button>
+					</form>
+				}
+			</div>
+		</div>
+	}
+}
+
+// Locked is the page a guest sees instead of Friends, Profile, Achievements,
+// Notifications, History or My questions (RL-03).
+templ Locked(v *view.Ctx, whatKey string) {
+	@layouts.App(v, v.Tr("guest.badge")) {
+		<div class="page">
+			<div class="lock-page">
+				<span class="e-ic">
+					@components.IconClass("lock", "i-lg")
+				</span>
+				<h1>{ v.Tr("guest.locked.title", "what", v.Tr(whatKey)) }</h1>
+				<p class="muted">{ v.Tr("guest.locked.body", "name", v.Name()) }</p>
+				<div class="row wrap center">
+					<a class="btn btn-primary btn-lg" href="/signup">{ v.Tr("action.signup") }</a>
+					<a class="btn btn-lg" href="/signin">{ v.Tr("action.signin") }</a>
+				</div>
+				<a class="link-btn" href="/play">{ v.Tr("guest.locked.keep_playing") }</a>
+			</div>
+		</div>
+	}
+}

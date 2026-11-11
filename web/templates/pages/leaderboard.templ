@@ -1,0 +1,187 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// Leader is one row of the board, mapped from the progress module (pages never import
+// a module, so the module maps its rows onto this type).
+type Leader struct {
+	Name     string
+	Initials string
+	Color    string
+	Level    int32
+	Points   int32
+	Rank     int32
+	IsMe     bool
+	IsGuest  bool
+}
+
+// LeaderboardData backs P24 (LB-01): global board plus one board per domain the player
+// owns, three periods, everyone or friends.
+type LeaderboardData struct {
+	Period   string // week | month | all
+	Friends  bool
+	DomainID int64
+	Domain   *view.Domain
+	Top      []Leader // the podium, up to 3
+	Rest     []Leader
+	Me       *Leader // pinned under the list when the player is outside it
+}
+
+templ Leaderboard(v *view.Ctx, d LeaderboardData) {
+	@layouts.App(v, v.Tr("lb.title")) {
+		<div class="page mid lb-page">
+			<div class="page-head">
+				<div>
+					<h1>
+						{ v.Tr("lb.title") }
+						if d.Domain != nil {
+							@components.DomainChip(*d.Domain)
+						}
+					</h1>
+					<p class="sub">
+						if d.Domain != nil {
+							{ v.Tr("lb.sub_domain", "domain", d.Domain.Name) }
+						} else {
+							{ v.Tr("lb.sub_global") }
+						}
+						{ " " }
+						if v.IslamicOnly {
+							{ v.Tr("lb.reset_islamic") }
+						} else {
+							{ v.Tr("lb.reset") }
+						}
+					</p>
+				</div>
+			</div>
+			<div class="lb-doms" role="group" aria-label={ v.Tr("lb.board") }>
+				<a
+					class="global"
+					href={ templ.URL(lbHref(d, "domain", "0")) }
+					aria-pressed={ fmt.Sprint(d.DomainID == 0) }
+				>
+					<span class="ci">
+						@components.Icon("globe")
+					</span>
+					{ v.Tr("lb.global") }
+				</a>
+				for _, dom := range v.MyDomains {
+					<a
+						style={ "--d:" + dom.Color }
+						href={ templ.URL(lbHref(d, "domain", fmt.Sprint(dom.ID))) }
+						aria-pressed={ fmt.Sprint(d.DomainID == dom.ID) }
+					>
+						<span class="ci">
+							@components.Icon(dom.Icon)
+						</span>
+						{ dom.Name }
+					</a>
+				}
+			</div>
+			<div class="row wrap gap-md push-bottom">
+				<div class="seg">
+					@lbSegLink(d, "period", "week", v.Tr("lb.this_week"), d.Period == "week")
+					@lbSegLink(d, "period", "month", v.Tr("lb.this_month"), d.Period == "month")
+					@lbSegLink(d, "period", "all", v.Tr("lb.all_time"), d.Period == "all")
+				</div>
+				<div class="seg">
+					@lbSegLink(d, "scope", "all", v.Tr("lb.everyone"), !d.Friends)
+					@lbSegLink(d, "scope", "friends", v.Tr("nav.friends"), d.Friends)
+				</div>
+			</div>
+			if v.IsGuest() {
+				<div class="banner info push-bottom">
+					<div class="grow">
+						<b>{ v.Tr("lb.guest_banner") }</b>
+						{ " " }
+						{ v.Tr("lb.guest_banner_body") }
+					</div>
+					<a class="btn btn-primary btn-sm" href="/signup">{ v.Tr("action.signup") }</a>
+				</div>
+			}
+			if len(d.Top) == 0 {
+				<section class="card">
+					@components.Empty("trophy", v.Tr("lb.empty"), v.Tr("lb.empty_body"))
+				</section>
+			} else {
+				<div class="podium">
+					@podiumSlot(v, d.Top, 1)
+					@podiumSlot(v, d.Top, 0)
+					@podiumSlot(v, d.Top, 2)
+				</div>
+				<section class="card">
+					<ol class="list">
+						for _, l := range d.Rest {
+							@leaderRow(v, l)
+						}
+						if d.Me != nil {
+							<li class="li lb-gap">···</li>
+							@leaderRow(v, *d.Me)
+						}
+					</ol>
+				</section>
+			}
+		</div>
+	}
+}
+
+templ leaderRow(v *view.Ctx, l Leader) {
+	<li class={ "li", templ.KV("me", l.IsMe) }>
+		<span class="rank num">{ fmt.Sprint(l.Rank) }</span>
+		@components.PersonAvatar(l.Initials, l.Color, "sm", false)
+		<span class="grow t">
+			if l.IsMe {
+				{ v.Tr("lb.you") }
+			} else {
+				{ l.Name }
+			}
+		</span>
+		<b class="num">{ fmt.Sprint(l.Points) }</b>
+	</li>
+}
+
+// podiumSlot draws one of the three blocks; index 1, 0, 2 so first place sits in the
+// middle, as in the design.
+templ podiumSlot(v *view.Ctx, top []Leader, i int) {
+	if i < len(top) {
+		<div class={ "pod", fmt.Sprintf("p%d", i+1) }>
+			@components.PersonAvatar(top[i].Initials, top[i].Color, "lg", false)
+			<b>
+				if top[i].IsMe {
+					{ v.Tr("lb.you") }
+				} else {
+					{ top[i].Name }
+				}
+			</b>
+			<span class="pts num">{ fmt.Sprint(top[i].Points) }</span>
+			<div class="block">{ fmt.Sprint(i + 1) }</div>
+		</div>
+	} else {
+		<div></div>
+	}
+}
+
+templ lbSegLink(d LeaderboardData, key string, value string, label string, on bool) {
+	<a href={ templ.URL(lbHref(d, key, value)) } aria-pressed={ fmt.Sprint(on) }>{ label }</a>
+}
+
+// lbHref keeps the other two controls where they are when one changes.
+func lbHref(d LeaderboardData, key, value string) string {
+	period, scope, domain := d.Period, "all", fmt.Sprint(d.DomainID)
+	if d.Friends {
+		scope = "friends"
+	}
+	switch key {
+	case "period":
+		period = value
+	case "scope":
+		scope = value
+	case "domain":
+		domain = value
+	}
+	return fmt.Sprintf("/leaderboard?period=%s&scope=%s&domain=%s", period, scope, domain)
+}

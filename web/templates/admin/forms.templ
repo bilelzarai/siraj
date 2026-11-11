@@ -1,0 +1,125 @@
+package admin
+
+import (
+	"siraj/internal/view"
+)
+
+// The console's forms. Each one is a drawer over the list it belongs to
+// (drawers.templ); these pages are the same fields without JavaScript, so a deep
+// link and a browser with no script still edit the same row (NF-02).
+
+// DomainFormData backs A04b, the domain drawer, shown here as its own page so it works
+// without JavaScript and deep-links from the table.
+type DomainFormData struct {
+	ID           int64
+	Slug         string
+	Family       string
+	Icon         string
+	Color        string
+	Motif        string
+	Position     int32
+	IsFeatured   bool
+	IsPublished  bool
+	NewUntil     string
+	Names        map[string]string
+	Descriptions map[string]string
+	Action       string
+	Icons        []string
+	Motifs       []string
+	Colors       []string
+}
+
+// CategoryFormData backs A05b.
+type CategoryFormData struct {
+	ID          int64
+	DomainID    int64
+	Slug        string
+	Icon        string
+	Color       string
+	Position    int32
+	IsPublished bool
+	Names       map[string]string
+	Action      string
+	Domains     []Option
+	Icons       []string
+	Colors      []string
+}
+
+// QuestionFormData backs A06b: one question, its three language tabs and its status.
+type QuestionFormData struct {
+	ID int64
+	// DomainID narrows the category list; the drawer swaps that list when it changes.
+	DomainID     int64
+	Domains      []Option
+	CategoryID   int64
+	Difficulty   int32
+	Points       int32
+	CorrectIndex int32
+	Source       string
+	MainLang     string
+	Status       string
+	Bodies       map[string]string
+	Answers      map[string][]string
+	Explanations map[string]string
+	Action       string
+	Categories   []Option
+	// Error is what the server refused, said over the fields rather than only in a
+	// toast, so a drawer that comes back says why.
+	Error string
+}
+
+// DomainForm is A04b as a page: the drawer's fields in a panel.
+templ DomainForm(v *view.Ctx, s Shell, d DomainFormData) {
+	@Layout(v, s) {
+		@formPage(v, domainTitle(v, d), v.Tr("admin.domain_sub"), d.Action, "/admin/domains") {
+			@domainFields(v, d)
+		}
+	}
+}
+
+// CategoryForm is A05b as a page.
+templ CategoryForm(v *view.Ctx, s Shell, d CategoryFormData) {
+	@Layout(v, s) {
+		@formPage(v, categoryTitle(v, d), v.Tr("admin.category_sub"), d.Action, "/admin/categories") {
+			@categoryFields(v, d)
+		}
+	}
+}
+
+// QuestionForm is A06b as a page.
+templ QuestionForm(v *view.Ctx, s Shell, d QuestionFormData) {
+	@Layout(v, s) {
+		@formPage(v, questionTitle(v, d), questionSub(v, d), d.Action, "/admin/questions") {
+			@questionFields(v, d)
+		}
+	}
+}
+
+// formPage is the shell those three share.
+templ formPage(v *view.Ctx, title, sub, action, back string) {
+	<div class="page-head">
+		<div>
+			<h1>{ title }</h1>
+			if sub != "" {
+				<p class="sub">{ sub }</p>
+			}
+		</div>
+	</div>
+	<form class="panel" method="post" action={ templ.SafeURL(action) }>
+		<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+		<div class="panel-body form-section">
+			{ children... }
+		</div>
+		<div class="panel-foot">
+			<a class="btn" href={ templ.URL(back) }>{ v.Tr("admin.cancel") }</a>
+			<button class="btn btn-primary" type="submit">{ v.Tr("admin.save") }</button>
+		</div>
+	</form>
+}
+
+func answerOf(answers []string, i int) string {
+	if i < len(answers) {
+		return answers[i]
+	}
+	return ""
+}

@@ -1,0 +1,98 @@
+// Package layouts holds the four shells: base (html), app (nav + tab bar),
+// focus (full screen: games, entry, pass the device) and admin (sidebar).
+package layouts
+
+import (
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+)
+
+// Base is the html document: tokens, theme, direction, fonts and the Vite assets.
+// data-theme carries the theme choice (BR-04); data-dom / --d and data-family carry the
+// domain in focus (BR-02, BR-03). No page writes a colour of its own.
+templ Base(v *view.Ctx, title string) {
+	<!DOCTYPE html>
+	<html
+		lang={ v.Lang }
+		dir={ v.Dir }
+		data-time-units={ v.Tr("time.hour_short") + "|" + v.Tr("time.minute_short") }
+		if v.Theme != "system" {
+			data-theme={ v.Theme }
+		}
+		if v.Focus != nil {
+			data-dom={ v.Focus.Slug }
+			data-family={ v.FocusFamily() }
+			style={ v.FocusStyle() }
+		}
+	>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+			<meta name="csrf-token" content={ v.CSRF }/>
+			// The one line the front end shows when a request fails and the server sent
+			// no message of its own. It lives here because the scripts cannot read the
+			// locale files, and an untranslated sentence is not acceptable in a
+			// trilingual app (§16).
+			<meta name="error-message" content={ v.Tr("error.something_went_wrong") }/>
+			<meta name="color-scheme" content="light dark"/>
+			<title>
+				if title != "" {
+					{ title } · { v.Tr("app.name") }
+				} else {
+					{ v.Tr("app.name") }
+				}
+			</title>
+			<link rel="icon" href="/static/lamp.svg" type="image/svg+xml"/>
+			<link rel="preconnect" href="https://fonts.googleapis.com"/>
+			<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+			<link
+				href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&amp;family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&amp;family=Noto+Naskh+Arabic:wght@500;600;700&amp;display=swap"
+				rel="stylesheet"
+			/>
+			for _, href := range v.Assets.CSS() {
+				<link rel="stylesheet" href={ href }/>
+			}
+			if v.Assets.Dev() {
+				<script type="module" src={ v.Assets.ViteClient() }></script>
+			}
+			<script type="module" src={ v.Assets.JS() } defer></script>
+		</head>
+		<body hx-headers='{"X-Requested-With":"htmx"}'>
+			<a class="skip-link" href="#main">{ v.Tr("nav.skip_to_content") }</a>
+			{ children... }
+			<div class="toasts" aria-live="polite"></div>
+			if v.Flash != "" {
+				<script type="application/json" id="sj-flash">{ v.Flash }</script>
+			}
+		</body>
+	</html>
+}
+
+// App is the signed-in shell: top navigation on desktop, tab bar on a phone (NF-01).
+templ App(v *view.Ctx, title string) {
+	@Base(v, title) {
+		@TopNav(v)
+		<main id="main">
+			if v.Flash != "" {
+				<div class="banner info" role="status">
+					@components.Icon("info")
+					<span>{ v.Flash }</span>
+				</div>
+			}
+			{ children... }
+		</main>
+		// Every App screen can open O01–O03 and the question drawers into this slot.
+		<div id="drawer-slot"></div>
+		@TabBar(v)
+		@Live(v)
+	}
+}
+
+// Focus is the full-screen shell with no navigation: games, entry screens, pass the device.
+templ Focus(v *view.Ctx, title string) {
+	@Base(v, title) {
+		<main id="main" class="focus">
+			{ children... }
+		</main>
+	}
+}

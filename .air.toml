@@ -1,0 +1,19 @@
+# Live reload for the Go server: `air` (installed by the "Setup" task).
+# On Windows, change bin to "tmp\\server.exe" and cmd to "go build -o ./tmp/server.exe ./cmd/server".
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/server ./cmd/server"
+  bin = "tmp/server"
+  include_ext = ["go", "sql", "templ", "html", "css", "js"]
+  exclude_dir = ["tmp", "node_modules", "web/dist", "docs"]
+  exclude_regex = ["_test\\.go$", "_templ\\.go$"]
+  delay = 300
+  kill_delay = "1s"
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true

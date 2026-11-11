@@ -1,0 +1,263 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// SupportTopic is one card of the topic picker.
+type SupportTopic struct {
+	Key  string
+	Icon string
+}
+
+// SupportTicketRow is one of the player's past messages.
+type SupportTicketRow struct {
+	ID      string
+	Number  string
+	Subject string
+	Topic   string
+	Status  string
+	When    string
+}
+
+// SupportData backs P30 (OT-03).
+type SupportData struct {
+	Topics   []SupportTopic
+	Topic    string
+	Values   map[string]string
+	Errors   map[string]string
+	Tickets  []SupportTicketRow
+	SignedIn bool
+}
+
+templ Support(v *view.Ctx, d SupportData) {
+	@layouts.App(v, v.Tr("support.title")) {
+		<div class="page narrow support-page">
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("support.title") }</h1>
+					<p class="sub row gap-xs brand-ink">
+						@components.IconClass("clock", "i-sm")
+						{ v.Tr("support.reply_time") }
+					</p>
+				</div>
+			</div>
+			<section class="card pad round-xl">
+				<div class="label push-bottom-sm">{ v.Tr("support.what_about") }<span class="req" aria-hidden="true">*</span></div>
+				<div class="topics" role="radiogroup">
+					for _, t := range d.Topics {
+						<a
+							class={ "topic", templ.KV("on", d.Topic == t.Key) }
+							role="radio"
+							aria-checked={ fmt.Sprint(d.Topic == t.Key) }
+							href={ templ.URL("/support?topic=" + t.Key) }
+						>
+							@components.Icon(t.Icon)
+							if d.Topic == t.Key {
+								<span class="tk">
+									@components.IconClass("check", "i-sm")
+								</span>
+							}
+							<b>{ v.Tr("support.topic." + t.Key) }</b>
+							<span>{ v.Tr("support.topic." + t.Key + "_help") }</span>
+						</a>
+					}
+				</div>
+				if d.Topic == "" {
+					<div class="sp-hint">{ v.Tr("support.hint") }</div>
+				} else {
+					<form class="stack push-top" method="post" action="/support">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<input type="hidden" name="topic" value={ d.Topic }/>
+						if d.Topic == "question" {
+							<div class="field">
+								<label class="label" for="sp-qn">
+									{ v.Tr("support.question_number") }
+									<span class="muted normal">{ "(" + v.Tr("support.optional") + ")" }</span>
+								</label>
+								<input class="input" id="sp-qn" name="question_number" value={ d.Values["question_number"] } placeholder="#604"/>
+								<span class="help">{ v.Tr("support.question_number_help") }</span>
+							</div>
+						}
+						if d.Topic == "account" {
+							<div class="field">
+								<label class="label" for="sp-acc">
+									{ v.Tr("support.account_id") }
+									<span class="req" aria-hidden="true">*</span>
+								</label>
+								<input class="input" id="sp-acc" name="account" value={ d.Values["account"] }/>
+								<span class="help">
+									@components.IconClass("lock", "i-sm")
+									{ v.Tr("support.never_password") }
+								</span>
+							</div>
+						}
+						if d.Topic == "report_user" {
+							<div class="form-grid">
+								<div class="field">
+									<label class="label" for="sp-u">
+										{ v.Tr("support.player_username") }
+										<span class="req" aria-hidden="true">*</span>
+									</label>
+									<input class="input" id="sp-u" name="username" value={ d.Values["username"] } placeholder="knight_42"/>
+								</div>
+								<div class="field">
+									<label class="label" for="sp-r">{ v.Tr("support.reason") }</label>
+									<input class="input" id="sp-r" name="reason" value={ d.Values["reason"] }/>
+								</div>
+							</div>
+							<div class="field">
+								<label class="label" for="sp-link">
+									{ v.Tr("support.game_link") }
+									<span class="muted normal">{ "(" + v.Tr("support.optional") + ")" }</span>
+								</label>
+								<input class="input" id="sp-link" name="link" value={ d.Values["link"] }/>
+							</div>
+						}
+						if !d.SignedIn {
+							<div class="field">
+								<label class="label" for="sp-mail">
+									{ v.Tr("support.email") }
+									<span class="req" aria-hidden="true">*</span>
+								</label>
+								<input class="input" id="sp-mail" type="email" name="email" value={ d.Values["email"] }/>
+								if d.Errors["email"] != "" {
+									<span class="error-text">{ d.Errors["email"] }</span>
+								}
+							</div>
+						}
+						<div class="field">
+							<label class="label" for="sp-sub">
+								{ v.Tr("support.subject") }
+								<span class="req" aria-hidden="true">*</span>
+							</label>
+							<input class="input" id="sp-sub" name="subject" maxlength="80" value={ d.Values["subject"] }/>
+							if d.Errors["subject"] != "" {
+								<span class="error-text">{ d.Errors["subject"] }</span>
+							}
+						</div>
+						<div class="field" x-data="{ n: 0 }">
+							<div class="row">
+								<label class="label" for="sp-msg">
+									{ v.Tr("support.message") }
+									<span class="req" aria-hidden="true">*</span>
+								</label>
+								<span class="spacer"></span>
+								<span class="help num" x-text="n"></span>
+							</div>
+							<textarea class="textarea" id="sp-msg" name="body" maxlength="2000" x-on:input="n = $el.value.length">{ d.Values["body"] }</textarea>
+							<span class="help">{ v.Tr("support.min_chars") }</span>
+							if d.Errors["body"] != "" {
+								<span class="error-text">{ d.Errors["body"] }</span>
+							}
+						</div>
+						<div class="row divider-top">
+							<span class="spacer"></span>
+							<a class="btn" href="/">{ v.Tr("action.cancel") }</a>
+							<button class="btn btn-primary" type="submit">
+								{ v.Tr("support.send") }
+								@components.IconClass("arrowL", "flip-r")
+							</button>
+						</div>
+					</form>
+				}
+			</section>
+			if len(d.Tickets) > 0 {
+				<section class="card push-top">
+					<div class="card-head pad-head">
+						<h2>{ v.Tr("support.my_tickets") }</h2>
+					</div>
+					<ul class="list">
+						for _, t := range d.Tickets {
+							<li class="li">
+								<a class="grow" href={ templ.URL("/support/" + t.ID) }>
+									<span class="t block">{ t.Subject }</span>
+									<span class="s">{ t.Number + " · " + t.When }</span>
+								</a>
+								<span class="badge">{ v.Tr("support.status." + t.Status) }</span>
+							</li>
+						}
+					</ul>
+				</section>
+			}
+		</div>
+	}
+}
+
+// SupportSent is the confirmation screen with the ticket number.
+templ SupportSent(v *view.Ctx, number string, topic string) {
+	@layouts.App(v, v.Tr("support.sent_title")) {
+		<div class="page narrow">
+			<section class="card pad center-text round-xl sent-card">
+				<div class="m-ic">
+					@components.IconClass("check", "i-lg")
+				</div>
+				<h1>{ v.Tr("support.sent_title") }</h1>
+				<p class="muted">{ v.Tr("support.sent_body") }</p>
+				<div class="ticket">
+					<div>
+						<span class="help">{ v.Tr("support.ticket") }</span>
+						<b class="num">{ number }</b>
+					</div>
+					<div>
+						<span class="help">{ v.Tr("support.topic_label") }</span>
+						<b>{ v.Tr("support.topic." + topic) }</b>
+					</div>
+				</div>
+				<div class="row center gap-sm push-top">
+					<a class="btn" href="/messages">{ v.Tr("support.my_tickets") }</a>
+					<a class="btn btn-primary" href="/support">{ v.Tr("support.send_another") }</a>
+				</div>
+			</section>
+		</div>
+	}
+}
+
+// SupportThread is one of the player's tickets with its replies.
+templ SupportThread(v *view.Ctx, t SupportTicketRow, messages []SupportMessage) {
+	@layouts.App(v, t.Subject) {
+		<div class="page narrow">
+			<a class="btn btn-ghost btn-sm push-bottom-sm" href="/support">
+				@components.IconClass("arrowL", "flip")
+				{ v.Tr("support.title") }
+			</a>
+			<div class="page-head">
+				<div>
+					<h1>{ t.Subject }</h1>
+					<p class="sub">{ t.Number + " · " + v.Tr("support.status."+t.Status) }</p>
+				</div>
+			</div>
+			<section class="card pad stack">
+				for _, m := range messages {
+					<div class={ "msg", templ.KV("staff", m.IsStaff) }>
+						<div class="row">
+							<b>{ m.Author }</b>
+							<span class="spacer"></span>
+							<span class="help">{ m.When }</span>
+						</div>
+						<p dir="auto">{ m.Body }</p>
+					</div>
+				}
+			</section>
+			<form class="card pad stack push-top" method="post" action={ templ.SafeURL("/support/" + t.ID + "/reply") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<textarea class="textarea" name="body" aria-label={ v.Tr("support.reply") }></textarea>
+				<div class="row">
+					<span class="spacer"></span>
+					<button class="btn btn-primary" type="submit">{ v.Tr("support.reply") }</button>
+				</div>
+			</form>
+		</div>
+	}
+}
+
+// SupportMessage is one post of a ticket thread.
+type SupportMessage struct {
+	Author  string
+	Body    string
+	When    string
+	IsStaff bool
+}

@@ -1,0 +1,516 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+	"strings"
+)
+
+// The console edits in drawers, the way the design draws them (A04b, A05b, A06b,
+// A02b): the list stays behind, the row opens over it. A drawer arrives from the
+// server with its row already in it, so nothing is guessed on the client; without
+// JavaScript the same URL opens the same fields as a page (NF-02).
+//
+// Every drawer is the same three parts — head, scrolling body, foot — and the body
+// of each one is a partial shared with its page fallback, so the two can never drift.
+
+// drawerShell wraps a form in the overlay the design kit styles.
+templ drawerShell(v *view.Ctx, title, subtitle, action, width string, foot templ.Component) {
+	<aside
+		class="drawer"
+		role="dialog"
+		aria-modal="true"
+		aria-hidden="true"
+		if width != "" {
+			style={ "width:" + width }
+		}
+	>
+		<form method="post" action={ templ.SafeURL(action) } hx-post={ action } hx-target="#drawer-slot" hx-swap="innerHTML">
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<div class="drawer-head">
+				<div>
+					<h2>{ title }</h2>
+					if subtitle != "" {
+						<p>{ subtitle }</p>
+					}
+				</div>
+				<button class="icon-btn" type="button" data-close aria-label={ v.Tr("admin.close") }>
+					@Icon("x")
+				</button>
+			</div>
+			<div class="drawer-body">
+				{ children... }
+			</div>
+			<div class="drawer-foot">
+				@foot
+			</div>
+		</form>
+	</aside>
+}
+
+// ---------------------------------------------------------------- A06b question
+
+// QuestionDrawer is the question editor of the design: topic and level over three
+// language tabs, each with the question, its four answers — the correct one picked
+// with a radio — and the explanation.
+templ QuestionDrawer(v *view.Ctx, d QuestionFormData) {
+	@drawerShell(v, questionTitle(v, d), questionSub(v, d), d.Action, "min(680px,100vw)", questionFoot(v, d)) {
+		@questionFields(v, d)
+	}
+}
+
+templ questionFoot(v *view.Ctx, d QuestionFormData) {
+	<button class="btn btn-ghost" type="button" data-close>{ v.Tr("admin.cancel") }</button>
+	<span class="spacer"></span>
+	if d.ID == 0 {
+		<button class="btn" type="submit" name="again" value="1">{ v.Tr("admin.save_and_add") }</button>
+	}
+	<button class="btn btn-primary" type="submit">{ v.Tr("admin.save_question") }</button>
+}
+
+func questionTitle(v *view.Ctx, d QuestionFormData) string {
+	if d.ID == 0 {
+		return v.Tr("admin.new_question")
+	}
+	return v.Tr("admin.edit_question")
+}
+
+func questionSub(v *view.Ctx, d QuestionFormData) string {
+	if d.ID == 0 {
+		return v.Tr("admin.question_sub_new")
+	}
+	return fmt.Sprintf("#%d", d.ID)
+}
+
+// questionFields is shared by the drawer and the page fallback.
+templ questionFields(v *view.Ctx, d QuestionFormData) {
+	<input type="hidden" name="id" value={ fmt.Sprint(d.ID) }/>
+	<input type="hidden" name="difficulty" value={ fmt.Sprint(d.Difficulty) } data-field="difficulty"/>
+	if d.Error != "" {
+		<div class="callout danger">
+			@Icon("alert")
+			<div>{ d.Error }</div>
+		</div>
+	}
+	<div class="form-grid">
+		<div class="field">
+			<label class="label" for="qd-domain">{ v.Tr("admin.domain") }</label>
+			<select class="select" id="qd-domain" name="domain_id" hx-get="/admin/questions/categories" hx-target="#qd-cat" hx-swap="innerHTML">
+				for _, o := range d.Domains {
+					<option value={ o.Value } selected?={ o.Value == fmt.Sprint(d.DomainID) }>{ o.Label }</option>
+				}
+			</select>
+		</div>
+		<div class="field">
+			<label class="label" for="qd-cat">{ v.Tr("admin.category") }</label>
+			<select class="select" id="qd-cat" name="category_id">
+				@CategoryOptions(v, d.Categories, d.CategoryID)
+			</select>
+		</div>
+		<div class="field">
+			<span class="label">{ v.Tr("admin.level") }</span>
+			<div class="segmented" data-segmented data-sets="difficulty" style="width:100%">
+				for i, label := range []string{v.Tr("setup.easy"), v.Tr("setup.medium"), v.Tr("setup.hard")} {
+					<button
+						type="button"
+						style="flex:1"
+						data-value={ fmt.Sprint(i + 1) }
+						aria-pressed={ fmt.Sprint(d.Difficulty == int32(i+1)) }
+					>{ label }</button>
+				}
+			</div>
+		</div>
+		<div class="field">
+			<label class="label" for="qd-points">{ v.Tr("admin.points") }</label>
+			<input class="input num" id="qd-points" name="points" type="number" min="0" step="5" value={ fmt.Sprint(d.Points) }/>
+			<span class="help">{ v.Tr("admin.points_help") }</span>
+		</div>
+	</div>
+	<div class="form-grid" style="margin-top:16px">
+		<div class="field">
+			<label class="label" for="qd-status">{ v.Tr("admin.status") }</label>
+			<select class="select" id="qd-status" name="status">
+				for _, o := range statusOptions(v) {
+					<option value={ o.Value } selected?={ o.Value == d.Status }>{ o.Label }</option>
+				}
+			</select>
+		</div>
+		<div class="field">
+			<label class="label" for="qd-main">{ v.Tr("admin.main_language") }</label>
+			<select class="select" id="qd-main" name="main_lang">
+				for _, lang := range i18n.Langs {
+					<option value={ lang } selected?={ d.MainLang == lang }>{ i18n.Native[lang] }</option>
+				}
+			</select>
+		</div>
+		<div class="field" style="grid-column:1/-1">
+			<label class="label" for="qd-source">
+				{ v.Tr("admin.source") }
+				<span class="opt">· { v.Tr("admin.source_help") }</span>
+			</label>
+			<input class="input" id="qd-source" name="source" value={ d.Source }/>
+		</div>
+	</div>
+	// The main language leads, and opens selected: it is the one that must be
+	// filled, the other two are translations of it (MQ-04).
+	<div class="tabs" data-tabs role="tablist" style="margin-top:22px">
+		for i, lang := range tabOrder(d.MainLang) {
+			<button
+				class="tab"
+				type="button"
+				role="tab"
+				aria-selected={ fmt.Sprint(i == 0) }
+				aria-controls={ "qp-" + lang }
+				if i != 0 {
+					tabindex="-1"
+				}
+			>
+				{ i18n.Native[lang] }
+				if lang == d.MainLang {
+					<span class="tag">{ v.Tr("admin.main") }</span>
+				}
+			</button>
+		}
+	</div>
+	<div style="padding-top:18px">
+		for i, lang := range tabOrder(d.MainLang) {
+			<div class="tab-panel" id={ "qp-" + lang } role="tabpanel" hidden?={ i != 0 }>
+				<div class="field">
+					<label class="label" for={ "qb-" + lang }>{ v.Tr("sets.body") }</label>
+					<textarea
+						class={ "textarea", templ.KV("ar", lang == "ar") }
+						id={ "qb-" + lang }
+						name={ "body_" + lang }
+						rows="2"
+						maxlength="300"
+						lang={ lang }
+						if lang == "ar" {
+							dir="rtl"
+						}
+					>{ d.Bodies[lang] }</textarea>
+					<div class="char-count" data-count={ "qb-" + lang }></div>
+				</div>
+				<div class="field">
+					<span class="label">
+						{ v.Tr("sets.answers") }
+						<span class="opt">· { v.Tr("admin.pick_correct") }</span>
+					</span>
+					for i := 0; i < 4; i++ {
+						<div class="row" style="margin-top:8px">
+							<label class="check" title={ v.Tr("sets.correct") }>
+								// One correct answer per question, picked in whichever tab the
+								// writer is in: each language has its own group so the choice
+								// shows in all three, and the groups are kept in step.
+								<input
+									type="radio"
+									name={ "correct_" + lang }
+									data-correct
+									value={ fmt.Sprint(i) }
+									checked?={ d.CorrectIndex == int32(i) }
+									aria-label={ v.Tr("admin.mark_correct", "n", i+1) }
+								/>
+							</label>
+							<input
+								class={ "input", templ.KV("ar", lang == "ar") }
+								name={ fmt.Sprintf("answer_%s_%d", lang, i) }
+								value={ answerOf(d.Answers[lang], i) }
+								lang={ lang }
+								if lang == "ar" {
+									dir="rtl"
+								}
+								aria-label={ fmt.Sprintf("%s %d", v.Tr("sets.answers"), i+1) }
+							/>
+						</div>
+					}
+				</div>
+				<div class="field">
+					<label class="label" for={ "qx-" + lang }>{ v.Tr("sets.explanation") }</label>
+					<textarea
+						class={ "textarea", templ.KV("ar", lang == "ar") }
+						id={ "qx-" + lang }
+						name={ "explanation_" + lang }
+						lang={ lang }
+						if lang == "ar" {
+							dir="rtl"
+						}
+					>{ d.Explanations[lang] }</textarea>
+					<span class="help">{ v.Tr("admin.explanation_help") }</span>
+				</div>
+			</div>
+		}
+	</div>
+}
+
+// CategoryOptions is also swapped on its own when the domain above it changes.
+templ CategoryOptions(v *view.Ctx, options []Option, selected int64) {
+	for _, o := range options {
+		<option value={ o.Value } selected?={ o.Value == fmt.Sprint(selected) }>{ o.Label }</option>
+	}
+}
+
+// tabOrder puts the question's main language first and keeps the other two in the
+// menu order, so the tabs read the same way on every question.
+func tabOrder(main string) []string {
+	out := make([]string, 0, len(i18n.Langs))
+	if i18n.Known(main) {
+		out = append(out, main)
+	}
+	for _, lang := range i18n.Langs {
+		if lang != main {
+			out = append(out, lang)
+		}
+	}
+	return out
+}
+
+func statusOptions(v *view.Ctx) []Option {
+	return []Option{
+		{Value: "draft", Label: v.Tr("sets.draft")},
+		{Value: "review", Label: v.Tr("admin.review")},
+		{Value: "published", Label: v.Tr("admin.live")},
+		{Value: "archived", Label: v.Tr("admin.retired")},
+	}
+}
+
+// ---------------------------------------------------------------- A04b domain
+
+templ DomainDrawer(v *view.Ctx, d DomainFormData) {
+	@drawerShell(v, domainTitle(v, d), v.Tr("admin.domain_sub"), d.Action, "min(640px,100vw)", saveFoot(v)) {
+		@domainFields(v, d)
+	}
+}
+
+templ saveFoot(v *view.Ctx) {
+	<button class="btn btn-ghost" type="button" data-close>{ v.Tr("admin.cancel") }</button>
+	<span class="spacer"></span>
+	<button class="btn btn-primary" type="submit">{ v.Tr("admin.save") }</button>
+}
+
+func domainTitle(v *view.Ctx, d DomainFormData) string {
+	if d.ID == 0 {
+		return v.Tr("admin.new_domain")
+	}
+	return d.Names["en"]
+}
+
+templ domainFields(v *view.Ctx, d DomainFormData) {
+	<input type="hidden" name="id" value={ fmt.Sprint(d.ID) }/>
+	<input type="hidden" name="family" value={ d.Family } data-field="family"/>
+	<input type="hidden" name="icon" value={ d.Icon } data-field="icon"/>
+	<input type="hidden" name="color" value={ d.Color } data-field="color"/>
+	<input type="hidden" name="motif" value={ d.Motif } data-field="motif"/>
+	<div class="panel" style="padding:14px 16px;margin-bottom:22px;background:var(--surface-2)">
+		<div class="help" style="margin-bottom:10px">{ v.Tr("admin.preview_home") }</div>
+		<div class="dom-preview" id="dom-preview" style={ "--c:" + d.Color }>
+			<span class="dp-motif" aria-hidden="true">{ d.Motif }</span>
+			<span class="dp-ic" aria-hidden="true">{ d.Icon }</span>
+			<b data-pv-name>{ previewName(v, d.Names["en"]) }</b>
+			<span class="dp-sub">
+				<span data-pv-desc>{ previewDesc(v, d.Descriptions["en"]) }</span>
+			</span>
+			<span class="dp-bar"><i></i></span>
+		</div>
+	</div>
+	<div class="form-section">
+		<h3>{ v.Tr("admin.names") }</h3>
+		<div class="field">
+			<label class="label" for="d-en">{ v.Tr("admin.name_en") }</label>
+			<input class="input" id="d-en" name="name_en" data-preview-name value={ d.Names["en"] } maxlength="40" required/>
+			<div class="char-count" data-count="d-en"></div>
+		</div>
+		<div class="form-grid" style="margin-top:16px">
+			<div class="field">
+				<label class="label" for="d-ar">{ v.Tr("admin.name_ar") }</label>
+				<input class="input ar" id="d-ar" name="name_ar" dir="rtl" lang="ar" value={ d.Names["ar"] }/>
+			</div>
+			<div class="field">
+				<label class="label" for="d-fr">{ v.Tr("admin.name_fr") }</label>
+				<input class="input" id="d-fr" name="name_fr" lang="fr" value={ d.Names["fr"] }/>
+			</div>
+		</div>
+		<div class="field">
+			<label class="label" for="d-desc">
+				{ v.Tr("admin.description") }
+				<span class="opt">· { v.Tr("admin.description_help") }</span>
+			</label>
+			<input class="input" id="d-desc" name="description_en" data-preview-desc value={ d.Descriptions["en"] } maxlength="60"/>
+			<div class="char-count" data-count="d-desc"></div>
+		</div>
+		<div class="form-grid" style="margin-top:16px">
+			<div class="field">
+				<label class="label" for="d-desc-ar">{ v.Tr("admin.description") } · العربية</label>
+				<input class="input ar" id="d-desc-ar" name="description_ar" dir="rtl" lang="ar" value={ d.Descriptions["ar"] }/>
+			</div>
+			<div class="field">
+				<label class="label" for="d-desc-fr">{ v.Tr("admin.description") } · Français</label>
+				<input class="input" id="d-desc-fr" name="description_fr" lang="fr" value={ d.Descriptions["fr"] }/>
+			</div>
+		</div>
+		<div class="field">
+			<label class="label" for="d-slug">{ v.Tr("admin.slug") }</label>
+			<input class="input mono" id="d-slug" name="slug" value={ d.Slug } data-slug-from="d-en" required/>
+		</div>
+	</div>
+	<div class="form-section">
+		<h3>{ v.Tr("admin.family") }</h3>
+		<div class="segmented" data-segmented data-sets="family" style="width:100%">
+			<button type="button" style="flex:1" data-value="islamic" aria-pressed={ fmt.Sprint(d.Family == "islamic") }>{ v.Tr("admin.family_islamic") }</button>
+			<button type="button" style="flex:1" data-value="general" aria-pressed={ fmt.Sprint(d.Family == "general") }>{ v.Tr("admin.family_general") }</button>
+		</div>
+		<span class="help">{ v.Tr("admin.family_help") }</span>
+	</div>
+	<div class="form-section">
+		<h3>{ v.Tr("admin.appearance") }</h3>
+		<div class="field">
+			<span class="label">{ v.Tr("admin.icon") }</span>
+			<div class="icon-picker" data-pressed-group data-sets="icon">
+				for _, ic := range d.Icons {
+					<button type="button" data-icon={ ic } data-value={ ic } aria-pressed={ fmt.Sprint(d.Icon == ic) } aria-label={ "Icon " + ic }>{ ic }</button>
+				}
+			</div>
+		</div>
+		<div class="field">
+			<span class="label">{ v.Tr("admin.motif") }</span>
+			<div class="icon-picker" data-pressed-group data-sets="motif">
+				for _, m := range d.Motifs {
+					<button type="button" data-motif={ m } data-value={ m } aria-pressed={ fmt.Sprint(d.Motif == m) } aria-label={ "Motif " + m }>{ m }</button>
+				}
+			</div>
+		</div>
+		<div class="field">
+			<span class="label">{ v.Tr("admin.colour") }</span>
+			<div class="swatches" data-pressed-group data-sets="color">
+				for _, col := range d.Colors {
+					<button type="button" data-color={ col } data-value={ col } style={ "--c:" + col } aria-pressed={ fmt.Sprint(d.Color == col) } aria-label={ col }></button>
+				}
+			</div>
+		</div>
+	</div>
+	<div class="form-section">
+		<h3>{ v.Tr("admin.visibility") }</h3>
+		<div class="form-grid">
+			<div class="field">
+				<label class="label" for="d-pos">{ v.Tr("admin.order") }</label>
+				<input class="input num" id="d-pos" type="number" name="position" value={ fmt.Sprint(d.Position) }/>
+			</div>
+			<div class="field">
+				<label class="label" for="d-new">{ v.Tr("admin.new_until") }</label>
+				<input class="input" id="d-new" type="date" name="is_new_until" value={ d.NewUntil }/>
+			</div>
+		</div>
+		<label class="check-row">
+			<input type="checkbox" name="is_featured" value="1" checked?={ d.IsFeatured }/>
+			<span>{ v.Tr("admin.flagship") }</span>
+		</label>
+		<label class="check-row">
+			<input type="checkbox" name="is_published" value="1" checked?={ d.IsPublished }/>
+			<span>{ v.Tr("admin.live") }</span>
+		</label>
+	</div>
+}
+
+func previewName(v *view.Ctx, name string) string {
+	if strings.TrimSpace(name) == "" {
+		return v.Tr("admin.preview_name")
+	}
+	return name
+}
+
+func previewDesc(v *view.Ctx, desc string) string {
+	if strings.TrimSpace(desc) == "" {
+		return v.Tr("admin.preview_desc")
+	}
+	return desc
+}
+
+// ---------------------------------------------------------------- A05b category
+
+templ CategoryDrawer(v *view.Ctx, d CategoryFormData) {
+	@drawerShell(v, categoryTitle(v, d), v.Tr("admin.category_sub"), d.Action, "min(600px,100vw)", saveFoot(v)) {
+		@categoryFields(v, d)
+	}
+}
+
+func categoryTitle(v *view.Ctx, d CategoryFormData) string {
+	if d.ID == 0 {
+		return v.Tr("admin.new_category")
+	}
+	return d.Names["en"]
+}
+
+templ categoryFields(v *view.Ctx, d CategoryFormData) {
+	<input type="hidden" name="id" value={ fmt.Sprint(d.ID) }/>
+	<input type="hidden" name="icon" value={ d.Icon } data-field="icon"/>
+	<input type="hidden" name="color" value={ d.Color } data-field="color"/>
+	<div class="panel" data-preview style="padding:14px 16px;margin-bottom:22px;background:var(--surface-2)">
+		<div class="help" style="margin-bottom:10px">{ v.Tr("admin.preview") }</div>
+		<div class="cell-main">
+			<span class="cat-tile lg" style={ "--c:" + d.Color } aria-hidden="true">{ d.Icon }</span>
+			<div>
+				<div class="t" data-pv-name>{ previewName(v, d.Names["en"]) }</div>
+				<div class="s" data-pv-desc>{ v.Tr("admin.category_preview_sub") }</div>
+			</div>
+		</div>
+	</div>
+	<div class="form-section">
+		<h3>{ v.Tr("admin.names") }</h3>
+		<div class="field">
+			<label class="label" for="c-domain">{ v.Tr("admin.domain") }</label>
+			<select class="select" id="c-domain" name="domain_id">
+				for _, o := range d.Domains {
+					<option value={ o.Value } selected?={ o.Value == fmt.Sprint(d.DomainID) }>{ o.Label }</option>
+				}
+			</select>
+		</div>
+		<div class="field">
+			<label class="label" for="c-name">{ v.Tr("admin.name_en") }</label>
+			<input class="input" id="c-name" name="name_en" data-preview-name value={ d.Names["en"] } maxlength="40" required/>
+			<div class="char-count" data-count="c-name"></div>
+		</div>
+		<div class="form-grid" style="margin-top:16px">
+			<div class="field">
+				<label class="label" for="c-name-ar">{ v.Tr("admin.name_ar") }</label>
+				<input class="input ar" id="c-name-ar" name="name_ar" dir="rtl" lang="ar" value={ d.Names["ar"] }/>
+			</div>
+			<div class="field">
+				<label class="label" for="c-name-fr">{ v.Tr("admin.name_fr") }</label>
+				<input class="input" id="c-name-fr" name="name_fr" lang="fr" value={ d.Names["fr"] }/>
+			</div>
+		</div>
+		<div class="field">
+			<label class="label" for="c-slug">{ v.Tr("admin.slug") }</label>
+			<input class="input mono" id="c-slug" name="slug" value={ d.Slug } data-slug-from="c-name" required/>
+		</div>
+	</div>
+	<div class="form-section">
+		<h3>{ v.Tr("admin.appearance") }</h3>
+		<div class="field">
+			<span class="label">{ v.Tr("admin.icon") }</span>
+			<div class="icon-picker" data-pressed-group data-sets="icon">
+				for _, ic := range d.Icons {
+					<button type="button" data-icon={ ic } data-value={ ic } aria-pressed={ fmt.Sprint(d.Icon == ic) } aria-label={ "Icon " + ic }>{ ic }</button>
+				}
+			</div>
+		</div>
+		<div class="field">
+			<span class="label">{ v.Tr("admin.colour") }</span>
+			<div class="swatches" data-pressed-group data-sets="color">
+				for _, col := range d.Colors {
+					<button type="button" data-color={ col } data-value={ col } style={ "--c:" + col } aria-pressed={ fmt.Sprint(d.Color == col) } aria-label={ col }></button>
+				}
+			</div>
+		</div>
+	</div>
+	<div class="form-section">
+		<h3>{ v.Tr("admin.visibility") }</h3>
+		<div class="field">
+			<label class="label" for="c-pos">{ v.Tr("admin.order") }</label>
+			<input class="input num" id="c-pos" type="number" name="position" value={ fmt.Sprint(d.Position) }/>
+		</div>
+		<label class="check-row">
+			<input type="checkbox" name="is_published" value="1" checked?={ d.IsPublished }/>
+			<span>{ v.Tr("admin.live") }</span>
+		</label>
+	</div>
+}

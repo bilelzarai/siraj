@@ -1,0 +1,241 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/view"
+)
+
+// Duplicate is one pair A10 shows side by side.
+type Duplicate struct {
+	A          int64
+	B          int64
+	Similarity int
+	BodyA      string
+	BodyB      string
+}
+
+// Report is one open "report a problem" from the game screen.
+type Report struct {
+	ID         string
+	QuestionID int64
+	Reason     string
+	Note       string
+	By         string
+	Body       string
+}
+
+// HealthData backs A10. The duplicates and the reports are two piles of work on one
+// screen, so each carries its own page.
+type HealthData struct {
+	Coverage    []Bar
+	Duplicates  []Duplicate
+	Reports     []Report
+	Counts      map[string]int
+	DupPage     int
+	DupPages    int
+	DupTotal    int
+	ReportPage  int
+	ReportPages int
+	ReportTotal int
+}
+
+templ Health(v *view.Ctx, s Shell, d HealthData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div>
+				<h1>{ v.Tr("admin.health") }</h1>
+			</div>
+		</div>
+		<!-- .stack gives the three blocks the 18 px .grid already uses between
+		     its own cells: without it the coverage row, the duplicates panel and
+		     the reports panel sat edge to edge, since .grid and .panel carry no
+		     margin of their own (.kpis, which the other screens lead with, does). -->
+		<div class="stack">
+			<div class="grid grid-2">
+				<section class="panel">
+					<div class="panel-head">
+						<h2>{ v.Tr("admin.translation_coverage") }</h2>
+					</div>
+					<div class="panel-body">
+						@barChart(d.Coverage)
+					</div>
+				</section>
+				<section class="panel">
+					<div class="panel-head">
+						<h2>{ v.Tr("admin.status") }</h2>
+					</div>
+					<div class="panel-body">
+						<div class="stat-strip">
+							<div>
+								<span class="help">{ v.Tr("admin.live") }</span>
+								<b class="num">{ fmt.Sprint(d.Counts["published"]) }</b>
+							</div>
+							<div>
+								<span class="help">{ v.Tr("admin.review") }</span>
+								<b class="num">{ fmt.Sprint(d.Counts["review"]) }</b>
+							</div>
+							<div>
+								<span class="help">{ v.Tr("sets.draft") }</span>
+								<b class="num">{ fmt.Sprint(d.Counts["draft"]) }</b>
+							</div>
+							<div>
+								<span class="help">{ v.Tr("admin.retired") }</span>
+								<b class="num">{ fmt.Sprint(d.Counts["archived"]) }</b>
+							</div>
+						</div>
+					</div>
+				</section>
+			</div>
+			<section class="panel">
+				<div class="panel-head">
+					<h2>{ v.Tr("admin.duplicates") }</h2>
+				</div>
+				<div class="panel-body dup-list">
+					if len(d.Duplicates) == 0 {
+						<p class="muted">{ v.Tr("admin.no_rows") }</p>
+					}
+					for _, dup := range d.Duplicates {
+						<article class="dup-card">
+							<div class="dup-head">
+								<b class="num">{ fmt.Sprintf("%d%%", dup.Similarity) }</b>
+								<span class="mono">{ fmt.Sprintf("#%d · #%d", dup.A, dup.B) }</span>
+							</div>
+							<div class="dup-q">
+								<p>{ dup.BodyA }</p>
+								<p>{ dup.BodyB }</p>
+							</div>
+							<form method="post" action="/admin/health/duplicates" class="row">
+								<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+								<input type="hidden" name="a" value={ fmt.Sprint(dup.A) }/>
+								<input type="hidden" name="b" value={ fmt.Sprint(dup.B) }/>
+								<button class="btn btn-sm" type="submit" name="status" value="dismissed">{ v.Tr("admin.different") }</button>
+								<button class="btn btn-sm btn-danger-ghost" type="submit" name="status" value="merged">{ v.Tr("admin.merge") }</button>
+							</form>
+						</article>
+					}
+				</div>
+				if d.DupTotal > 0 {
+					@listFoot(v, "/admin/health", "dup", d.DupPage, d.DupPages, d.DupTotal)
+				}
+			</section>
+			<section class="panel">
+				<div class="panel-head">
+					<h2>{ v.Tr("admin.open_reports") }</h2>
+				</div>
+				<div class="panel-body">
+					if len(d.Reports) == 0 {
+						<p class="muted">{ v.Tr("admin.no_rows") }</p>
+					}
+					<ul class="list">
+						for _, r := range d.Reports {
+							<li class="list-item">
+								<span class="mono">{ fmt.Sprintf("#%d", r.QuestionID) }</span>
+								<span class="grow">
+									<b>{ r.Reason }</b>
+									<span class="cell-clip">{ r.Note }</span>
+									<span class="help">{ r.By }</span>
+								</span>
+								<form method="post" action={ templ.SafeURL("/admin/health/reports/" + r.ID) } class="row">
+									<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+									<a class="btn btn-sm" href={ templ.URL(fmt.Sprintf("/admin/questions/%d", r.QuestionID)) }>{ v.Tr("admin.edit") }</a>
+									<button class="btn btn-sm" type="submit" name="status" value="dismissed">{ v.Tr("admin.dismiss") }</button>
+									<button class="btn btn-sm btn-primary" type="submit" name="status" value="resolved">{ v.Tr("admin.resolve") }</button>
+								</form>
+							</li>
+						}
+					</ul>
+				</div>
+				if d.ReportTotal > 0 {
+					@listFoot(v, "/admin/health", "rep", d.ReportPage, d.ReportPages, d.ReportTotal)
+				}
+			</section>
+		</div>
+	}
+}
+
+// ThreadMessage is one post of a support ticket in the admin inbox.
+type ThreadMessage struct {
+	Author  string
+	Body    string
+	When    string
+	IsStaff bool
+	IsNote  bool
+}
+
+// ThreadData backs A03b.
+type ThreadData struct {
+	ID           string
+	Number       string
+	Subject      string
+	Topic        string
+	Status       string
+	Priority     string
+	Who          string
+	AssignedToMe bool
+	Messages     []ThreadMessage
+}
+
+templ SupportThread(v *view.Ctx, s Shell, d ThreadData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div>
+				<h1>{ d.Subject }</h1>
+				<p class="sub">
+					<span class="mono">{ d.Number }</span>
+					{ " · " + d.Topic + " · " + v.Tr("support.status."+d.Status) }
+				</p>
+			</div>
+			<div class="actions">
+				<form method="post" action={ templ.SafeURL("/admin/support/" + d.ID + "/status") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn" type="submit" name="status" value="resolved">{ v.Tr("admin.resolve") }</button>
+				</form>
+			</div>
+		</div>
+		<section class="panel">
+			<div class="panel-body">
+				for _, m := range d.Messages {
+					<div class={ "msg", templ.KV("staff", m.IsStaff), templ.KV("note", m.IsNote) }>
+						<div class="row">
+							<b>{ m.Author }</b>
+							<span class="spacer"></span>
+							<span class="help">{ m.When }</span>
+						</div>
+						<p>{ m.Body }</p>
+					</div>
+				}
+			</div>
+			<form class="panel-foot reply-box" method="post" action={ templ.SafeURL("/admin/support/" + d.ID + "/reply") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<textarea class="textarea" name="body" aria-label={ v.Tr("support.reply") }></textarea>
+				<label class="check-row">
+					<input type="checkbox" name="note" value="1"/>
+					<span>{ v.Tr("admin.note") }</span>
+				</label>
+				<button class="btn" type="submit">{ v.Tr("support.reply") }</button>
+				<button class="btn btn-primary" type="submit" name="resolve" value="1">{ v.Tr("admin.resolve") }</button>
+			</form>
+		</section>
+	}
+}
+
+// listFoot is the pager a list on a shared screen carries: its own page, its own
+// parameter, and the count it is a page of. A10 has two of them side by side.
+templ listFoot(v *view.Ctx, path, key string, page, pages, total int) {
+	<div class="panel-foot">
+		<span class="result-meta">
+			{ v.Tr("admin.showing", "from", pageFrom(page, pages, total), "to", pageTo(page, pages, total), "total", total) }
+		</span>
+		if pages > 1 {
+			<nav class="pagination" aria-label={ v.Tr("admin.pages") }>
+				for i := 1; i <= pages; i++ {
+					<a
+						class="page-n"
+						href={ templ.URL(fmt.Sprintf("%s?%s=%d", path, key, i)) }
+						aria-current={ ariaPage(i == page) }
+					>{ fmt.Sprint(i) }</a>
+				}
+			</nav>
+		}
+	</div>
+}

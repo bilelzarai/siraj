@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS user_sanctions;
+DROP TYPE IF EXISTS sanction_kind;
+DROP TABLE IF EXISTS devices;
+DROP TABLE IF EXISTS user_settings;
+DROP TABLE IF EXISTS auth_tokens;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS auth_identities;
+DROP TABLE IF EXISTS users;
+DROP TYPE IF EXISTS user_role;
+DROP TYPE IF EXISTS user_kind;
+DROP TABLE IF EXISTS languages;
+DROP FUNCTION IF EXISTS set_updated_at();

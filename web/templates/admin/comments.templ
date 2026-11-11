@@ -1,0 +1,201 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+)
+
+// A08. The shared table could not draw this screen: a comment is a piece of writing,
+// not a row of fields. A moderator has to read it, see the question it was left on
+// without opening anything, and act — so it is a card with the quoted question inside
+// it and its actions underneath.
+//
+// A flagged comment is tinted and offers different actions, because deciding whether
+// something should stay is a different job from answering it.
+
+// CommentPerPage is how many cards one page carries.
+const CommentPerPage = 25
+
+// CommentCard is one comment as the screen shows it.
+type CommentCard struct {
+	ID         string
+	Author     string
+	Initials   string
+	Color      string
+	Lang       string
+	When       string
+	Body       string
+	QuestionID int64
+	Question   string
+	Reports    int
+	Hidden     bool
+	Resolved   bool
+}
+
+// Flagged is true when other players have reported it and nobody has settled it.
+func (c CommentCard) Flagged() bool { return c.Reports > 0 && !c.Resolved }
+
+// CommentsData backs A08.
+type CommentsData struct {
+	Cards    []CommentCard
+	Tab      string
+	Query    string
+	Lang     string
+	Counts   CommentTabCounts
+	Page     int
+	Pages    int
+	Total    int
+	From     int
+	To       int
+	RawQuery string
+}
+
+// CommentTabCounts is the number beside each tab.
+type CommentTabCounts struct{ NeedsAction, Flagged, Resolved, Hidden int }
+
+templ Comments(v *view.Ctx, s Shell, d CommentsData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div>
+				<h1>{ v.Tr("admin.comments") }</h1>
+				<p class="sub">{ v.Tr("admin.comments_sub") }</p>
+			</div>
+		</div>
+		<section class="panel">
+			<div class="tabs" role="tablist">
+				for _, t := range []struct {
+					Key   string
+					Label string
+					Count int
+				}{
+					{"needs", v.Tr("admin.needs_action"), d.Counts.NeedsAction},
+					{"flagged", v.Tr("admin.flagged"), d.Counts.Flagged},
+					{"resolved", v.Tr("admin.resolved"), d.Counts.Resolved},
+					{"hidden", v.Tr("admin.hidden"), d.Counts.Hidden},
+				} {
+					<a
+						class={ "tab", templ.KV("on", d.Tab == t.Key) }
+						role="tab"
+						aria-selected={ fmt.Sprint(d.Tab == t.Key) }
+						href={ templ.URL(commentHref(d, "tab", t.Key)) }
+					>
+						{ t.Label }
+						if t.Count > 0 {
+							<span class="tag">{ fmt.Sprint(t.Count) }</span>
+						}
+					</a>
+				}
+			</div>
+			<div class="toolbar">
+				<form class="toolbar-search" method="get" action="/admin/comments">
+					<input type="hidden" name="tab" value={ d.Tab }/>
+					<input type="hidden" name="lang" value={ d.Lang }/>
+					<div class="input-icon">
+						@IconClass("search", "icon")
+						<input
+							class="input"
+							type="search"
+							name="q"
+							value={ d.Query }
+							placeholder={ v.Tr("admin.search_comments") }
+							aria-label={ v.Tr("admin.search_comments") }
+						/>
+					</div>
+				</form>
+				<select class="select" aria-label={ v.Tr("admin.language") } onchange="location.href=this.value">
+					<option value={ commentHref(d, "lang", "") } selected?={ d.Lang == "" }>
+						{ v.Tr("admin.any_language") }
+					</option>
+					for _, lang := range i18n.Langs {
+						<option value={ commentHref(d, "lang", lang) } selected?={ d.Lang == lang }>
+							{ i18n.Native[lang] }
+						</option>
+					}
+				</select>
+			</div>
+			if len(d.Cards) == 0 {
+				<div class="panel-body">
+					<div class="empty"><p>{ v.Tr("admin.no_comments") }</p></div>
+				</div>
+			} else {
+				for _, c := range d.Cards {
+					@commentCard(v, c)
+				}
+			}
+			<div class="panel-foot">
+				<span class="result-meta">{ v.Tr("admin.showing", "from", d.From, "to", d.To, "total", d.Total) }</span>
+				if d.Pages > 1 {
+					<nav class="pagination" aria-label={ v.Tr("admin.pages") }>
+						for i := 1; i <= d.Pages; i++ {
+							<a
+								class="page-n"
+								href={ templ.URL(commentHref(d, "page", fmt.Sprint(i))) }
+								aria-current={ ariaPage(i == d.Page) }
+							>{ fmt.Sprint(i) }</a>
+						}
+					</nav>
+				}
+			</div>
+		</section>
+	}
+}
+
+templ commentCard(v *view.Ctx, c CommentCard) {
+	<article class={ "comment", templ.KV("is-flagged", c.Flagged()) }>
+		<span class="avatar" style={ "--c:" + c.Color }>{ c.Initials }</span>
+		<div class="body">
+			<div class="head">
+				<b>{ c.Author }</b>
+				<span class="badge badge-outline no-dot">{ i18n.Native[c.Lang] }</span>
+				<span class="muted">{ c.When }</span>
+				if c.Flagged() {
+					<span class="badge badge-danger">{ flaggedLabel(v, c.Reports) }</span>
+				} else if c.Resolved {
+					<span class="badge badge-live">{ v.Tr("admin.resolved") }</span>
+				}
+				if c.Hidden {
+					<span class="badge badge-neutral no-dot">{ v.Tr("admin.hidden") }</span>
+				}
+			</div>
+			// A comment is a player's own words, in whichever language they wrote:
+			// dir="auto" so Arabic reads right-to-left inside a left-to-right console.
+			<p class="text" dir="auto" lang={ c.Lang }>{ c.Body }</p>
+			<a class="on" href={ templ.URL(fmt.Sprintf("/admin/questions/%d", c.QuestionID)) }>
+				@IconClass("question", "icon-sm")
+				<span class="min0 cell-clip">{ c.Question }</span>
+				<span class="mono">{ fmt.Sprintf("#%d", c.QuestionID) }</span>
+			</a>
+			<div class="acts">
+				if c.Flagged() {
+					@commentAction(v, c.ID, "hide", "eye-off", "admin.hide_comment", "btn-danger")
+					@commentAction(v, c.ID, "keep", "check", "admin.keep", "")
+					@commentAction(v, c.ID, "suspend", "ban", "admin.suspend_author", "btn-danger-ghost")
+				} else if c.Hidden {
+					@commentAction(v, c.ID, "show", "eye", "admin.unhide", "")
+				} else if c.Resolved {
+					@commentAction(v, c.ID, "reopen", "refresh", "admin.reopen", "")
+				} else {
+					@commentAction(v, c.ID, "resolve", "check", "admin.mark_resolved", "")
+					<a class="btn btn-sm" href={ templ.URL(fmt.Sprintf("/admin/questions/%d", c.QuestionID)) }>
+						@IconClass("edit", "icon-sm")
+						{ v.Tr("admin.edit_question") }
+					</a>
+					@commentAction(v, c.ID, "hide", "eye-off", "admin.hide", "")
+				}
+			</div>
+		</div>
+	</article>
+}
+
+// commentAction is one button of a card. Each is its own form: a moderation decision
+// is a write, and a write is a POST with the page's token on it.
+templ commentAction(v *view.Ctx, id, action, icon, label, class string) {
+	<form method="post" action={ templ.SafeURL("/admin/comments/" + id) }>
+		<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+		<button class={ "btn", "btn-sm", class } type="submit" name="action" value={ action }>
+			@IconClass(icon, "icon-sm")
+			{ v.Tr(label) }
+		</button>
+	</form>
+}

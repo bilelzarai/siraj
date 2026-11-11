@@ -1,0 +1,639 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/view"
+)
+
+// Cell is one table cell. Keeping it data (not markup) lets every admin list screen
+// share one table, exactly as the design kit's `.table` does.
+type Cell struct {
+	Text       string
+	Sub        string
+	Href       string
+	Mono       bool
+	Badge      string
+	BadgeClass string
+	Color      string // a dot in front of the text, or the avatar's colour
+	Avatar     string // initials: the cell becomes the design's "cell-main" block
+	Icon       string // a category or domain icon tile in front of the text
+	Meter      int    // 0 = none; otherwise a 0–100 bar
+	MeterClass string // warn | danger | lamp
+	Align      string
+	Dot        bool // a status dot in front of the badge
+	// Drawer opens the link over the list instead of navigating to it. The href is
+	// the same either way, so a browser without JavaScript still reaches the form.
+	Drawer bool
+	// Langs is the AR / EN / FR strip of A06: a missing translation is outlined.
+	Langs []Lang
+	// Level is the three-bar difficulty mark of A06 (1, 2 or 3; 0 = none).
+	Level      int
+	LevelLabel string
+}
+
+// Lang is one translation badge.
+type Lang struct {
+	Code string
+	Has  bool
+}
+
+// Action is a button at the end of a row; GET links navigate, POST ones act.
+type Action struct {
+	Label   string
+	Icon    string
+	Href    string
+	Post    bool
+	Fields  map[string]string
+	Danger  bool
+	Confirm string
+	Drawer  bool
+}
+
+// TableRow is one row; State feeds the segmented "live / retired" filter.
+type TableRow struct {
+	ID      string
+	State   string
+	Cells   []Cell
+	Actions []Action
+	// Menu is the design's "⋯" at the end of a row: the actions that are rarer or
+	// heavier than the one or two buttons beside it.
+	Menu []Action
+}
+
+// Column is one heading. A Sort key makes it clickable: the design lets staff
+// order a table by most of its columns, and the arrow says which way.
+type Column struct {
+	Label string
+	Sort  string
+	Align string
+}
+
+// Cols is the plain form, for a table nothing is sorted by.
+func Cols(labels ...string) []Column {
+	out := make([]Column, 0, len(labels))
+	for _, l := range labels {
+		out = append(out, Column{Label: l})
+	}
+	return out
+}
+
+// Option is one choice of a select filter.
+type Option struct {
+	Value string
+	Label string
+}
+
+// Filter is one select in the toolbar; changing it submits the form.
+type Filter struct {
+	Name    string
+	Label   string
+	Value   string
+	Options []Option
+}
+
+// Segment is the segmented control over a table (All / Live / Retired…).
+type Segment struct {
+	Value string
+	Label string
+	Count int
+}
+
+// BulkAction is one button of the bar that appears when rows are selected.
+type BulkAction struct {
+	Label  string
+	Value  string
+	Icon   string
+	Danger bool
+}
+
+// TableData is everything a list screen needs.
+type TableData struct {
+	Title      string
+	Sub        string
+	NewLabel   string
+	NewHref    string
+	SearchName string
+	Search     string
+	Filters    []Filter
+	Segments   []Segment
+	Segment    string
+	SegmentKey string
+	Columns    []Column
+	Rows       []TableRow
+	// Sort is the column the rows are in the order of, and Asc which way. Both are
+	// read back from the query, so a sorted page can be linked to and reloaded.
+	Sort string
+	Asc  bool
+	Page       int
+	Pages      int
+	Total      int
+	From       int
+	To         int
+	BasePath   string
+	Query      string
+	BulkPath   string
+	Bulk       []BulkAction
+	Empty      string
+	// SearchLabel is what the search box says it looks through ("Name, handle or
+	// email"); empty falls back to the console's general wording.
+	SearchLabel string
+	// The file buttons of the design's page head (A04, A05, A06, A02). An empty
+	// path hides its button, which is how a screen without permission loses it.
+	ExportPath   string
+	TemplatePath string
+	ImportPath   string
+	// Drawer opens "New …" and the row links over the list instead of navigating,
+	// with the same href as the no-JavaScript fallback (NF-02).
+	Drawer bool
+}
+
+// Table is the shared A02 / A04 / A05 / A06 / A08 / A11 screen.
+templ Table(v *view.Ctx, s Shell, d TableData) {
+	@Layout(v, s) {
+		@TableBody(v, d)
+	}
+}
+
+templ TableBody(v *view.Ctx, d TableData) {
+	<div class="page-head">
+		<div>
+			<h1>{ d.Title }</h1>
+			if d.Sub != "" {
+				<p class="sub">{ d.Sub }</p>
+			}
+		</div>
+		if d.NewHref != "" || d.ExportPath != "" || d.ImportPath != "" {
+			<div class="actions">
+				if d.TemplatePath != "" {
+					<a class="btn" href={ templ.URL(d.TemplatePath) } download>
+						@Icon("download")
+						{ v.Tr("admin.csv_template") }
+					</a>
+				}
+				if d.ImportPath != "" {
+					<a
+						class="btn"
+						href={ templ.URL(d.ImportPath) }
+						hx-get={ d.ImportPath }
+						hx-target="#drawer-slot"
+						hx-swap="innerHTML"
+					>
+						@Icon("upload")
+						{ v.Tr("admin.csv_import") }
+					</a>
+				}
+				if d.ExportPath != "" {
+					<a class="btn" href={ templ.URL(d.ExportPath) } download>
+						@Icon("download")
+						{ v.Tr("admin.csv_export") }
+					</a>
+				}
+				if d.NewHref != "" {
+					<a
+						class="btn btn-primary"
+						href={ templ.URL(d.NewHref) }
+						if d.Drawer {
+							hx-get={ d.NewHref }
+							hx-target="#drawer-slot"
+							hx-swap="innerHTML"
+						}
+					>
+						@Icon("plus")
+						{ d.NewLabel }
+					</a>
+				}
+			</div>
+		}
+	</div>
+	<section class="panel">
+		<form class="toolbar" method="get" action={ templ.SafeURL(d.BasePath) }>
+			if d.SearchName != "" {
+				<label class="input-group">
+					<span class="sr-only">{ searchLabel(v, d) }</span>
+					@IconClass("search", "icon-sm")
+					<input
+						class="input input-sm"
+						type="search"
+						name={ d.SearchName }
+						value={ d.Search }
+						placeholder={ searchLabel(v, d) }
+					/>
+				</label>
+			}
+			if len(d.Segments) > 0 {
+				<div class="segmented">
+					for _, sg := range d.Segments {
+						<a
+							href={ templ.URL(withParam(d.BasePath, d.Query, d.SegmentKey, sg.Value)) }
+							aria-pressed={ fmt.Sprint(d.Segment == sg.Value) }
+						>
+							{ sg.Label }
+							if sg.Count > 0 {
+								<span class="tag">{ fmt.Sprint(sg.Count) }</span>
+							}
+						</a>
+					}
+				</div>
+			}
+			<span class="spacer"></span>
+			for _, f := range d.Filters {
+				<label class="input-group">
+					<span class="sr-only">{ f.Label }</span>
+					<select class="select input-sm" name={ f.Name } onchange="this.form.submit()">
+						for _, o := range f.Options {
+							<option value={ o.Value } selected?={ o.Value == f.Value }>{ o.Label }</option>
+						}
+					</select>
+				</label>
+			}
+			// A select submits itself; this is the way through for a browser where
+			// it cannot, and it stays out of the design's toolbar otherwise.
+			<button class="btn btn-sm no-js-only" type="submit">
+				@IconClass("filter", "icon-sm")
+				{ v.Tr("admin.filter") }
+			</button>
+		</form>
+		<form method="post" action={ templ.SafeURL(d.BulkPath) }>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			if len(d.Bulk) > 0 {
+				<div class="bulkbar" id="bulk-bar" data-bulk>
+					<b><span data-selected-count>0</span> { v.Tr("admin.selected") }</b>
+					<span class="spacer"></span>
+					for _, b := range d.Bulk {
+						<button class={ "btn", "btn-sm", templ.KV("btn-danger-ghost", b.Danger) } type="submit" name="action" value={ b.Value }>
+							if b.Icon != "" {
+								@IconClass(b.Icon, "icon-sm")
+							}
+							{ b.Label }
+						</button>
+					}
+					<button class="btn btn-sm btn-ghost" type="button" data-clear-selection>{ v.Tr("action.clear") }</button>
+				</div>
+			}
+			<div class="table-wrap">
+				<table class="table" data-selectable={ bulkTarget(d) }>
+					<thead>
+						<tr>
+							if len(d.Bulk) > 0 {
+								<th class="cell-check">
+									<input type="checkbox" data-select-all aria-label="Select all"/>
+								</th>
+							}
+							for _, c := range d.Columns {
+								if c.Sort == "" {
+									<th class={ c.Align }>{ c.Label }</th>
+								} else {
+									<th class={ c.Align } aria-sort={ ariaSort(d, c) }>
+										<a class={ "sort", templ.KV("on", d.Sort == c.Sort) } href={ templ.URL(sortHref(d, c)) }>
+											{ c.Label }
+											if d.Sort == c.Sort {
+												@IconClass(sortIcon(d.Asc), "icon-sm")
+											} else {
+												@IconClass("chevron-down", "icon-sm sort-hint")
+											}
+										</a>
+									</th>
+								}
+							}
+							<th class="cell-actions"></th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(d.Rows) == 0 {
+							<tr>
+								<td colspan="12">
+									<div class="empty">
+										<p>
+											if d.Empty != "" {
+												{ d.Empty }
+											} else {
+												{ v.Tr("admin.no_rows") }
+											}
+										</p>
+									</div>
+								</td>
+							</tr>
+						}
+						for _, r := range d.Rows {
+							<tr data-state={ r.State }>
+								if len(d.Bulk) > 0 {
+									<td class="cell-check">
+										<input type="checkbox" name="ids" value={ r.ID } data-row aria-label={ r.ID }/>
+									</td>
+								}
+								for _, c := range r.Cells {
+									<td class={ templ.KV("mono", c.Mono), c.Align }>
+										@cell(c)
+									</td>
+								}
+								<td class="cell-actions">
+									for _, a := range r.Actions {
+										@rowAction(v, a)
+									}
+									if len(r.Menu) > 0 {
+										@rowMenu(v, r)
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</form>
+		<div class="panel-foot">
+			<span class="result-meta">{ v.Tr("admin.showing", "from", d.From, "to", d.To, "total", d.Total) }</span>
+			if d.Pages > 1 {
+				<nav class="pagination" aria-label={ v.Tr("admin.pages") }>
+					if d.Page > 1 {
+						<a
+							class="page-n"
+							href={ templ.URL(withParam(d.BasePath, d.Query, "page", fmt.Sprint(d.Page-1))) }
+							aria-label={ v.Tr("action.previous_page") }
+						>
+							@IconClass("chevron-left", "icon-sm icon-flip")
+						</a>
+					} else {
+						<span class="page-n" aria-disabled="true" aria-label={ v.Tr("action.previous_page") }>
+							@IconClass("chevron-left", "icon-sm icon-flip")
+						</span>
+					}
+					for i := 1; i <= d.Pages; i++ {
+						<a
+							class="page-n"
+							href={ templ.URL(withParam(d.BasePath, d.Query, "page", fmt.Sprint(i))) }
+							aria-current={ ariaPage(i == d.Page) }
+						>{ fmt.Sprint(i) }</a>
+					}
+					if d.Page < d.Pages {
+						<a
+							class="page-n"
+							href={ templ.URL(withParam(d.BasePath, d.Query, "page", fmt.Sprint(d.Page+1))) }
+							aria-label={ v.Tr("action.next_page") }
+						>
+							@IconClass("chevron-right", "icon-sm icon-flip")
+						</a>
+					} else {
+						<span class="page-n" aria-disabled="true" aria-label={ v.Tr("action.next_page") }>
+							@IconClass("chevron-right", "icon-sm icon-flip")
+						</span>
+					}
+				</nav>
+			}
+		</div>
+	</section>
+}
+
+templ cell(c Cell) {
+	if c.Avatar != "" || c.Icon != "" {
+		<div class="cell-main">
+			if c.Avatar != "" {
+				<span class="avatar sm" style={ "--c:" + c.Color }>{ c.Avatar }</span>
+			} else {
+				<span class="cat-tile" style={ "--c:" + c.Color } aria-hidden="true">
+					@AppIcon(c.Icon)
+				</span>
+			}
+			<div>
+				<div class="t">
+					if c.Href != "" {
+						@cellLink(c)
+					} else {
+						{ c.Text }
+					}
+				</div>
+				if c.Sub != "" {
+					<div class="s">{ c.Sub }</div>
+				}
+			</div>
+		</div>
+	} else if len(c.Langs) > 0 {
+		<div class="lang-strip">
+			for _, l := range c.Langs {
+				<span class={ "badge badge-soft no-dot", templ.KV("missing", !l.Has) }>{ l.Code }</span>
+			}
+		</div>
+	} else if c.Level > 0 {
+		<div class="level-mark">
+			<span class="level-bars" aria-hidden="true">
+				for i := 1; i <= 3; i++ {
+					<i class={ templ.KV("on", i <= c.Level) }></i>
+				}
+			</span>
+			{ c.LevelLabel }
+		</div>
+	} else {
+		if c.Color != "" {
+			<span class="swatch-dot" style={ "background:" + c.Color }></span>
+		}
+		if c.Href != "" {
+			@cellLink(c)
+		} else {
+			{ c.Text }
+		}
+		if c.Badge != "" {
+			<span class={ "badge", c.BadgeClass, templ.KV("no-dot", !c.Dot) }>{ c.Badge }</span>
+		}
+		if c.Sub != "" {
+			<span class="cell-clip">{ c.Sub }</span>
+		}
+		if c.Meter > 0 {
+			<div class="meter">
+				<div class={ "meter-bar", c.MeterClass }>
+					<i style={ fmt.Sprintf("--v:%d%%", c.Meter) }></i>
+				</div>
+				<span class="v">{ fmt.Sprint(c.Meter) }%</span>
+			</div>
+		}
+	}
+}
+
+// cellLink is the row's own link: over the list when the screen edits in a drawer.
+templ cellLink(c Cell) {
+	<a
+		href={ templ.URL(c.Href) }
+		if c.Drawer {
+			hx-get={ c.Href }
+			hx-target="#drawer-slot"
+			hx-swap="innerHTML"
+		}
+	>{ c.Text }</a>
+}
+
+templ rowAction(v *view.Ctx, a Action) {
+	if a.Post {
+		<button
+			class={ "btn", "btn-sm", templ.KV("btn-danger-ghost", a.Danger) }
+			type="submit"
+			formaction={ templ.SafeURL(a.Href) }
+			formmethod="post"
+		>
+			if a.Icon != "" {
+				@IconClass(a.Icon, "icon-sm")
+			}
+			{ a.Label }
+		</button>
+	} else {
+		<a
+			class="btn btn-sm"
+			href={ templ.URL(a.Href) }
+			if a.Drawer {
+				hx-get={ a.Href }
+				hx-target="#drawer-slot"
+				hx-swap="innerHTML"
+			}
+		>
+			if a.Icon != "" {
+				@IconClass(a.Icon, "icon-sm")
+			}
+			{ a.Label }
+		</a>
+	}
+}
+
+// rowMenu is the "⋯" of the design: a button and the list it opens, closed by a
+// click anywhere else or by Escape.
+templ rowMenu(v *view.Ctx, r TableRow) {
+	<div class="menu-wrap">
+		<button
+			class="icon-btn sm"
+			type="button"
+			data-menu
+			aria-haspopup="menu"
+			aria-expanded="false"
+			aria-label={ v.Tr("admin.more_actions") }
+		>
+			@IconClass("more", "icon-sm")
+		</button>
+		<div class="menu menu-row" role="menu">
+			for _, a := range r.Menu {
+				@rowAction(v, a)
+			}
+		</div>
+	</div>
+}
+
+// sortHref keeps every other filter and turns the heading that is already active
+// around, the way the design's sorted tables behave.
+func sortHref(d TableData, c Column) string {
+	dir := "asc"
+	if d.Sort == c.Sort && d.Asc {
+		dir = "desc"
+	}
+	return withParams(d.BasePath, d.Query, "sort", c.Sort, "dir", dir)
+}
+
+// withParams is withParam for more than one key: the keys it sets are dropped from
+// the query it carries over, and "page" always is — a new order starts at page one.
+func withParams(base, query string, pairs ...string) string {
+	out := base + "?"
+	for _, part := range splitAmp(query) {
+		if part == "" {
+			continue
+		}
+		name := part
+		if i := indexByte(part, '='); i >= 0 {
+			name = part[:i]
+		}
+		if name == "page" || hasKey(pairs, name) {
+			continue
+		}
+		out += part + "&"
+	}
+	for i := 0; i+1 < len(pairs); i += 2 {
+		out += pairs[i] + "=" + pairs[i+1] + "&"
+	}
+	return out[:len(out)-1]
+}
+
+func hasKey(pairs []string, name string) bool {
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if pairs[i] == name {
+			return true
+		}
+	}
+	return false
+}
+
+// bulkTarget names the bar the selection drives, and is empty when a table has no
+// bulk actions at all — which is what keeps its rows from being selectable.
+func bulkTarget(d TableData) string {
+	if len(d.Bulk) == 0 {
+		return ""
+	}
+	return "bulk-bar"
+}
+
+func searchLabel(v *view.Ctx, d TableData) string {
+	if d.SearchLabel != "" {
+		return d.SearchLabel
+	}
+	return v.Tr("admin.search")
+}
+
+func ariaSort(d TableData, c Column) string {
+	if d.Sort != c.Sort {
+		return "none"
+	}
+	if d.Asc {
+		return "ascending"
+	}
+	return "descending"
+}
+
+func sortIcon(asc bool) string {
+	if asc {
+		return "chevron-up"
+	}
+	return "chevron-down"
+}
+
+func ariaPage(on bool) string {
+	if on {
+		return "page"
+	}
+	return "false"
+}
+
+// withParam rewrites one query parameter and keeps the rest of the filter.
+func withParam(base, query, key, value string) string {
+	out := base + "?"
+	seen := false
+	for _, part := range splitAmp(query) {
+		if part == "" {
+			continue
+		}
+		name := part
+		if i := indexByte(part, '='); i >= 0 {
+			name = part[:i]
+		}
+		if name == key || name == "page" {
+			continue
+		}
+		out += part + "&"
+	}
+	if !seen {
+		out += key + "=" + value
+	}
+	return out
+}
+
+func splitAmp(s string) []string {
+	out := []string{}
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '&' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, s[start:])
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}

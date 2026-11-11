@@ -1,0 +1,690 @@
+package pages
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// SetupData backs the game setup screen (GP-02). The same screen hosts a live room.
+//
+// The topic picker keeps two things apart, the way the prototype does: View is the
+// domain whose categories are on screen, Domain is the one the game will actually run
+// on. "All my domains" (AllMine) drops both and mixes every domain the player owns.
+type SetupData struct {
+	Room bool
+	// Path is the screen the picker's links point back at: /setup for P09,
+	// /rooms/new for P12 and /challenges/new for P20 (FLOWS §5).
+	Path       string
+	AllMine    bool
+	View       *view.Domain
+	Domain     *view.Domain
+	Categories []components.Category
+	Picked     map[int64]bool
+	PickedList []components.Category
+	Difficulty int32
+	Count      int32
+	Seconds    int32
+	Available  int
+	MaxPoints  int32
+	// Room options (P12, RM-01): who may join, how many, whether chat is on, and the
+	// way the room will play — everyone for themselves or two teams (RM-05).
+	MaxPlayers int32
+	Chat       bool
+	GuestRoom  bool
+	Mode       string
+
+	MineQuestions   int32 // questions across every domain the player owns
+	MyCategoryCount int
+	ViewQuestions   int32
+	TopicLabel      string
+
+	Query string
+	// Extra carries the other screen's controls (P20's who / source / names) so a
+	// picker link keeps them.
+	Extra         url.Values
+	ResultDomains []view.Domain
+	ResultCats    []components.Category
+	DomainNames   map[int64]string
+}
+
+// Setup is prototype screen 9 (P09).
+templ Setup(v *view.Ctx, d SetupData) {
+	@layouts.App(v, setupTitle(v, d)) {
+		<div class="page mid setup-page">
+			<a class="btn btn-ghost btn-sm back-link" href="/play">
+				@components.IconClass("arrowL", "flip")
+				{ v.Tr("play.title") }
+			</a>
+			<div class="page-head">
+				<div>
+					<h1>{ setupTitle(v, d) }</h1>
+					<p class="sub">
+						if d.Room {
+							{ v.Tr("setup.room_sub") }
+						} else {
+							{ v.Tr("setup.sub") }
+						}
+					</p>
+				</div>
+			</div>
+			<div class="cols">
+				<div class="col-main stack gap-lg">
+					<section class="card pad">
+						<div class="row push-bottom-sm">
+							<span class="label">{ v.Tr("setup.what_to_play") }</span>
+							<span class="spacer"></span>
+							<span class="help hide-sm">{ v.Tr("setup.what_to_play_help") }</span>
+						</div>
+						@topicPicker(v, d)
+					</section>
+					if d.Room {
+						<section class="card pad stack gap-lg">
+							<div class="form-grid">
+								<div class="field">
+									<label class="label" for="max_players">{ v.Tr("rooms.players_label") }</label>
+									<select class="select" id="max_players" name="max_players">
+										for _, n := range roomSizes(d) {
+											<option value={ fmt.Sprint(n) } selected?={ d.MaxPlayers == n }>{ v.Tr("rooms.up_to", "n", n) }</option>
+										}
+									</select>
+								</div>
+								<div class="field">
+									<label class="label" for="who_joins">{ v.Tr("rooms.who_can_join") }</label>
+									<select class="select" id="who_joins" disabled>
+										<option>
+											if d.GuestRoom {
+												{ v.Tr("rooms.guests_with_code") }
+											} else {
+												{ v.Tr("rooms.anyone_with_code") }
+											}
+										</option>
+									</select>
+									if d.GuestRoom {
+										<span class="help">{ v.Tr("rooms.guest_rooms_help") }</span>
+									}
+								</div>
+							</div>
+							<div>
+								<div class="label push-bottom-sm">{ v.Tr("rooms.how_to_play") }</div>
+								<div class="seg full" role="group" aria-label={ v.Tr("rooms.how_to_play") }>
+									<a
+										class={ "seg-item", templ.KV("on", d.Mode != "teams") }
+										href={ templ.URL(d.Href("mode", "ffa")) }
+										aria-pressed={ fmt.Sprint(d.Mode != "teams") }
+									>
+										@components.IconClass("swords", "i-sm")
+										{ v.Tr("rooms.mode_ffa") }
+									</a>
+									<a
+										class={ "seg-item", templ.KV("on", d.Mode == "teams") }
+										href={ templ.URL(d.Href("mode", "teams")) }
+										aria-pressed={ fmt.Sprint(d.Mode == "teams") }
+									>
+										@components.IconClass("shieldT", "i-sm")
+										{ v.Tr("rooms.mode_teams") }
+									</a>
+								</div>
+								<span class="help">{ v.Tr("rooms.teams_need", "n", 4) }</span>
+							</div>
+							<label class="switch">
+								<input type="checkbox" name="chat" value="1" checked?={ d.Chat }/>
+								<span>
+									<b>{ v.Tr("rooms.chat") }</b>
+									<br/>
+									<span class="help">{ v.Tr("rooms.chat_help") }</span>
+								</span>
+							</label>
+						</section>
+					}
+					// Difficulty, how many questions and how long each one lasts are one
+					// choice in three parts, so they sit on one line and wrap together
+					// on a narrow screen (P09).
+					<section class="card pad setup-controls">
+						<div>
+							<div class="label push-bottom-sm">{ v.Tr("setup.difficulty") }</div>
+							<div class="seg" role="group" aria-label={ v.Tr("setup.difficulty") }>
+								for _, option := range []struct {
+									Value int32
+									Key   string
+								}{{1, "setup.easy"}, {2, "setup.medium"}, {3, "setup.hard"}, {0, "setup.mixed"}} {
+									<a
+										class={ "seg-item", templ.KV("on", d.Difficulty == option.Value) }
+										href={ templ.URL(d.Href("difficulty", fmt.Sprint(option.Value))) }
+										aria-pressed={ fmt.Sprint(d.Difficulty == option.Value) }
+									>{ v.Tr(option.Key) }</a>
+								}
+							</div>
+						</div>
+						<div>
+							<div class="label push-bottom-sm">{ v.Tr("setup.number_of_questions") }</div>
+							<div class="seg" role="group" aria-label={ v.Tr("setup.number_of_questions") }>
+								for _, n := range []int32{5, 10, 15, 20} {
+									<a
+										class={ "seg-item num", templ.KV("on", d.Count == n) }
+										href={ templ.URL(d.Href("count", fmt.Sprint(n))) }
+										aria-pressed={ fmt.Sprint(d.Count == n) }
+									>{ fmt.Sprint(n) }</a>
+								}
+							</div>
+						</div>
+						<div>
+							<div class="label push-bottom-sm">{ v.Tr("setup.time_per_question") }</div>
+							<div class="seg" role="group" aria-label={ v.Tr("setup.time_per_question") }>
+								for _, n := range timerOptions(d) {
+									<a
+										class={ "seg-item", templ.KV("on", d.Seconds == n) }
+										href={ templ.URL(d.Href("seconds", fmt.Sprint(n))) }
+										aria-pressed={ fmt.Sprint(d.Seconds == n) }
+									>
+										if n == 0 {
+											{ v.Tr("setup.timer.off") }
+										} else {
+											{ v.Tr("setup.timer.seconds", "n", n) }
+										}
+									</a>
+								}
+							</div>
+						</div>
+					</section>
+				</div>
+				<aside class="col-side">
+					<form class="card pad summary" method="post" action={ templ.SafeURL(submitAction(d)) }>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						if d.AllMine {
+							<input type="hidden" name="all_mine" value="1"/>
+						} else if d.Domain != nil {
+							<input type="hidden" name="domain" value={ fmt.Sprint(d.Domain.ID) }/>
+							for _, c := range d.PickedList {
+								<input type="hidden" name="category" value={ fmt.Sprint(c.ID) }/>
+							}
+						}
+						<input type="hidden" name="difficulty" value={ fmt.Sprint(d.Difficulty) }/>
+						<input type="hidden" name="count" value={ fmt.Sprint(d.Count) }/>
+						<input type="hidden" name="seconds" value={ fmt.Sprint(d.Seconds) }/>
+						if d.Room {
+							<input type="hidden" name="max_players" value={ fmt.Sprint(d.MaxPlayers) }/>
+							<input type="hidden" name="mode" value={ roomMode(d.Mode) }/>
+							if d.Chat {
+								<input type="hidden" name="chat" value="1"/>
+							}
+						}
+						<h2 class="card-title">{ v.Tr("setup.summary") }</h2>
+						<div class="sum-line">
+							<span>{ v.Tr("setup.topics") }</span>
+							<b>{ d.TopicLabel }</b>
+						</div>
+						<div class="sum-line">
+							<span>{ v.Tr("setup.difficulty") }</span>
+							<b>{ difficultyLabel(v, d.Difficulty) }</b>
+						</div>
+						<div class="sum-line">
+							<span>{ v.Tr("setup.count") }</span>
+							<b class="num">
+								{ fmt.Sprint(plannedCount(d)) }
+								if plannedCount(d) < int(d.Count) {
+									<span class="muted soft">/ { fmt.Sprint(d.Count) }</span>
+								}
+							</b>
+						</div>
+						<div class="sum-line">
+							<span>{ v.Tr("setup.length") }</span>
+							<b class="num">{ v.Tr("setup.about_minutes", "n", minutesFor(d)) }</b>
+						</div>
+						<div class="sum-line">
+							<span>{ v.Tr("setup.up_to") }</span>
+							<b class="num">{ fmt.Sprint(d.MaxPoints) } { v.Tr("game.points") }</b>
+						</div>
+						if d.Available == 0 {
+							<p class="err push-top-sm">{ v.Tr("setup.no_questions") }</p>
+						} else if !enoughQuestions(d) {
+							<p class="err push-top-sm">{ v.Tr("setup.fewer_questions", "available", d.Available, "count", d.Count) }</p>
+						}
+						<button class="btn btn-primary btn-lg btn-block push-top-sm" type="submit" disabled?={ !enoughQuestions(d) }>
+							if d.Room {
+								@components.Icon("radio")
+								{ v.Tr("setup.create_room") }
+							} else {
+								@components.IconClass("tri", "flip")
+								{ v.Tr("setup.start") }
+							}
+						</button>
+					</form>
+				</aside>
+			</div>
+		</div>
+	}
+}
+
+// topicPicker is the shared picker of P09, P12 and P20: search, "All my domains",
+// the domain pills, the categories of the domain in view and the picked chips.
+templ topicPicker(v *view.Ctx, d SetupData) {
+	<div class={ "tp2", templ.KV("searching", d.Query != "") } data-ns="setup">
+		if d.MyCategoryCount > 8 {
+			<form class="tp-search" method="get" action={ templ.SafeURL(pickerAction(d)) } role="search">
+				@setupHidden(d, "q")
+				<label class="input-icon">
+					@components.Icon("search")
+					<span class="sr-only">{ v.Tr("action.search") }</span>
+					<input
+						class="input"
+						type="search"
+						name="q"
+						value={ d.Query }
+						autocomplete="off"
+						placeholder={ v.Tr("setup.search_placeholder", "domains", len(v.MyDomains), "categories", d.MyCategoryCount) }
+					/>
+				</label>
+			</form>
+			<div class="tp-res">
+				if d.Query != "" {
+					if len(d.ResultDomains) == 0 && len(d.ResultCats) == 0 {
+						<p class="muted pad-sm">{ v.Tr("setup.no_match") }</p>
+					}
+					if len(d.ResultDomains) > 0 {
+						<div class="ds-h">{ v.Tr("admin.domains") }</div>
+						for _, dom := range d.ResultDomains {
+							<a class="ds-row" href={ templ.URL(d.Href("domain", fmt.Sprint(dom.ID))) }>
+								<span class="cat-ic sm" style={ "--c:" + dom.Color }>
+									@components.Icon(dom.Icon)
+								</span>
+								<span class="ds-t">
+									<b>{ dom.Name }</b>
+									<span class="help">
+										{ v.Tr("domain.categories_count", "count", dom.CategoryCount) } · { v.Tr("domain.questions_count", "count", dom.QuestionCount) }
+									</span>
+								</span>
+								@components.IconClass("chevR", "i-sm flip")
+							</a>
+						}
+					}
+					if len(d.ResultCats) > 0 {
+						<div class="ds-h">{ v.Tr("domain.categories") }</div>
+						for _, c := range d.ResultCats {
+							<a
+								class={ "ds-row", templ.KV("on", d.Picked[c.ID]) }
+								href={ templ.URL(d.Href("cat", fmt.Sprint(c.ID))) }
+							>
+								<span class="cat-ic sm" style={ "--c:" + c.Color }>
+									@components.Icon(c.Icon)
+								</span>
+								<span class="ds-t">
+									<b>{ c.Name }</b>
+									<span class="help">{ v.Tr("setup.in_domain", "name", d.DomainNames[c.DomainID]) }</span>
+								</span>
+								<span class="tp-n num">{ fmt.Sprint(c.QuestionCount) }</span>
+							</a>
+						}
+					}
+				}
+			</div>
+		}
+		<a
+			class={ "tp-all", templ.KV("on", d.AllMine) }
+			href={ templ.URL(d.Href("all_mine", "1")) }
+			aria-pressed={ fmt.Sprint(d.AllMine) }
+		>
+			<span class="cat-ic mix-ic">
+				@components.Icon("shuffle")
+			</span>
+			<span class="tp-t">
+				<b>{ v.Tr("setup.all_my_domains") }</b>
+				<span class="help">{ domainNameList(v) } · { v.Tr("setup.mixed_together") }</span>
+			</span>
+			<span class="tp-n num">{ fmt.Sprint(d.MineQuestions) }</span>
+			if d.AllMine {
+				<span class="tp-ck">
+					@components.IconClass("check", "i-sm")
+				</span>
+			}
+		</a>
+		<div class="tp-bar">
+			<div class="tp-pills" role="tablist">
+				for _, dom := range v.MyDomains {
+					<a
+						role="tab"
+						class={ "tp-dp", templ.KV("on", d.View != nil && dom.ID == d.View.ID), templ.KV("has", d.Domain != nil && dom.ID == d.Domain.ID) }
+						href={ templ.URL(d.Href("view", fmt.Sprint(dom.ID))) }
+						aria-selected={ fmt.Sprint(d.View != nil && dom.ID == d.View.ID) }
+					>
+						<span class="cat-ic sm" style={ "--c:" + dom.Color }>
+							@components.Icon(dom.Icon)
+						</span>
+						<span>{ dom.Name }</span>
+						if d.Domain != nil && dom.ID == d.Domain.ID {
+							<span class="tp-dot"></span>
+						}
+					</a>
+				}
+			</div>
+			<a class="tp-more" href="/domains?ns=add" hx-get="/domains?ns=add" hx-target="#drawer-slot" hx-swap="outerHTML">
+				@components.IconClass("plus", "i-sm")
+				{ v.Tr("domains.add") }
+			</a>
+		</div>
+		if d.View != nil {
+			<div class={ "tp-dom act-view", templ.KV("act", d.Domain != nil && d.Domain.ID == d.View.ID) }>
+				<div class="tp-head">
+					<div class="tp-tog static">
+						<span class="cat-ic sm" style={ "--c:" + d.View.Color }>
+							@components.Icon(d.View.Icon)
+						</span>
+						<span class="tp-t">
+							<b>{ d.View.Name }</b>
+							<span class="help">
+								{ v.Tr("domain.categories_count", "count", len(d.Categories)) } · { v.Tr("domain.questions_count", "count", d.ViewQuestions) }
+							</span>
+						</span>
+					</div>
+					<a
+						class={ "tp-pill", templ.KV("on", wholeDomainOn(d)) }
+						href={ templ.URL(d.Href("domain", fmt.Sprint(d.View.ID))) }
+						aria-pressed={ fmt.Sprint(wholeDomainOn(d)) }
+					>
+						if wholeDomainOn(d) {
+							@components.IconClass("check", "i-sm")
+						}
+						{ v.Tr("setup.all_of_it") }
+					</a>
+				</div>
+				<div class="tp-grid">
+					for _, c := range d.Categories {
+						<a
+							class={ "tp-cat", templ.KV("on", categoryOn(d, c.ID)), templ.KV("soft", wholeDomainOn(d)) }
+							href={ templ.URL(d.Href("cat", fmt.Sprint(c.ID))) }
+							aria-pressed={ fmt.Sprint(categoryOn(d, c.ID)) }
+						>
+							<span class="cat-ic sm" style={ "--c:" + c.Color }>
+								@components.Icon(c.Icon)
+							</span>
+							<span class="tp-cn">{ c.Name }</span>
+							if c.QuestionCount > 0 {
+								<span class="tp-n num">{ fmt.Sprint(c.QuestionCount) }</span>
+							} else {
+								<span class="tp-n">{ v.Tr("setup.soon") }</span>
+							}
+							if categoryOn(d, c.ID) && !wholeDomainOn(d) {
+								<span class="tp-ck">
+									@components.IconClass("check", "i-sm")
+								</span>
+							}
+						</a>
+					}
+				</div>
+			</div>
+		}
+		if len(d.PickedList) > 0 {
+			<div class="tp-picked">
+				<span class="help">{ v.Tr("setup.picked") }:</span>
+				for _, c := range d.PickedList {
+					<a class="tp-chip" href={ templ.URL(d.Href("cat", fmt.Sprint(c.ID))) } aria-label={ v.Tr("action.remove") + " " + c.Name }>
+						{ c.Name }
+						@components.IconClass("x", "i-sm")
+					</a>
+				}
+			</div>
+		}
+	</div>
+}
+
+// setupHidden repeats the current state as hidden fields so the search form keeps it.
+templ setupHidden(d SetupData, except string) {
+	if d.AllMine && except != "all_mine" {
+		<input type="hidden" name="all_mine" value="1"/>
+	}
+	if d.Domain != nil && except != "domain" {
+		<input type="hidden" name="domain" value={ fmt.Sprint(d.Domain.ID) }/>
+		for _, c := range d.PickedList {
+			<input type="hidden" name="category" value={ fmt.Sprint(c.ID) }/>
+		}
+	}
+	if d.View != nil && except != "view" {
+		<input type="hidden" name="view" value={ fmt.Sprint(d.View.ID) }/>
+	}
+	<input type="hidden" name="difficulty" value={ fmt.Sprint(d.Difficulty) }/>
+	<input type="hidden" name="count" value={ fmt.Sprint(d.Count) }/>
+	<input type="hidden" name="seconds" value={ fmt.Sprint(d.Seconds) }/>
+}
+
+// submitAction: a solo game starts a game, a room creates a room (P09, P12).
+func submitAction(d SetupData) string {
+	if d.Room {
+		return "/rooms"
+	}
+	return "/games"
+}
+
+// roomSizes is RM-01: 4, 8 or 12 players, and a guest room stops at 8 (RL-03).
+func roomSizes(d SetupData) []int32 {
+	if d.GuestRoom {
+		return []int32{4, 8}
+	}
+	return []int32{4, 8, 12}
+}
+
+// pickerAction is where the picker's search box submits: the screen it sits on.
+func pickerAction(d SetupData) string {
+	if d.Path != "" {
+		return d.Path
+	}
+	if d.Room {
+		return "/rooms/new"
+	}
+	return "/setup"
+}
+
+func setupTitle(v *view.Ctx, d SetupData) string {
+	if d.Room {
+		return v.Tr("setup.room_title")
+	}
+	return v.Tr("setup.title")
+}
+
+// timerOptions: a live room always has a timer, a solo game may turn it off (GP-04).
+func timerOptions(d SetupData) []int32 {
+	if d.Room {
+		return []int32{10, 20, 30}
+	}
+	return []int32{10, 20, 30, 0}
+}
+
+func wholeDomainOn(d SetupData) bool {
+	return !d.AllMine && d.Domain != nil && d.View != nil && d.Domain.ID == d.View.ID && len(d.PickedList) == 0
+}
+
+func categoryOn(d SetupData, id int64) bool {
+	if d.AllMine || d.Domain == nil || d.View == nil || d.Domain.ID != d.View.ID {
+		return false
+	}
+	return len(d.PickedList) == 0 || d.Picked[id]
+}
+
+func difficultyLabel(v *view.Ctx, difficulty int32) string {
+	switch difficulty {
+	case 1:
+		return v.Tr("setup.easy")
+	case 2:
+		return v.Tr("setup.medium")
+	case 3:
+		return v.Tr("setup.hard")
+	}
+	return v.Tr("setup.mixed")
+}
+
+func domainNameList(v *view.Ctx) string {
+	names := make([]string, 0, len(v.MyDomains))
+	for _, d := range v.MyDomains {
+		names = append(names, d.Name)
+	}
+	return strings.Join(names, " · ")
+}
+
+// enoughQuestions is the rule the Start button follows: a game runs on the number of
+// questions the player asked for, so a choice holding fewer cannot start (GP-02).
+// The server repeats the check in games.Service.Start.
+func enoughQuestions(d SetupData) bool {
+	return d.Available >= int(d.Count)
+}
+
+func plannedCount(d SetupData) int {
+	if d.Available < int(d.Count) {
+		return d.Available
+	}
+	return int(d.Count)
+}
+
+func minutesFor(d SetupData) int {
+	n := plannedCount(d)
+	var minutes int
+	if d.Seconds > 0 {
+		minutes = int(float64(n)*(float64(d.Seconds)*0.6+6)/60 + 0.5)
+	} else {
+		minutes = int(float64(n)*0.4 + 0.5)
+	}
+	if minutes < 1 {
+		return 1
+	}
+	return minutes
+}
+
+// Href rebuilds the screen's URL with one control changed, so every picker control is
+// an ordinary link and the page works without JavaScript.
+//
+//	all_mine   mix every domain the player owns
+//	view       look at another domain's categories
+//	domain     play the whole of a domain
+//	cat        add or remove one category
+//	difficulty | count | seconds | q
+func (d SetupData) Href(key, value string) string {
+	overrideKey, overrideValue := "", ""
+	switch key {
+	case "who", "source", "drop", "set_id", "mode":
+		overrideKey, overrideValue = key, value
+	}
+	q := url.Values{}
+	allMine, viewID, domainID := d.AllMine, int64(0), int64(0)
+	if d.View != nil {
+		viewID = d.View.ID
+	}
+	if d.Domain != nil {
+		domainID = d.Domain.ID
+	}
+	cats := make([]int64, 0, len(d.PickedList))
+	for _, c := range d.PickedList {
+		cats = append(cats, c.ID)
+	}
+	difficulty, count, seconds, query := d.Difficulty, d.Count, d.Seconds, d.Query
+	if overrideKey != "" {
+		key = "" // the picker's own state does not change
+	}
+
+	switch key {
+	case "all_mine":
+		allMine, domainID, cats = true, 0, nil
+	case "view":
+		viewID = parseID(value)
+	case "domain":
+		allMine = false
+		domainID = parseID(value)
+		viewID = domainID
+		cats = nil
+	case "cat":
+		id := parseID(value)
+		allMine = false
+		if domainID != viewID {
+			domainID, cats = viewID, nil
+		}
+		next := make([]int64, 0, len(cats)+1)
+		found := false
+		for _, c := range cats {
+			if c == id {
+				found = true
+				continue
+			}
+			next = append(next, c)
+		}
+		if !found {
+			next = append(next, id)
+		}
+		cats = next
+	case "difficulty":
+		difficulty = int32(parseID(value))
+	case "count":
+		count = int32(parseID(value))
+	case "seconds":
+		seconds = int32(parseID(value))
+	case "q":
+		query = value
+	}
+	extra := d.Extra
+
+	if allMine {
+		q.Set("all_mine", "1")
+	} else if domainID > 0 {
+		q.Set("domain", fmt.Sprint(domainID))
+		for _, c := range cats {
+			q.Add("category", fmt.Sprint(c))
+		}
+	}
+	if viewID > 0 {
+		q.Set("view", fmt.Sprint(viewID))
+	}
+	q.Set("difficulty", fmt.Sprint(difficulty))
+	q.Set("count", fmt.Sprint(count))
+	q.Set("seconds", fmt.Sprint(seconds))
+	if query != "" {
+		q.Set("q", query)
+	}
+	// P20 keeps its own controls (who is playing, the source, the names) in the same
+	// query string, so one Href serves both screens.
+	for key, values := range extra {
+		if key == overrideKey {
+			continue
+		}
+		for _, val := range values {
+			q.Add(key, val)
+		}
+	}
+	if overrideKey != "" {
+		q.Set(overrideKey, overrideValue)
+	}
+	path := d.Path
+	if path == "" {
+		path = "/setup"
+		if d.Room {
+			path = "/rooms/new"
+		}
+	}
+	return path + "?" + q.Encode()
+}
+
+func parseID(s string) int64 {
+	var n int64
+	neg := false
+	for i, r := range s {
+		if i == 0 && r == '-' {
+			neg = true
+			continue
+		}
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int64(r-'0')
+	}
+	if neg {
+		return -n
+	}
+	return n
+}
+
+// roomMode keeps the host's choice to the two the room knows (RM-05).
+func roomMode(mode string) string {
+	if mode == "teams" {
+		return "teams"
+	}
+	return "ffa"
+}

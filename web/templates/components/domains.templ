@@ -1,0 +1,372 @@
+package components
+
+import (
+	"fmt"
+	"siraj/internal/view"
+)
+
+// WorldCard is the domain card of Home and "More domains" (HM-05, DM-06).
+// The card takes the domain's own colour; the geometric pattern shows only for the
+// Islamic family, every other domain gets its motif (BR-03).
+templ WorldCard(v *view.Ctx, d view.Domain, featured bool) {
+	<a
+		class={ "world", templ.KV("featured", featured), templ.KV("fam-islamic", d.IsIslamic()) }
+		style={ "--d:" + d.Color }
+		href={ templ.URL(fmt.Sprintf("/domains/%d", d.ID)) }
+	>
+		if featured && d.IsIslamic() {
+			@Pattern(fmt.Sprintf("w-pt-%d", d.ID))
+		} else {
+			@IconClass(motifOf(d), "w-motif")
+		}
+		if d.IsNew {
+			<span class="badge gold w-badge">{ v.Tr("domain.new") }</span>
+		} else if featured {
+			<span class="badge gold w-badge">
+				@IconClass("star", "i-sm")
+				{ v.Tr("domain.flagship_short") }
+			</span>
+		}
+		<span class="w-ic">
+			@Icon(d.Icon)
+		</span>
+		<span>
+			<span class="w-name">{ d.Name }</span>
+			<span class="w-sub">
+				if featured && d.Description != "" {
+					{ d.Description } ·
+				}
+				{ v.Tr("domain.categories_count", "count", d.CategoryCount) } · { v.Tr("domain.questions_count", "count", d.QuestionCount) }
+			</span>
+		</span>
+		<span class="w-foot">
+			if v.IsGuest() {
+				<span class="w-sub grow">{ v.Tr("domain.questions_count", "count", d.QuestionCount) }</span>
+				@IconClass("chevR", "i-sm flip")
+			} else {
+				<span class="bar"><i style={ fmt.Sprintf("--v:%d%%;--c:%s", d.Mastery, barColor(d, featured)) }></i></span>
+				<b class="num">{ fmt.Sprint(d.Mastery) }%</b>
+			}
+		</span>
+	</a>
+}
+
+// HomeCard is the Home version: the same card plus category chips that start a game
+// in that category straight away (HM-05).
+templ HomeCard(v *view.Ctx, d view.Domain, featured bool, categories []Category, playersWeek int32) {
+	<div
+		class={ "world home", templ.KV("featured", featured), templ.KV("fam-islamic", d.IsIslamic()) }
+		style={ "--d:" + d.Color }
+	>
+		if featured && d.IsIslamic() {
+			@Pattern(fmt.Sprintf("w-pt-%d", d.ID))
+		} else {
+			@IconClass(motifOf(d), "w-motif")
+		}
+		if d.IsNew {
+			<span class="badge gold w-badge">{ v.Tr("domain.new") }</span>
+		} else if featured {
+			<span class="badge gold w-badge">
+				@IconClass("star", "i-sm")
+				{ v.Tr("domain.flagship_short") }
+			</span>
+		}
+		<span class="w-ic">
+			@Icon(d.Icon)
+		</span>
+		<a class="w-link" href={ templ.URL(fmt.Sprintf("/domains/%d", d.ID)) }>
+			<span class="w-name">{ d.Name }</span>
+			<span class="w-sub">
+				if featured && d.Description != "" {
+					{ d.Description } ·
+				}
+				{ v.Tr("domain.categories_count", "count", d.CategoryCount) } · { v.Tr("domain.questions_count", "count", d.QuestionCount) }
+			</span>
+		</a>
+		if len(categories) > 0 {
+			<div class="w-cats">
+				for i, c := range categories {
+					if i < chipLimit(featured) {
+						<a class="w-chip" href={ templ.URL(fmt.Sprintf("/setup?domain=%d&category=%d", d.ID, c.ID)) }>
+							@IconClass(c.Icon, "i-sm")
+							<span>{ c.Name }</span>
+						</a>
+					}
+				}
+				if len(categories) > chipLimit(featured) {
+					<a class="w-chip more" href={ templ.URL(fmt.Sprintf("/domains/%d", d.ID)) }>
+						{ fmt.Sprintf("+%d", len(categories)-chipLimit(featured)) }
+					</a>
+				}
+			</div>
+		}
+		<span class="w-foot">
+			if v.IsGuest() {
+				<span class="w-sub grow">{ v.Tr("domain.playing_week", "count", playersWeek) }</span>
+				@IconClass("chevR", "i-sm flip")
+			} else {
+				<span class="bar"><i style={ fmt.Sprintf("--v:%d%%;--c:%s", d.Mastery, barColor(d, featured)) }></i></span>
+				<b class="num">{ fmt.Sprint(d.Mastery) }%</b>
+			}
+		</span>
+	</div>
+}
+
+// AddDomainCard is always the last card of "Your domains" (DM-05).
+templ AddDomainCard(v *view.Ctx, rest int) {
+	<a class="world add" href="/domains?ns=add" hx-get="/domains?ns=add" hx-target="#drawer-slot" hx-swap="outerHTML">
+		<span class="w-ic plain">
+			@Icon("plus")
+		</span>
+		<span class="w-name">{ v.Tr("domains.add") }</span>
+		<span class="w-sub">{ v.Tr("domains.more_to_choose", "count", rest) }</span>
+	</a>
+}
+
+// Category is a category as the chips and the grid need it.
+type Category struct {
+	ID       int64
+	DomainID int64
+	// Slug is the catalog's stable name ("ramadan"), the one a feature can look for
+	// without depending on the player's language.
+	Slug          string
+	Name          string
+	Icon          string
+	Color         string
+	QuestionCount int32
+	Mastery       int32
+}
+
+// CategoryGrid is "Jump into a category" and the domain page's category list (HM-06).
+templ CategoryGrid(v *view.Ctx, domainID int64, categories []Category, withMix bool) {
+	<div class="grid-auto">
+		for _, c := range categories {
+			<a class="tile col" href={ templ.URL(fmt.Sprintf("/setup?domain=%d&category=%d", domainID, c.ID)) }>
+				<span class="row">
+					<span class="cat-ic" style={ "--c:" + c.Color }>
+						@Icon(c.Icon)
+					</span>
+					<span class="spacer"></span>
+				</span>
+				<span>
+					<span class="tt">{ c.Name }</span>
+					<span class="ts">
+						if v.IsGuest() {
+							{ v.Tr("domain.questions_count", "count", c.QuestionCount) }
+						} else {
+							{ v.Tr("domain.mastery") } { fmt.Sprint(c.Mastery) }%
+						}
+					</span>
+				</span>
+				if !v.IsGuest() {
+					<span class="bar thin"><i style={ fmt.Sprintf("--v:%d%%;--c:%s", c.Mastery, c.Color) }></i></span>
+				}
+			</a>
+		}
+		if withMix {
+			<a class="tile col dashed" href={ templ.URL(fmt.Sprintf("/setup?domain=%d&mix=1", domainID)) }>
+				@IconClass("shuffle", "i-lg")
+				<span class="tt">{ v.Tr("play.daily_mix") }</span>
+				<span class="ts">{ v.Tr("home.daily_mix.help") }</span>
+			</a>
+		}
+	</div>
+}
+
+// DomainSwitch is the one line of your domains with pages (DM-07): 5 cards per line on
+// desktop, 3 on a tablet, 2 on a phone — the pager is Alpine, no server call.
+templ DomainSwitch(v *view.Ctx, current int64, hrefFor func(int64) string) {
+	<div class="dsw1" x-data={ fmt.Sprintf("sjPager(%d)", len(v.MyDomains)) }>
+		<div class="domain-switch mine one" role="group" aria-label={ v.Tr("home.your_domains") } x-bind:style="'--per:' + per">
+			for i, d := range switchOrder(v.MyDomains, current) {
+				<a
+					class={ "dom", templ.KV("on", d.ID == current) }
+					href={ templ.URL(hrefFor(d.ID)) }
+					x-show={ fmt.Sprintf("shown(%d)", i) }
+					aria-pressed={ fmt.Sprint(d.ID == current) }
+				>
+					<span class="cat-ic sm" style={ "--c:" + d.Color }>
+						@Icon(d.Icon)
+					</span>
+					<span class="dom-text">
+						<span class="dn">
+							{ d.Name }
+							if d.IsNew {
+								<span class="badge gold">{ v.Tr("domain.new") }</span>
+							}
+						</span>
+						<span class="dd">{ v.Tr("domain.categories_count", "count", d.CategoryCount) }</span>
+					</span>
+				</a>
+			}
+		</div>
+		<div class="dsw-foot">
+			<a class="link-btn" href="/domains?ns=add" hx-get="/domains?ns=add" hx-target="#drawer-slot" hx-swap="outerHTML">
+				@IconClass("plus", "i-sm")
+				{ v.Tr("domains.add") }
+			</a>
+			<span class="help num" x-show="pages > 1" x-cloak x-text="(page * per + 1) + '–' + Math.min((page + 1) * per, count)"></span>
+			<nav class="pager" x-show="pages > 1" x-cloak aria-label={ v.Tr("action.next_page") }>
+				<button type="button" class="pg" x-on:click="prev()" x-bind:disabled="page === 0" aria-label={ v.Tr("action.previous_page") }>
+					@IconClass("chevL", "flip")
+				</button>
+				<span class="pg-info num" x-text="(page + 1) + ' / ' + pages"></span>
+				<button type="button" class="pg" x-on:click="next()" x-bind:disabled="page >= pages - 1" aria-label={ v.Tr("action.next_page") }>
+					@IconClass("chevR", "flip")
+				</button>
+			</nav>
+		</div>
+	</div>
+}
+
+// switchOrder puts the domain in play first, so the card that is selected is the first
+// card of the first page and never hides behind the pager (DM-07).
+func switchOrder(domains []view.Domain, current int64) []view.Domain {
+	if current == 0 || len(domains) < 2 || domains[0].ID == current {
+		return domains
+	}
+	out := make([]view.Domain, 0, len(domains))
+	for _, d := range domains {
+		if d.ID == current {
+			out = append(out, d)
+		}
+	}
+	if len(out) == 0 {
+		return domains // the selected domain is not one of the player's
+	}
+	for _, d := range domains {
+		if d.ID != current {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// ModeTiles is the ways into a game: the solo quick game (always 5, HM-04) when the
+// section is "Start a game", then the three that need other people — a live room, a
+// code to join one and a 1v1 duel. Under "With others" the quick tile would repeat the
+// solo card of the section above, so those screens ask for it without (GP-01).
+templ ModeTiles(v *view.Ctx, domainID int64, withSolo bool) {
+	<div class="grid-auto wide">
+		if withSolo {
+			<a class="tile" href={ templ.URL(quickHref(domainID)) }>
+				<span class="mode-ic green">
+					@Icon("bolt")
+				</span>
+				<span class="tile-text">
+					<span class="tt">{ v.Tr("play.quick") }</span>
+					<span class="ts">{ v.Tr("mode.quick.help") }</span>
+				</span>
+			</a>
+		}
+		<a class="tile" href={ templ.URL(roomHref(domainID)) }>
+			<span class="mode-ic night">
+				@Icon("radio")
+			</span>
+			<span class="tile-text">
+				<span class="tt">{ v.Tr("play.live_room") }</span>
+				<span class="ts">
+					if v.IsGuest() {
+						{ v.Tr("mode.room.help_guest") }
+					} else {
+						{ v.Tr("mode.room.help") }
+					}
+				</span>
+			</span>
+		</a>
+		<a class="tile" href="/rooms/join">
+			<span class="mode-ic gold">
+				@Icon("door")
+			</span>
+			<span class="tile-text">
+				<span class="tt">{ v.Tr("play.join_code") }</span>
+				<span class="ts">{ v.Tr("mode.join.help") }</span>
+			</span>
+		</a>
+		<a class="tile" href={ templ.URL(duelHref(domainID)) }>
+			<span class="mode-ic blue">
+				@Icon("swords")
+			</span>
+			<span class="tile-text">
+				<span class="tt">{ v.Tr("domain.duel") }</span>
+				<span class="ts">
+					if v.IsGuest() {
+						{ v.Tr("mode.duel.help_guest") }
+					} else {
+						{ v.Tr("mode.duel.help") }
+					}
+				</span>
+			</span>
+		</a>
+	</div>
+}
+
+// GuestBanner explains that guest mode is temporary (RL-05).
+templ GuestBanner(v *view.Ctx) {
+	if v.IsGuest() {
+		<div class="banner">
+			<span class="mode-ic gold sm">
+				@Icon("star")
+			</span>
+			<div class="grow">
+				<b>{ v.Tr("guest.banner_lead") }</b>
+				{ " " }
+				{ v.Tr("guest.banner") }
+			</div>
+			<a class="btn btn-primary btn-sm" href="/signup">{ v.Tr("action.signup") }</a>
+		</div>
+	}
+}
+
+// IslamicOnlyBanner tells the player why the general domains are gone (DM-09).
+templ IslamicOnlyBanner(v *view.Ctx) {
+	if v.IslamicOnly {
+		<div class="mode-banner">
+			@Icon("shield")
+			<span class="grow">{ v.Tr("domains.islamic_only_banner") }</span>
+			<a class="btn btn-sm" href="/settings">{ v.Tr("nav.settings") }</a>
+		</div>
+	}
+}
+
+func motifOf(d view.Domain) string {
+	if d.Motif != "" {
+		return d.Motif
+	}
+	return d.Icon
+}
+
+func barColor(d view.Domain, featured bool) string {
+	if featured {
+		return "#fff"
+	}
+	return d.Color
+}
+
+func chipLimit(featured bool) int {
+	if featured {
+		return 6
+	}
+	return 3
+}
+
+func quickHref(domainID int64) string {
+	if domainID > 0 {
+		return fmt.Sprintf("/play/quick?domain=%d", domainID)
+	}
+	return "/play/quick"
+}
+
+func roomHref(domainID int64) string {
+	if domainID > 0 {
+		return fmt.Sprintf("/rooms/new?domain=%d", domainID)
+	}
+	return "/rooms/new"
+}
+
+func duelHref(domainID int64) string {
+	if domainID > 0 {
+		return fmt.Sprintf("/duel?domain=%d", domainID)
+	}
+	return "/duel"
+}

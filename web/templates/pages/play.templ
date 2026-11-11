@@ -1,0 +1,145 @@
+package pages
+
+import (
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// PlayData backs the Play hub (GP-01): the domain switch, the solo ways to play,
+// "With others", and the categories of the domain in focus.
+type PlayData struct {
+	Domain     *view.Domain
+	Categories []components.Category
+}
+
+// Play is prototype screen 8.
+templ Play(v *view.Ctx, d PlayData) {
+	@layouts.App(v, v.Tr("play.title")) {
+		<div class="page play-page">
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("play.title") }</h1>
+					<p class="sub">{ v.Tr("play.sub") }</p>
+				</div>
+			</div>
+			@components.GuestBanner(v)
+			@components.DomainSwitch(v, domainID(d.Domain), playSwitchHref)
+			<section class="section">
+				<div class="section-head">
+					<h2>
+						{ v.Tr("play.on_your_own") }
+						if d.Domain != nil {
+							{ " · " }
+							<span class="dom-name">{ d.Domain.Name }</span>
+						}
+					</h2>
+					if d.Domain != nil {
+						<a class="link-btn" href={ templ.URL(domainLink(d.Domain)) }>{ v.Tr("play.domain_page") }</a>
+					}
+				</div>
+				<div class="grid-auto wide">
+					<a class="tile" href={ templ.URL(quickLink(d.Domain)) }>
+						<span class="mode-ic green">
+							@components.Icon("bolt")
+						</span>
+						<span class="tile-text">
+							<span class="tt">{ v.Tr("play.quick") }</span>
+							<span class="ts">
+								if d.Domain != nil {
+									{ v.Tr("play.quick.help_domain", "name", d.Domain.Name) }
+								} else {
+									{ v.Tr("play.quick.help") }
+								}
+							</span>
+						</span>
+					</a>
+					<a class="tile" href={ templ.URL(mixLink(d.Domain)) }>
+						<span class="mode-ic gold">
+							@components.Icon("shuffle")
+						</span>
+						<span class="tile-text">
+							<span class="tt">{ v.Tr("play.daily_mix") }</span>
+							<span class="ts">{ v.Tr("home.daily_mix.help") }</span>
+						</span>
+					</a>
+					<a class="tile" href={ templ.URL(setupLink(d.Domain)) }>
+						<span class="mode-ic blue">
+							@components.Icon("sliders")
+						</span>
+						<span class="tile-text">
+							<span class="tt">{ v.Tr("play.custom") }</span>
+							<span class="ts">{ v.Tr("play.custom.help") }</span>
+						</span>
+					</a>
+				</div>
+			</section>
+			<section class="section">
+				<div class="section-head">
+					<h2>{ v.Tr("domain.with_others") }</h2>
+				</div>
+				@components.ModeTiles(v, domainID(d.Domain), false)
+				<a class="tile narrow" href="/challenges/new">
+					<span class="mode-ic red">
+						@components.Icon("send")
+					</span>
+					<span class="tile-text">
+						<span class="tt">
+							if v.IsGuest() {
+								{ v.Tr("play.challenge_guest") }
+							} else {
+								{ v.Tr("play.challenge_friend") }
+							}
+						</span>
+						<span class="ts">{ v.Tr("play.challenge.help") }</span>
+					</span>
+				</a>
+			</section>
+			if d.Domain != nil {
+				<section class="section">
+					<div class="section-head">
+						<h2>{ v.Tr("play.categories_in", "name", d.Domain.Name) }</h2>
+					</div>
+					@components.CategoryGrid(v, d.Domain.ID, d.Categories, false)
+				</section>
+			}
+		</div>
+	}
+}
+
+func domainID(d *view.Domain) int64 {
+	if d == nil {
+		return 0
+	}
+	return d.ID
+}
+
+func playSwitchHref(id int64) string { return "/play?domain=" + itoa(id) }
+
+func quickLink(d *view.Domain) string {
+	if d == nil {
+		return "/play/quick"
+	}
+	return "/play/quick?domain=" + itoa(d.ID)
+}
+
+func mixLink(d *view.Domain) string {
+	if d == nil {
+		return "/setup?mix=1"
+	}
+	return "/setup?mix=1&domain=" + itoa(d.ID)
+}
+
+func setupLink(d *view.Domain) string {
+	if d == nil {
+		return "/setup"
+	}
+	return "/setup?domain=" + itoa(d.ID)
+}
+
+func domainLink(d *view.Domain) string {
+	if d == nil {
+		return "/domains"
+	}
+	return "/domains/" + itoa(d.ID)
+}

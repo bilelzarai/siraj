@@ -1,0 +1,749 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// RoundFriend is one card of the friend picker on P20.
+type RoundFriend struct {
+	ID       string
+	Name     string
+	Initials string
+	Color    string
+	Status   string
+	Online   bool
+	Picked   bool
+}
+
+// RoundSet is one of the player's own sets, offered as a question source (MQ-05).
+type RoundSet struct {
+	ID        string
+	Name      string
+	Questions int32
+	Ready     bool
+}
+
+// RoundData backs P20 and P20b: who plays, how, where the questions come from and
+// the round's settings (CH-01, RM-06).
+type RoundData struct {
+	Who     string // friends | room | device
+	Source  string // bank | set | written
+	Setup   SetupData
+	Friends []RoundFriend
+	Picked  map[string]bool
+	Locals  []string
+	Sets    []RoundSet
+	SetID   string
+	// Drafts is how many of the player's sets are too short to be offered (MQ-02).
+	Drafts int
+	// Written is the round's own questions when the source is "write them now":
+	// they live in a set of their own, created the first time one is written.
+	WrittenSetID string
+	Written      []SetQuestionRow
+	WrittenCount int
+	Min          int
+	// AddHref opens the question editor for this round, BackHref is where it
+	// returns; both carry the whole screen's state so nothing is lost (MQ-05).
+	AddHref  string
+	BackHref string
+	Message  string
+	Days     int32
+	Players  int
+	Problem  string
+	// NeedFriend marks the problem as "pick a friend", which the screen can clear by
+	// itself as soon as one is picked (CH-01).
+	NeedFriend bool
+	RoomCode string
+}
+
+// NewRound is prototype screen 20.
+templ NewRound(v *view.Ctx, d RoundData) {
+	@layouts.App(v, v.Tr("round.title")) {
+		<div class="page mid round-page" id="round-page" x-data={ pickedList(d) }>
+			<a class="btn btn-ghost btn-sm back-link" href="/challenges">
+				@components.IconClass("arrowL", "flip")
+				{ v.Tr("nav.challenges") }
+			</a>
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("round.title") }</h1>
+					<p class="sub">{ v.Tr("round.sub") }</p>
+				</div>
+			</div>
+			<div class="cols">
+				<div class="col-main stack gap-lg">
+					<section class="card pad stack">
+						<div class="row">
+							<span class="label">{ v.Tr("round.who_playing") }</span>
+							<span class="spacer"></span>
+							<span class="help">{ v.Tr("round.n_players", "n", d.Players) }</span>
+						</div>
+						<div class="seg full" role="group" aria-label={ v.Tr("round.who_playing") }>
+							for _, option := range []struct {
+								Value string
+								Icon  string
+								Key   string
+							}{{"friends", "users", "nav.friends"}, {"room", "radio", "play.live_room"}, {"device", "phone", "round.this_device"}} {
+								<a
+									class={ "seg-item", templ.KV("on", d.Who == option.Value) }
+									href={ templ.URL(d.Setup.Href("who", option.Value)) }
+										{ roundSwap(d.Setup.Href("who", option.Value))... }
+									aria-pressed={ fmt.Sprint(d.Who == option.Value) }
+								>
+									@components.IconClass(option.Icon, "i-sm")
+									{ v.Tr(option.Key) }
+								</a>
+							}
+						</div>
+						if d.Who == "friends" {
+							<p class="help">{ v.Tr("round.pick_friends") }</p>
+							if len(d.Friends) == 0 {
+								@components.Empty("users", v.Tr("friends.none"), v.Tr("round.no_friends_body")) {
+									<a class="btn" href="/friends">{ v.Tr("home.invite_friend") }</a>
+								}
+							} else {
+								<div class="grid-auto">
+									for _, f := range d.Friends {
+										<label class="friend-pick" x-bind:class={ "{ on: has('" + f.ID + "') }" }>
+											<input
+												class="sr-only"
+												type="checkbox"
+												form="round-form"
+												name="friend"
+												value={ f.ID }
+												checked?={ d.Picked[f.ID] }
+												x-on:change={ "toggle('" + f.ID + "', $event.target.checked)" }
+											/>
+											@components.PersonAvatar(f.Initials, f.Color, "", f.Online)
+											<b>{ f.Name }</b>
+											<span class="help">{ f.Status }</span>
+										</label>
+									}
+								</div>
+							}
+						} else if d.Who == "device" {
+							<div class="device-box">
+								<b>{ v.Tr("round.device_title") }</b>
+								<p class="help">{ v.Tr("round.device_help") }</p>
+								<div class="row wrap gap-sm push-top-sm">
+									<span class="tp-chip static">{ v.Name() }</span>
+									for i, name := range d.Locals {
+										<span class="tp-chip">
+											{ name }
+											<a href={ templ.URL(d.Setup.Href("drop", fmt.Sprint(i))) }
+										{ roundSwap(d.Setup.Href("drop", fmt.Sprint(i)))... } aria-label={ v.Tr("action.remove") + " " + name }>
+												@components.IconClass("x", "i-sm")
+											</a>
+										</span>
+										<input type="hidden" form="round-form" name="local" value={ name }/>
+									}
+								</div>
+								<div class="row gap-sm push-top-sm">
+									<input class="input grow" form="round-form" name="new_local" placeholder={ v.Tr("round.name_placeholder") } aria-label={ v.Tr("round.name_placeholder") } maxlength="20" autocomplete="off"/>
+									<button class="btn" type="submit" form="round-form" formaction="/challenges/new/add-player">{ v.Tr("action.add") }</button>
+								</div>
+							</div>
+						} else {
+							<div class="device-box">
+								<b>{ v.Tr("round.room_title") }</b>
+								<p class="help">{ v.Tr("round.room_help") }</p>
+								<a class="btn push-top-sm" href="/rooms/new">
+									@components.Icon("radio")
+									{ v.Tr("setup.room_title") }
+								</a>
+							</div>
+						}
+					</section>
+					<section class="card pad stack">
+						<span class="label">{ v.Tr("round.how_to_play") }</span>
+						<div class="mode-pick">
+							<label class="mode-opt on">
+								<input class="sr-only" type="radio" form="round-form" name="mode" value="ffa" checked/>
+								@components.Icon("swords")
+								<span>
+									<b class="block">{ v.Tr("round.free_for_all") }</b>
+									<span class="help">{ v.Tr("round.free_for_all_help") }</span>
+								</span>
+							</label>
+							// Teams open as soon as four are playing, which is what the
+							// line under them says (CH-01, DV-01).
+							<label class="mode-opt" x-bind:class="{ off: count + 1 < 4 }">
+								<input
+									class="sr-only"
+									type="radio"
+									form="round-form"
+									name="mode"
+									value="teams"
+									x-bind:disabled="count + 1 < 4"
+								/>
+								@components.Icon("users")
+								<span>
+									<b class="block">{ v.Tr("round.teams") }</b>
+									<span class="help">{ v.Tr("round.teams_help") }</span>
+								</span>
+							</label>
+						</div>
+					</section>
+					<section class="card pad stack">
+						<span class="label">{ v.Tr("round.questions_from") }</span>
+						<p class="help">{ v.Tr("round.questions_from_help") }</p>
+						<div class="source-grid">
+							for _, option := range []struct {
+								Value string
+								Icon  string
+								Key   string
+							}{{"bank", "book", "round.source.bank"}, {"set", "pen", "round.source.set"}, {"written", "plus", "round.source.written"}} {
+								<a
+									class={ "tile col source-tile", templ.KV("on", d.Source == option.Value) }
+									href={ templ.URL(d.Setup.Href("source", option.Value)) }
+										{ roundSwap(d.Setup.Href("source", option.Value))... }
+									aria-pressed={ fmt.Sprint(d.Source == option.Value) }
+								>
+									@components.Icon(option.Icon)
+									<span class="tt">{ v.Tr(option.Key) }</span>
+								</a>
+							}
+						</div>
+						if d.Source == "bank" {
+							<div class="row push-top-sm">
+								<span class="label">{ v.Tr("setup.what_to_play") }</span>
+								<span class="spacer"></span>
+								<span class="help hide-sm">{ v.Tr("setup.what_to_play_help") }</span>
+							</div>
+							@topicPicker(v, d.Setup)
+						} else if d.Source == "set" {
+							if len(d.Sets) == 0 {
+								@components.Empty("pen", v.Tr("round.no_sets"), v.Tr("round.no_sets_body")) {
+									<a class="btn" href="/my-questions">{ v.Tr("sets.new") }</a>
+								}
+							} else {
+								<div class="stack gap-xs push-top-sm">
+									for _, set := range d.Sets {
+										<label class="pick row-pick" x-bind:class={ "{ on: chosen === '" + set.ID + "' }" }>
+											<input
+												class="sr-only"
+												type="radio"
+												form="round-form"
+												name="set_id"
+												value={ set.ID }
+												checked?={ d.SetID == set.ID }
+												x-on:change={ "chosen = '" + set.ID + "'" }
+											/>
+											<span class="cat-ic sm" style="--c:var(--brand)">
+												@components.Icon("pen")
+											</span>
+											<span class="grow min0 start">
+												<b class="block">{ set.Name }</b>
+												<span class="help">{ v.Tr("sets.questions_count", "count", set.Questions) }</span>
+											</span>
+											<span x-show={ "chosen === '" + set.ID + "'" } x-cloak>
+												@components.Icon("check")
+											</span>
+										</label>
+									}
+								</div>
+							}
+							<div class="row wrap gap-sm">
+								if d.Drafts > 0 {
+									<span class="help">{ v.Tr("round.drafts_hidden", "count", d.Drafts, "min", d.Min) }</span>
+								}
+								<a class="link-btn" href="/my-questions">{ v.Tr("round.manage_sets") }</a>
+							</div>
+						} else {
+							<p class="help">{ v.Tr("round.write_help") }</p>
+							if d.WrittenSetID != "" {
+								<input type="hidden" form="round-form" name="set_id" value={ d.WrittenSetID }/>
+							}
+							@SetProgress(v, d.WrittenCount, d.Min)
+							if len(d.Written) > 0 {
+								<section class="card q-list">
+									for _, q := range d.Written {
+										@QuestionRow(v, q, "/my-questions/"+d.WrittenSetID, d.BackHref)
+									}
+								</section>
+							}
+							if d.WrittenSetID == "" {
+								<button
+									class="add-q"
+									type="submit"
+									form="round-form"
+									formaction="/challenges/new/write"
+									hx-post="/challenges/new/write"
+									hx-include="#round-form"
+									hx-target="#drawer-slot"
+									hx-swap="outerHTML"
+								>
+									<span class="mode-ic green">
+										@components.Icon("plus")
+									</span>
+									<span>
+										<b>{ v.Tr("sets.add_question") }</b>
+										<span class="help">{ v.Tr("sets.add_question_help") }</span>
+									</span>
+								</button>
+							} else {
+								@AddQuestionButton(v, "/my-questions/"+d.WrittenSetID+"/q/new", d.BackHref)
+							}
+						}
+					</section>
+					<section class="card pad stack gap-lg">
+						// Difficulty, how many questions and how long each one lasts
+						// are one choice in three parts, so they sit on one line (P20).
+						<div class="setup-controls">
+							if d.Source == "bank" {
+								<div>
+									<div class="label push-bottom-sm">{ v.Tr("setup.difficulty") }</div>
+									<div class="seg" role="group" aria-label={ v.Tr("setup.difficulty") }>
+										for _, option := range []struct {
+											Value int32
+											Key   string
+										}{{1, "setup.easy"}, {2, "setup.medium"}, {3, "setup.hard"}, {0, "setup.mixed"}} {
+											<a
+												class={ "seg-item", templ.KV("on", d.Setup.Difficulty == option.Value) }
+												href={ templ.URL(d.Setup.Href("difficulty", fmt.Sprint(option.Value))) }
+										{ roundSwap(d.Setup.Href("difficulty", fmt.Sprint(option.Value)))... }
+												aria-pressed={ fmt.Sprint(d.Setup.Difficulty == option.Value) }
+											>{ v.Tr(option.Key) }</a>
+										}
+									</div>
+								</div>
+								<div>
+									<div class="label push-bottom-sm">{ v.Tr("setup.number_of_questions") }</div>
+									<div class="seg" role="group" aria-label={ v.Tr("setup.number_of_questions") }>
+										for _, n := range []int32{5, 10, 15} {
+											<a
+												class={ "seg-item num", templ.KV("on", d.Setup.Count == n) }
+												href={ templ.URL(d.Setup.Href("count", fmt.Sprint(n))) }
+										{ roundSwap(d.Setup.Href("count", fmt.Sprint(n)))... }
+												aria-pressed={ fmt.Sprint(d.Setup.Count == n) }
+											>{ fmt.Sprint(n) }</a>
+										}
+									</div>
+								</div>
+							}
+							<div>
+								<div class="label push-bottom-sm">{ v.Tr("setup.time_per_question") }</div>
+								<div class="seg" role="group" aria-label={ v.Tr("setup.time_per_question") }>
+									for _, n := range []int32{10, 20, 30} {
+										<a
+											class={ "seg-item", templ.KV("on", d.Setup.Seconds == n) }
+											href={ templ.URL(d.Setup.Href("seconds", fmt.Sprint(n))) }
+										{ roundSwap(d.Setup.Href("seconds", fmt.Sprint(n)))... }
+											aria-pressed={ fmt.Sprint(d.Setup.Seconds == n) }
+										>{ v.Tr("setup.timer.seconds", "n", n) }</a>
+									}
+								</div>
+							</div>
+						</div>
+						if d.Who == "friends" {
+							<div class="form-grid">
+								<div class="field">
+									<label class="label" for="message">{ v.Tr("round.message") }</label>
+									<input class="input" id="message" form="round-form" name="message" value={ d.Message } maxlength="140" placeholder={ v.Tr("round.message_placeholder") }/>
+								</div>
+								<div class="field">
+									<label class="label" for="days">{ v.Tr("round.they_have") }</label>
+									<select class="select" id="days" form="round-form" name="days">
+										for _, n := range []int32{1, 3, 7} {
+											<option value={ fmt.Sprint(n) } selected?={ d.Days == n }>{ v.Tr("round.n_days", "n", n) }</option>
+										}
+									</select>
+								</div>
+							</div>
+						}
+					</section>
+				</div>
+				<aside class="col-side">
+					<form class="card pad summary" id="round-form" method="post" action="/challenges">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<input type="hidden" name="who" value={ d.Who }/>
+						<input type="hidden" name="source" value={ d.Source }/>
+						@roundScope(d)
+						<h2 class="card-title">{ v.Tr("setup.summary") }</h2>
+						<div class="sum-line">
+							<span>{ v.Tr("round.players") }</span>
+							<b class="num" x-text="count + 1">{ fmt.Sprint(d.Players) }</b>
+						</div>
+						<div class="sum-line">
+							<span>{ v.Tr("setup.count") }</span>
+							<b class="num">{ fmt.Sprint(roundCount(d)) }</b>
+						</div>
+						<div class="sum-line">
+							<span>{ v.Tr("setup.topics") }</span>
+							<b>{ d.Setup.TopicLabel }</b>
+						</div>
+						if d.Problem != "" {
+							if d.NeedFriend {
+								<p class="err push-top-sm" x-show="count < 1">{ d.Problem }</p>
+							} else {
+								<p class="err push-top-sm">{ d.Problem }</p>
+							}
+						}
+						<button
+							class="btn btn-primary btn-lg btn-block push-top-sm"
+							type="submit"
+							disabled?={ d.Problem != "" }
+							if d.NeedFriend {
+								x-bind:disabled="count < 1"
+							}
+						>
+							@components.IconClass("tri", "flip")
+							if d.Who == "device" {
+								{ v.Tr("round.start_round", "n", d.Players) }
+							} else {
+								{ v.Tr("round.send") }
+							}
+						</button>
+					</form>
+				</aside>
+			</div>
+		</div>
+	}
+}
+
+// roundScope repeats the picker's state as hidden fields so the POST sees it.
+templ roundScope(d RoundData) {
+	if d.Setup.AllMine {
+		<input type="hidden" name="all_mine" value="1"/>
+	} else if d.Setup.Domain != nil {
+		<input type="hidden" name="domain" value={ fmt.Sprint(d.Setup.Domain.ID) }/>
+		for _, c := range d.Setup.PickedList {
+			<input type="hidden" name="category" value={ fmt.Sprint(c.ID) }/>
+		}
+	}
+	if d.Setup.View != nil {
+		<input type="hidden" name="view" value={ fmt.Sprint(d.Setup.View.ID) }/>
+	}
+	<input type="hidden" name="difficulty" value={ fmt.Sprint(d.Setup.Difficulty) }/>
+	<input type="hidden" name="count" value={ fmt.Sprint(d.Setup.Count) }/>
+	<input type="hidden" name="seconds" value={ fmt.Sprint(d.Setup.Seconds) }/>
+}
+
+// DevicePerson is one of the people sharing the phone, on the pass screen and on the
+// reveal (DV-03, DV-04).
+type DevicePerson struct {
+	Name     string
+	Initials string
+	Color    string
+	Score    int32
+	Gain     int32
+	Team     int32
+	Answered bool
+	Right    bool
+	Now      bool
+	Me       bool
+}
+
+// DeviceTurn is P21a and P21b: the pass screen between two answers of the same
+// question, and the reveal once the whole table has answered it (DV-02…DV-04).
+type DeviceTurn struct {
+	GameID    string
+	Position  int32
+	Questions int
+	Name      string
+	Initials  string
+	Color     string
+	Me        bool
+	Players   []DevicePerson
+	Standings []DevicePerson
+	Answered  int
+	// The reveal.
+	Revealed bool
+	Last     bool
+	Fastest  string
+	Question GameQuestion
+	Picks    [][]DevicePerson
+	// Teams.
+	Teams  bool
+	Totals [2]int32
+	Gains  [2]int32
+	ShareA int
+}
+
+// PassTheDevice is P21a: the screen between two players of the same question. It
+// names who holds the phone next, says who has already answered, and shows the
+// scores from the second question on — never the answer (DV-03).
+templ PassTheDevice(v *view.Ctx, d DeviceTurn) {
+	@layouts.Focus(v, v.Tr("round.pass_title", "name", d.Name)) {
+		<div class="handoff">
+			<div class="ho-card">
+				<div class="row">
+					<span class="badge gold">
+						@components.IconClass("phone", "i-sm")
+						{ v.Tr("round.question_of", "n", d.Position+1, "total", d.Questions) }
+					</span>
+					<span class="spacer"></span>
+					<form method="post" action={ templ.SafeURL("/round/device/" + d.GameID + "/end") }>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="btn btn-sm btn-ghost" type="submit">{ v.Tr("round.end_round") }</button>
+					</form>
+				</div>
+				<div class="ho-next-p">
+					@components.PersonAvatar(d.Initials, d.Color, "xl", false)
+					<h1>
+						if d.Me {
+							{ v.Tr("round.your_turn") }
+						} else {
+							{ v.Tr("round.pass_title", "name", d.Name) }
+						}
+					</h1>
+					<p>{ v.Tr("round.no_peeking") }</p>
+				</div>
+				// Who has answered this question already, who is answering it now, and
+				// who is still waiting — the row the design puts under the name.
+				<div class="tv-mem dv-queue">
+					for _, p := range d.Players {
+						<span class={ "mem", deviceMemClass(p) }>
+							@components.PersonAvatar(p.Initials, p.Color, "sm", false)
+							<span class="mn">{ p.Name }</span>
+							if p.Answered {
+								<span class="mpt">
+									@components.IconClass("check", "i-sm")
+								</span>
+							} else if p.Now {
+								<span class="mpt now-tag">{ v.Tr("round.now") }</span>
+							} else {
+								<span class="mpt">
+									@components.IconClass("clock", "i-sm")
+								</span>
+							}
+						</span>
+					}
+				</div>
+				// From the second question on, the scores so far (DV-03).
+				if d.Position > 0 {
+					if d.Teams {
+						@deviceTeamBar(v, d)
+					} else {
+						<ol class="ho-list">
+							for i, p := range d.Standings {
+								<li class={ templ.KV("lead", i == 0) }>
+									<span class={ "rank", templ.KV("r1", i == 0) }>{ fmt.Sprint(i + 1) }</span>
+									@components.PersonAvatar(p.Initials, p.Color, "sm", false)
+									<span class="grow">{ p.Name }</span>
+									if i == 0 {
+										@components.IconClass("crown", "i-sm crown")
+									}
+									<b class="num">{ fmt.Sprint(p.Score) }</b>
+								</li>
+							}
+						</ol>
+					}
+				}
+				<form method="post" action={ templ.SafeURL("/round/device/" + d.GameID + "/turn") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-primary btn-lg btn-block" type="submit">
+						@components.IconClass("tri", "flip")
+						if d.Me {
+							{ v.Tr("round.show_the_question") }
+						} else {
+							{ v.Tr("round.im_name_start", "name", d.Name) }
+						}
+					</button>
+				</form>
+			</div>
+		</div>
+	}
+}
+
+// DeviceReveal is the screen after the last of them has answered one question: the
+// right answer, where everybody's pick landed, who was quickest, and the standings
+// before the next question (DV-04).
+templ DeviceReveal(v *view.Ctx, d DeviceTurn) {
+	@layouts.Focus(v, v.Tr("round.reveal_title")) {
+		<div class="handoff">
+			<div class="ho-card wide">
+				<div class="row">
+					<span class="badge gold">
+						@components.IconClass("phone", "i-sm")
+						{ v.Tr("round.question_of", "n", d.Position+1, "total", d.Questions) }
+					</span>
+					<span class="spacer"></span>
+					<span class="badge okb">{ v.Tr("round.everyone_answered") }</span>
+				</div>
+				<h1 class="dq-q">{ d.Question.Body }</h1>
+				<div class="stack gap-sm">
+					for i, answer := range d.Question.Answers {
+						<div
+							class={ "ans dq-ans",
+								templ.KV("is-right", int32(i) == d.Question.CorrectIndex),
+								templ.KV("is-wrong", int32(i) != d.Question.CorrectIndex && len(d.Picks[i]) > 0) }
+						>
+							<span class="k">{ letterFor(i) }</span>
+							<span class="grow">{ answer }</span>
+							if len(d.Picks) > i && len(d.Picks[i]) > 0 {
+								<span class="pickers">
+									for _, p := range d.Picks[i] {
+										@components.PersonAvatar(p.Initials, p.Color, "sm", false)
+									}
+								</span>
+							}
+							if int32(i) == d.Question.CorrectIndex {
+								@components.IconClass("check", "i-sm")
+							}
+						</div>
+					}
+				</div>
+				if d.Fastest != "" {
+					<div class="dv-beat ahead">
+						@components.IconClass("bolt", "i-sm")
+						<span>
+							<span class="k">{ v.Tr("round.fastest") }</span>
+							<span class="s">{ d.Fastest }</span>
+						</span>
+					</div>
+				}
+				// What this question did to the scores.
+				if d.Teams {
+					@deviceTeamBar(v, d)
+				} else {
+					<div class="tv-mem dv-queue">
+						for _, p := range d.Players {
+							<span class={ "mem", templ.KV("me", p.Me) }>
+								@components.PersonAvatar(p.Initials, p.Color, "sm", false)
+								<span class="mn">{ p.Name }</span>
+								if p.Right {
+									<span class="mpt gain-ink num">{ "+" + fmt.Sprint(p.Gain) }</span>
+								} else {
+									<span class="mpt">
+										@components.IconClass("x", "i-sm")
+									</span>
+								}
+							</span>
+						}
+					</div>
+				}
+				if d.Question.Explanation != "" {
+					<div class="expl">
+						<b>{ v.Tr("game.why") }</b>
+						<p>{ d.Question.Explanation }</p>
+						if d.Question.Source != "" {
+							<span class="help">{ d.Question.Source }</span>
+						}
+					</div>
+				}
+				<form method="post" action={ templ.SafeURL("/round/device/" + d.GameID + "/next") }>
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-primary btn-lg btn-block" type="submit">
+						if d.Last {
+							{ v.Tr("round.see_results") }
+						} else {
+							{ v.Tr("game.next") }
+						}
+						@components.IconClass("chevR", "flip")
+					</button>
+				</form>
+			</div>
+		</div>
+	}
+}
+
+// deviceTeamBar is Team A against Team B on one phone: both totals, what the question
+// just gave each side, and the tug between them (DV-04).
+templ deviceTeamBar(v *view.Ctx, d DeviceTurn) {
+	<div class="stack gap-sm">
+		<div class="dq-tt">
+			for k := 0; k < 2; k++ {
+				<div class={ "t" + deviceTeamClass(k) }>
+					<span class="tv-name">{ v.Tr(deviceTeamKey(k)) }</span>
+					<span>
+						<b class="num">{ fmt.Sprint(d.Totals[k]) }</b>
+						if d.Gains[k] > 0 {
+							<span class="gain-ink num">{ " +" + fmt.Sprint(d.Gains[k]) }</span>
+						}
+					</span>
+				</div>
+			}
+		</div>
+		<div class="tug" role="img" aria-label={ fmt.Sprintf("%d / %d", d.Totals[0], d.Totals[1]) }>
+			<i class="ta" style={ deviceBasis(d.ShareA) }></i>
+			<i class="tb" style={ deviceBasis(100 - d.ShareA) }></i>
+		</div>
+	</div>
+}
+
+// deviceMemClass marks a chip as answered, holding the phone, or still waiting.
+func deviceMemClass(p DevicePerson) string {
+	switch {
+	case p.Now:
+		return "now"
+	case p.Answered:
+		return "done"
+	}
+	return "wait"
+}
+
+func deviceTeamClass(k int) string {
+	if k == 1 {
+		return "b"
+	}
+	return "a"
+}
+
+func deviceTeamKey(k int) string {
+	if k == 1 {
+		return "rooms.team_b"
+	}
+	return "rooms.team_a"
+}
+
+func deviceBasis(pct int) string { return fmt.Sprintf("flex-basis:%d%%", pct) }
+
+// letterFor is the A/B/C/D beside an option, the way the game screen writes it.
+func letterFor(i int) string { return string(rune('A' + i)) }
+
+// roundCount is how many questions the round will actually hold: the picker's number
+// when the questions come from the bank, and the real count when they come from one
+// of the player's own sets or were written for this round (MQ-02, MQ-05).
+func roundCount(d RoundData) int32 {
+	switch d.Source {
+	case "written":
+		return int32(d.WrittenCount)
+	case "set":
+		for _, s := range d.Sets {
+			if s.ID == d.SetID {
+				return s.Questions
+			}
+		}
+	}
+	return d.Setup.Count
+}
+
+// pickedList seeds the screen with whoever is already picked, so the summary is right
+// before the first click and stays right after it (CH-01).
+func pickedList(d RoundData) string {
+	// chosen is the set the round will play, so picking one answers at once (MQ-02).
+	ids := make([]string, 0, len(d.Friends))
+	for _, f := range d.Friends {
+		if d.Picked[f.ID] {
+			ids = append(ids, "'"+f.ID+"'")
+		}
+	}
+	return "sjPicks([" + strings.Join(ids, ",") + "], '" + d.SetID + "')"
+}
+
+// playersLabel is "N players" with the number read live, so the line over the cards
+// counts up as friends are picked.
+func playersLabel(v *view.Ctx) string {
+	return "`" + v.Tr("round.n_players", "n", "${count + 1}") + "`"
+}
+
+// roundSwap makes a control on P20 replace the screen in place, carrying the form
+// with it. Without this a link would navigate: the friends already picked, the
+// message typed and the names added would go with the old page, and the screen would
+// come back scrolled to the top (CH-01).
+func roundSwap(href string) templ.Attributes {
+	return templ.Attributes{
+		"hx-get":      href,
+		"hx-include":  "#round-form",
+		"hx-target":   "#round-page",
+		"hx-select":   "#round-page",
+		"hx-swap":     "outerHTML",
+		"hx-push-url": "true",
+	}
+}

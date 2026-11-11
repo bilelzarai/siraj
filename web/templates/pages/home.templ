@@ -1,0 +1,365 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// HomeData is everything Home shows (HM-01…HM-08). Sections that belong to a later
+// task (this week, friends, challenges waiting) arrive with their own module; the
+// fields stay empty until then and the section is simply not drawn.
+type HomeData struct {
+	StreakLine  string
+	QOTD        *QOTD
+	Domains     []view.Domain
+	Categories  map[int64][]components.Category
+	Featured    *view.Domain
+	RestDomains int
+	// AddCard is true on the page that carries the "Add a domain" slot (HM-05).
+	AddCard      bool
+	TotalDomains int
+	// PlayersWeek is how many people played each domain this week; a guest sees it
+	// on the cards where a member sees their own mastery (HM-05).
+	PlayersWeek   map[int64]int32
+	Page          int
+	Pages         int
+	PointsToday   int32
+	GamesToday    int32
+	Goal          int32
+	DoneToday     int32
+	Streak        int32
+	Accuracy      int32
+	WeeklyRank    int32
+	Week          []Leader
+	Friends       []HomeFriend
+	FriendsOnline int
+	Challenges    []HomeChallenge
+	// RamadanHref is where "Practise Ramadan & Fasting" goes: the Ramadan topic of
+	// the player's Islamic domain, not the whole catalog (HM-05, DM-03).
+	RamadanHref string
+}
+
+// HomeFriend is one row of the Friends card: who they are and what they are doing now.
+type HomeFriend struct {
+	ID       string
+	Name     string
+	Initials string
+	Color    string
+	Status   string
+	Online   bool
+}
+
+// HomeChallenge is one waiting challenge (CH-02); it stays empty until the challenges
+// module lands, and the section then shows its empty state.
+type HomeChallenge struct {
+	ID       string
+	Title    string
+	Line     string
+	Initials string
+	Color    string
+}
+
+// Home is prototype screen 6.
+templ Home(v *view.Ctx, d HomeData) {
+	@layouts.App(v, v.Tr("nav.home")) {
+		<div class="page home-page">
+			<div class="page-head">
+				<div>
+					<p class="muted date-line">
+						<span x-data="sjToday" x-text="text"></span>
+						if v.IslamicOnly {
+							<span class="hijri">· <span x-data="sjHijri" x-text="text"></span></span>
+						}
+					</p>
+					<h1>{ v.Greeting() }</h1>
+				</div>
+				<p class="streak-line">{ d.StreakLine }</p>
+			</div>
+			@components.GuestBanner(v)
+			<div class="cols stretch">
+				<div class="col-wide">
+					if d.QOTD != nil {
+						@QotdCard(v, d.QOTD, "h-qotd", false)
+					}
+				</div>
+				<div class="col-narrow">
+					@PlayerCard(v, d)
+				</div>
+			</div>
+			<section class="section">
+				<div class="section-head">
+					<h2>{ v.Tr("home.start_game") }</h2>
+					<a class="link-btn" href="/play">{ v.Tr("home.all_ways") }</a>
+				</div>
+				@components.ModeTiles(v, 0, true)
+			</section>
+			<div class="cols">
+				<div class="col-main">
+					<section class="section">
+						<div class="section-head">
+							<h2>{ v.Tr("home.your_domains") }</h2>
+							<div class="row gap-lg">
+								<a class="link-btn" href="/domains?ns=manage" hx-get="/domains?ns=manage" hx-target="#drawer-slot" hx-swap="outerHTML">
+									@components.IconClass("sliders", "i-sm")
+									{ v.Tr("action.manage") }
+								</a>
+								<a class="link-btn" href="/domains" hx-get="/domains" hx-target="#drawer-slot" hx-swap="outerHTML">
+									@components.IconClass("search", "i-sm")
+									{ v.Tr("home.explore_all", "count", d.TotalDomains) }
+								</a>
+							</div>
+						</div>
+						@components.IslamicOnlyBanner(v)
+						<div class="worlds">
+							for _, dom := range d.Domains {
+								@components.HomeCard(v, dom, d.Featured != nil && dom.ID == d.Featured.ID, d.Categories[dom.ID], d.PlayersWeek[dom.ID])
+							}
+							if d.AddCard {
+								@components.AddDomainCard(v, d.RestDomains)
+							}
+						</div>
+						if d.Pages > 1 {
+							<div class="yd-foot">
+								<span class="help">{ v.Tr("domains.page_of", "count", len(v.MyDomains), "page", d.Page, "pages", d.Pages) }</span>
+								<nav class="pager" aria-label={ v.Tr("action.next_page") }>
+									@components.PagerArrow(fmt.Sprintf("/home?page=%d", d.Page-1), "chevL", v.Tr("action.previous_page"), d.Page > 1, nil)
+									<span class="pg-info num">{ fmt.Sprintf("%d / %d", d.Page, d.Pages) }</span>
+									@components.PagerArrow(fmt.Sprintf("/home?page=%d", d.Page+1), "chevR", v.Tr("action.next_page"), d.Page < d.Pages, nil)
+								</nav>
+							</div>
+						}
+					</section>
+					if !v.IsGuest() {
+						<section class="section">
+							<div class="section-head">
+								<h2>{ v.Tr("nav.challenges") }</h2>
+								<a class="link-btn" href="/challenges">{ v.Tr("home.all_challenges") }</a>
+							</div>
+							<div class="card">
+								if len(d.Challenges) > 0 {
+									for _, ch := range d.Challenges {
+										<div class="li">
+											@components.PersonAvatar(ch.Initials, ch.Color, "sm", false)
+											<span class="grow">
+												<b class="t">{ ch.Title }</b>
+												<span class="s">{ ch.Line }</span>
+											</span>
+											<form method="post" action={ templ.SafeURL("/challenges/" + ch.ID + "/decline") }>
+												<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+												<button class="btn btn-sm" type="submit">{ v.Tr("action.decline") }</button>
+											</form>
+											<form method="post" action={ templ.SafeURL("/challenges/" + ch.ID + "/accept") }>
+												<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+												<button class="btn btn-sm btn-primary" type="submit">{ v.Tr("action.accept_play") }</button>
+											</form>
+										</div>
+									}
+								} else {
+									@components.Empty("swords", v.Tr("home.no_challenges"), v.Tr("home.no_challenges.body"))
+								}
+							</div>
+						</section>
+					}
+				</div>
+				<div class="col-side">
+					<section class="card pad">
+						<div class="card-head">
+							<h2>{ v.Tr("home.this_week") }</h2>
+							<a class="link-btn" href="/leaderboard">{ v.Tr("nav.leaderboard") }</a>
+						</div>
+						if len(d.Week) > 0 {
+							<ol class="list flush">
+								for _, l := range d.Week {
+									<li class={ "li", templ.KV("me", l.IsMe) }>
+										<span class={ "rank num", templ.KV("r1", l.Rank == 1) }>
+											if l.Rank > 0 {
+												{ fmt.Sprint(l.Rank) }
+											} else {
+												·
+											}
+										</span>
+										@components.PersonAvatar(l.Initials, l.Color, "sm", false)
+										<span class="grow t">
+											if l.IsMe {
+												{ v.Tr("home.you") }
+											} else {
+												{ l.Name }
+											}
+										</span>
+										if l.IsMe && l.Rank == 0 {
+											<span class="muted s">{ v.Tr("home.sign_up_to_rank") }</span>
+										} else {
+											<b class="num">{ v.Num(int64(l.Points)) }</b>
+										}
+									</li>
+								}
+							</ol>
+						} else {
+							<p class="help">{ v.WeeklyReset() }</p>
+						}
+					</section>
+					if !v.IsGuest() {
+						<section class="card pad">
+							<div class="card-head">
+								<h2>{ v.Tr("nav.friends") }</h2>
+								<span class="muted s">{ v.Tr("home.online_count", "count", d.FriendsOnline) }</span>
+							</div>
+							if len(d.Friends) > 0 {
+								<div class="stack">
+									for _, f := range d.Friends {
+										<div class="row gap-md">
+											@components.PersonAvatar(f.Initials, f.Color, "", f.Online)
+											<span class="grow">
+												<b class="t">{ f.Name }</b>
+												<span class="s">{ f.Status }</span>
+											</span>
+											<a class="icon-btn sm bordered" href={ templ.URL("/messages?with=" + f.ID) } aria-label={ v.Tr("messages.to", "name", f.Name) }>
+												@components.IconClass("chat", "i-sm flip")
+											</a>
+										</div>
+									}
+								</div>
+							} else {
+								<p class="help">{ v.Tr("friends.none") }</p>
+							}
+							<a class="btn btn-block push-top" href="/friends?invite=1">
+								@components.Icon("plus")
+								{ v.Tr("home.invite_friend") }
+							</a>
+						</section>
+					}
+					if v.HasIslamicDomain() {
+						<section class="ramadan" x-data="sjRamadan" x-show="days >= 0" x-cloak>
+							<svg class="moon" viewBox="0 0 120 120" aria-hidden="true">
+								<path d="M84 30a34 34 0 1 0 22 50 27 27 0 1 1-22-50z" fill="#f3d394"></path>
+								<path d="m98 26 2.4 4.9 5.4.8-3.9 3.8.9 5.3-4.8-2.5-4.8 2.5.9-5.3-3.9-3.8 5.4-.8z" fill="#f3d394"></path>
+							</svg>
+							<div class="rin">
+								<span class="r-title" x-text={ ramadanTitle(v) }>{ v.Tr("home.ramadan.title") }</span>
+								<span class="rd"><span class="num" x-text="days"></span> { v.Tr("home.ramadan.days") }</span>
+								<p x-text={ ramadanLine(v) }></p>
+								<a href={ templ.URL(ramadanHref(d)) }>{ v.Tr("home.ramadan.practise") }</a>
+							</div>
+						</section>
+					}
+				</div>
+			</div>
+		</div>
+	}
+}
+
+// ramadanHref falls back to the catalog only when the player has no Islamic domain to
+// practise in.
+func ramadanHref(d HomeData) string {
+	if d.RamadanHref != "" {
+		return d.RamadanHref
+	}
+	return "/domains"
+}
+
+// ramadanLine builds the "expected around …" sentence in the browser, where the Hijri
+// date is computed (DM-09).
+func ramadanLine(v *view.Ctx) string {
+	return "`" + v.Tr("home.ramadan.expected", "date", "`+date+`") + "`"
+}
+
+// ramadanTitle names the Hijri year the countdown points at ("Ramadan 1448"). The
+// year comes from the same browser calculation as the countdown itself (HM-08).
+func ramadanTitle(v *view.Ctx) string {
+	return "`" + v.Tr("home.ramadan.title_year", "year", "`+year+`") + "`"
+}
+
+// PlayerCard is the right-hand card of Home: level ring, XP, streak, accuracy, rank and
+// the daily goal (HM-03). Guests get the "create an account" version.
+templ PlayerCard(v *view.Ctx, d HomeData) {
+	<aside class="card pad stack player-card" aria-label={ v.Tr("nav.profile") }>
+		if v.IsGuest() {
+			<div class="row gap-md">
+				@components.Avatar(v, "lg")
+				<div>
+					<div class="pc-name">{ v.Name() }</div>
+					<div class="muted pc-sub">{ v.Tr("guest.progress_note") }</div>
+				</div>
+			</div>
+			<div class="stat-row two">
+				<div class="stat gold">
+					<div class="k">{ v.Tr("home.points_today") }</div>
+					<div class="v num">{ v.Num(int64(d.PointsToday)) }</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("home.games") }</div>
+					<div class="v num">{ fmt.Sprint(d.GamesToday) }</div>
+				</div>
+			</div>
+			<p class="muted">{ v.Tr("home.guest_card_body") }</p>
+			<a class="btn btn-primary btn-lg push-top" href="/signup">{ v.Tr("action.signup") }</a>
+		} else {
+			<div class="row gap-md">
+				<span class="avatar-btn big" style={ fmt.Sprintf("--p:%d", v.XPPercent()) }>
+					@components.Avatar(v, "lg")
+				</span>
+				<div>
+					<div class="pc-name">{ v.Name() }</div>
+					<div class="muted num pc-sub">
+						{ v.Tr("nav.level") } { fmt.Sprint(v.Level) } · { v.Num(int64(v.XP)) } / { v.Num(int64(v.XPNext)) } XP
+					</div>
+				</div>
+			</div>
+			<div>
+				<div class="bar lamp"><i style={ fmt.Sprintf("--v:%d%%", v.XPPercent()) }></i></div>
+				<div class="help push-top-sm">{ v.Tr("home.xp_to_level", "xp", v.Num(int64(v.XPNext-v.XP)), "level", v.Level+1) }</div>
+			</div>
+			<div class="stat-row three">
+				<div class="stat gold">
+					<div class="k">
+						@components.IconClass("flame", "i-sm")
+						{ v.Tr("home.streak_label") }
+					</div>
+					<div class="v num">
+						{ fmt.Sprint(d.Streak) }
+						<span class="muted unit">{ v.Tr("home.day_short") }</span>
+					</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("home.accuracy") }</div>
+					<div class="v num">{ fmt.Sprint(d.Accuracy) }%</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("home.this_week") }</div>
+					<div class="v num">
+						if d.WeeklyRank > 0 {
+							#{ fmt.Sprint(d.WeeklyRank) }
+						} else {
+							—
+						}
+					</div>
+				</div>
+			</div>
+			<div class="card goal-card">
+				<div class="row">
+					<b>{ v.Tr("home.daily_goal") }</b>
+					<span class="spacer"></span>
+					<span class="muted s">{ v.Tr("home.goal_games", "done", d.DoneToday, "goal", d.Goal) }</span>
+				</div>
+				<div class="goal-dots" style={ fmt.Sprintf("--n:%d", maxInt32(d.Goal, 1)) }>
+					for i := int32(0); i < maxInt32(d.Goal, 1); i++ {
+						<span class={ templ.KV("on", i < d.DoneToday) }></span>
+					}
+				</div>
+			</div>
+			<a class="btn btn-primary btn-lg push-top" href="/play/quick">
+				@components.IconClass("tri", "flip")
+				{ v.Tr("play.quick") }
+			</a>
+		}
+	</aside>
+}
+
+func maxInt32(a, b int32) int32 {
+	if a > b {
+		return a
+	}
+	return b
+}

@@ -1,0 +1,369 @@
+package admin
+
+import (
+	"fmt"
+	"siraj/internal/i18n"
+	"siraj/internal/view"
+)
+
+// A07, the review queue: the waiting list on the left and one question open on the
+// right. Nothing reaches a player without passing through here, so the pane shows
+// every language side by side, what the automatic checks found, and the source —
+// everything a decision rests on, without leaving the screen.
+
+// ReviewPerPage is how many of the queue the list carries at once. The handler reads
+// it, so "N more" can never disagree with what was fetched.
+const ReviewPerPage = 25
+
+// ReviewShowAll is what "Show all" asks for: the whole queue in one list, with a
+// ceiling so an enormous backlog still cannot build an unbounded page.
+const ReviewShowAll = 200
+
+// ReviewText is one language of the question in the pane.
+type ReviewText struct {
+	Lang        string
+	Body        string
+	Answers     []string
+	Explanation string
+	// Status is the badge over the column: complete, short or missing.
+	Status string
+}
+
+// ReviewItem is one row of the waiting list.
+type ReviewItem struct {
+	ID       int64
+	Body     string
+	Category string
+	Icon     string
+	Color    string
+	Author   string
+	When     string
+	Current  bool
+}
+
+// ReviewCheck is one line of "Automatic checks".
+type ReviewCheck struct {
+	Level string // ok | warn | bad
+	Text  string
+}
+
+// ReviewOpen is the question the pane is showing.
+type ReviewOpen struct {
+	ID        int64
+	Category  string
+	Icon      string
+	Color     string
+	Domain    string
+	Level     string
+	Difficulty int
+	Author    string
+	FirstName string
+	Submitted string
+	Source    string
+	IsNew     bool
+	Correct   int
+	Texts     []ReviewText
+	Checks    []ReviewCheck
+}
+
+// ReviewData backs A07.
+type ReviewData struct {
+	Items []ReviewItem
+	Open  *ReviewOpen
+	// Sort is the list's order: oldest or newest first.
+	Sort string
+	// Done and Goal are the ring in the header: decided today, out of the queue.
+	Done  int
+	Goal  int
+	Total int
+	More  int
+	Page  int
+	Pages int
+	// Undo carries the question a decision just touched, so the toast can take it back.
+	Undo     int64
+	UndoWhat string
+}
+
+templ Review(v *view.Ctx, s Shell, d ReviewData) {
+	@Layout(v, s) {
+		<div class="page-head">
+			<div>
+				<h1>{ v.Tr("admin.review") }</h1>
+				<p class="sub">{ v.Tr("admin.review_sub") }</p>
+			</div>
+			if d.Goal > 0 {
+				<div class="review-progress">
+					<span
+						class="progress-ring"
+						style={ fmt.Sprintf("--p:%d", percent(d.Done, d.Goal)) }
+						data-label={ fmt.Sprintf("%d/%d", d.Done, d.Goal) }
+						role="img"
+						aria-label={ v.Tr("admin.reviewed_today", "done", d.Done, "total", d.Goal) }
+					></span>
+					<span>
+						<b class="block">{ v.Tr("admin.reviewed_today", "done", d.Done, "total", d.Goal) }</b>
+						<span class="help">{ v.Tr("admin.today") }</span>
+					</span>
+				</div>
+			}
+		</div>
+		if d.Undo > 0 {
+			@reviewToast(v, d)
+		}
+		<div class="review-layout">
+			<section class="panel queue-panel">
+				<div class="panel-head">
+					<h2>{ v.Tr("admin.waiting") }</h2>
+					<select class="select input-sm" aria-label={ v.Tr("admin.sort") } onchange="location.href=this.value">
+						<option value="/admin/review?sort=oldest" selected?={ d.Sort != "newest" }>{ v.Tr("admin.oldest_first") }</option>
+						<option value="/admin/review?sort=newest" selected?={ d.Sort == "newest" }>{ v.Tr("admin.newest_first") }</option>
+					</select>
+				</div>
+				if len(d.Items) == 0 {
+					<div class="panel-body">
+						<div class="empty"><p>{ v.Tr("admin.no_rows") }</p></div>
+					</div>
+				} else {
+					<ul class="queue-list">
+						for _, it := range d.Items {
+							<li>
+								<a
+									class={ "queue-item", templ.KV("on", it.Current) }
+									href={ templ.URL(fmt.Sprintf("/admin/review?id=%d&sort=%s", it.ID, d.Sort)) }
+									aria-current={ ariaPage(it.Current) }
+								>
+									<span class="cat-tile" style={ "--c:" + it.Color } aria-hidden="true">
+										@AppIcon(it.Icon)
+									</span>
+									<span class="min0">
+										<b class="block">{ it.Body }</b>
+										<span class="help">
+											if it.Author != "" {
+												{ it.Author + " · " + it.When }
+											} else {
+												{ it.When }
+											}
+										</span>
+									</span>
+								</a>
+							</li>
+						}
+					</ul>
+					if d.More > 0 {
+						<div class="panel-foot">
+							<span class="result-meta">{ v.Tr("admin.n_more", "n", d.More) }</span>
+							<a class="link-btn" href={ templ.URL(fmt.Sprintf("/admin/review?per_page=%d&sort=%s", ReviewShowAll, d.Sort)) }>
+								{ v.Tr("admin.show_all") }
+							</a>
+						</div>
+					}
+				}
+			</section>
+			if d.Open != nil {
+				@reviewPane(v, d, *d.Open)
+			}
+		</div>
+	}
+}
+
+// reviewPane is the question under review: its three languages, the checks, the
+// source, a note to its author and the four decisions.
+templ reviewPane(v *view.Ctx, d ReviewData, q ReviewOpen) {
+	<section class="panel review-pane" data-shortcuts>
+		<div class="panel-head review-head">
+			<span class="cat-tile lg" style={ "--c:" + q.Color } aria-hidden="true">
+				@AppIcon(q.Icon)
+			</span>
+			<div class="min0">
+				<div class="review-title">
+					<b>{ q.Category }</b>
+					<span class="dots" aria-label={ q.Level }>
+						for i := 1; i <= 3; i++ {
+							<i class={ templ.KV("on", i <= q.Difficulty) }></i>
+						}
+					</span>
+					<span class="help">{ q.Level }</span>
+					if q.IsNew {
+						<span class="badge badge-info no-dot">{ v.Tr("admin.new_question") }</span>
+					}
+				</div>
+				<p class="help">
+					{ fmt.Sprintf("#%d · ", q.ID) }
+					if q.Author != "" {
+						{ v.Tr("admin.submitted_by", "name", q.Author) + " " + q.Submitted }
+					} else {
+						{ q.Submitted }
+					}
+				</p>
+			</div>
+			<div class="review-tools">
+				<a class="btn btn-sm" href={ templ.URL(fmt.Sprintf("/admin/questions/%d", q.ID)) } hx-get={ fmt.Sprintf("/admin/questions/%d", q.ID) } hx-target="#drawer-slot" hx-swap="innerHTML">
+					@IconClass("edit", "icon-sm")
+					{ v.Tr("admin.edit") }
+				</a>
+				<div class="menu-wrap">
+					<button
+						class="icon-btn sm"
+						type="button"
+						data-menu
+						aria-haspopup="menu"
+						aria-expanded="false"
+						aria-label={ v.Tr("admin.more_actions") }
+					>
+						@IconClass("more", "icon-sm")
+					</button>
+					<div class="menu menu-row" role="menu">
+						<a role="menuitem" href={ templ.URL(fmt.Sprintf("/questions/%d", q.ID)) } target="_blank" rel="noopener">
+							@IconClass("eye", "icon-sm")
+							{ v.Tr("admin.preview_in_game") }
+						</a>
+						<button
+							role="menuitem"
+							type="button"
+							data-copy={ fmt.Sprintf("/admin/review?id=%d", q.ID) }
+							data-toast={ v.Tr("admin.link_copied") }
+						>
+							@IconClass("copy", "icon-sm")
+							{ v.Tr("admin.copy_link") }
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="panel-body">
+			<div class="locale-cols">
+				for _, t := range q.Texts {
+					<div class="locale-col" lang={ t.Lang } dir={ i18n.Dir(t.Lang) }>
+						<h4>
+							<span>
+								if t.Lang == "ar" {
+									{ i18n.Native[t.Lang] + " · " + v.Tr("lang.ar") }
+								} else {
+									{ i18n.Native[t.Lang] }
+								}
+							</span>
+							switch t.Status {
+								case "complete":
+									<span class="badge badge-live no-dot">{ v.Tr("admin.complete") }</span>
+								case "short":
+									<span class="badge badge-warn no-dot">{ v.Tr("admin.short_explanation") }</span>
+								default:
+									<span class="badge badge-neutral no-dot">{ v.Tr("admin.no_explanation") }</span>
+							}
+						</h4>
+						<p class="prompt">{ t.Body }</p>
+						<ol class="answers">
+							for i, a := range t.Answers {
+								<li class={ templ.KV("is-correct", i == q.Correct) }>
+									<span class="k">{ string(rune('A' + i)) }</span>
+									<span class="min0">{ a }</span>
+								</li>
+							}
+						</ol>
+						if t.Explanation != "" {
+							<p class="explain">{ t.Explanation }</p>
+						}
+					</div>
+				}
+			</div>
+			<div class="review-facts">
+				<div>
+					<h3>{ v.Tr("admin.automatic_checks") }</h3>
+					<ul class="checklist">
+						for _, c := range q.Checks {
+							<li class={ c.Level }>
+								switch c.Level {
+									case "ok":
+										@IconClass("check-circle", "icon-sm")
+									case "bad":
+										@IconClass("x-circle", "icon-sm")
+									default:
+										@IconClass("alert", "icon-sm")
+								}
+								{ c.Text }
+							</li>
+						}
+					</ul>
+				</div>
+				<div>
+					<h3>{ v.Tr("admin.source") }</h3>
+					if q.Source != "" {
+						<p class="source">
+							@IconClass("book", "icon-sm")
+							{ q.Source }
+						</p>
+					} else {
+						<p class="help">{ v.Tr("admin.no_source_given") }</p>
+					}
+					<h3 class="push-top">
+						{ v.Tr("admin.note_to_author") }
+						{ " · " }
+						<span class="help">{ v.Tr("admin.optional") }</span>
+					</h3>
+					<textarea
+						class="textarea"
+						form={ fmt.Sprintf("decide-%d", q.ID) }
+						name="note"
+						rows="3"
+						placeholder={ v.Tr("admin.note_placeholder") }
+					></textarea>
+				</div>
+			</div>
+		</div>
+		<form
+			class="panel-foot review-actions"
+			id={ fmt.Sprintf("decide-%d", q.ID) }
+			method="post"
+			action={ templ.SafeURL(fmt.Sprintf("/admin/review/%d", q.ID)) }
+		>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<input type="hidden" name="sort" value={ d.Sort }/>
+			<button class="btn btn-primary" type="submit" name="decision" value="approved" data-key="a">
+				@IconClass("check", "icon-sm")
+				{ v.Tr("admin.approve") }
+				<span class="kbd">A</span>
+			</button>
+			<button class="btn" type="submit" name="decision" value="sent_back" data-key="e">
+				@IconClass("reply", "icon-sm")
+				{ v.Tr("admin.request_changes") }
+				<span class="kbd">E</span>
+			</button>
+			<button class="btn btn-danger-ghost" type="submit" name="decision" value="rejected" data-key="r">
+				@IconClass("x-circle", "icon-sm")
+				{ v.Tr("admin.reject") }
+				<span class="kbd">R</span>
+			</button>
+			<span class="spacer"></span>
+			<a class="btn btn-ghost" href={ templ.URL(fmt.Sprintf("/admin/review?skip=%d&sort=%s", q.ID, d.Sort)) } data-key="s">
+				@IconClass("skip", "icon-sm")
+				{ v.Tr("admin.skip") }
+				<span class="kbd">S</span>
+			</a>
+		</form>
+	</section>
+}
+
+// reviewToast says what just happened and offers to take it back, which is the one
+// thing a wrong keystroke on this screen needs (A, E and R are one key away).
+templ reviewToast(v *view.Ctx, d ReviewData) {
+	<div class="toast toast-undo" role="status">
+		@IconClass("check-circle", "icon-sm")
+		<span>{ v.Tr(d.UndoWhat) }</span>
+		<form method="post" action={ templ.SafeURL(fmt.Sprintf("/admin/review/%d/undo", d.Undo)) }>
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<button class="link-btn" type="submit">{ v.Tr("action.undo") }</button>
+		</form>
+	</div>
+}
+
+// percent is the ring's fill, clamped so a queue that grows past the day's work does
+// not draw more than a full circle.
+func percent(done, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if done >= total {
+		return 100
+	}
+	return done * 100 / total
+}

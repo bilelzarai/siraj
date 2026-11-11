@@ -1,0 +1,9 @@
+package pages
+
+import "siraj/internal/view"
+
+// WelcomePage wraps Welcome so the auth module does not need to know about the
+// question of the day when it is not loaded yet (T-22 fills it in).
+templ WelcomePage(v *view.Ctx, domains []view.Domain) {
+	@Welcome(v, domains, nil)
+}

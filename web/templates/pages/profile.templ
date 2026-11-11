@@ -1,0 +1,299 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// MasteryCat is one category bar inside a domain of the mastery accordion.
+type MasteryCat struct {
+	Name    string
+	Icon    string
+	Color   string
+	Mastery int32
+}
+
+// MasteryDomain is one accordion row: the domain, its average and its categories.
+type MasteryDomain struct {
+	ID         int64
+	Name       string
+	Icon       string
+	Color      string
+	Mastery    int32
+	Played     int32
+	Categories []MasteryCat
+}
+
+// Achievement is one medal on the profile.
+type Achievement struct {
+	Name     string
+	Body     string
+	Icon     string
+	Progress int32
+	Target   int32
+	Unlocked bool
+}
+
+// ActivityDay is one cell of the 12-week grid; Level is 0–3.
+type ActivityDay struct {
+	Label string
+	Level int
+}
+
+// RecentGame is one row of "Recent games" on the profile and of the history list.
+type RecentGame struct {
+	ID       string
+	Title    string
+	Subtitle string
+	Icon     string
+	Color    string
+	Score    string
+	Points   int32
+	Mode     string
+}
+
+// ProfileData backs P25 (LB-02, LB-03).
+type ProfileData struct {
+	Handle       string
+	Joined       string
+	Level        int32
+	XP           int32
+	XPNext       int32
+	Percent      int32
+	Games        int32
+	Accuracy     int32
+	Points       int32
+	Streak       int32
+	BestStreak   int32
+	DuelsWon     int32
+	DuelRating   int32
+	Languages    string
+	ShareURL     string
+	Average      int32
+	Sort         string
+	Mastery      []MasteryDomain
+	Achievements []Achievement
+	Unlocked     int
+	Activity     []ActivityDay
+	Recent       []RecentGame
+}
+
+templ Profile(v *view.Ctx, d ProfileData) {
+	@layouts.App(v, v.Tr("profile.title")) {
+		<div class="page mid profile-page">
+			<section class="card pad profile-head">
+				<div class="row wrap gap-lg">
+					<span class="avatar-btn xl" style={ fmt.Sprintf("--p:%d", d.Percent) }>
+						@components.Avatar(v, "xl")
+						<span class="lvl-badge">{ fmt.Sprint(d.Level) }</span>
+					</span>
+					<div class="grow">
+						<h1>{ v.Name() }</h1>
+						<p class="muted">
+							if d.Handle != "" {
+								{ "@" + d.Handle }
+								{ " · " }
+							}
+							{ v.Tr("profile.joined", "date", d.Joined) }
+							if d.Languages != "" {
+								{ " · " }
+								{ v.Tr("profile.plays_in", "langs", d.Languages) }
+							}
+						</p>
+						<div class="row wrap gap-sm push-top-sm">
+							if d.Streak > 0 {
+								<span class="badge gold">
+									@components.IconClass("flame", "i-sm")
+									{ v.Tr("home.streak", "days", d.Streak) }
+								</span>
+							}
+							<span class="badge green">{ v.Tr("profile.level", "level", d.Level) }</span>
+							if d.DuelRating > 0 {
+								<span class="badge blue">{ v.Tr("duel.your_rating", "rating", d.DuelRating) }</span>
+							}
+						</div>
+					</div>
+					<div class="row gap-sm">
+						<a class="btn" href="/settings">
+							@components.Icon("pen")
+							{ v.Tr("profile.edit") }
+						</a>
+						if d.ShareURL != "" {
+							<button class="btn" type="button" x-data={ shareData(d.ShareURL) } x-on:click="copy()">
+								@components.Icon("link")
+								{ v.Tr("profile.share") }
+							</button>
+						}
+					</div>
+				</div>
+			</section>
+			<div class="stat-row four">
+				<div class="stat">
+					<div class="k">{ v.Tr("profile.games") }</div>
+					<div class="v num">{ fmt.Sprint(d.Games) }</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("profile.accuracy") }</div>
+					<div class="v num">{ fmt.Sprint(d.Accuracy) }%</div>
+				</div>
+				<div class="stat gold">
+					<div class="k">{ v.Tr("profile.best_streak") }</div>
+					<div class="v num">
+						{ fmt.Sprint(d.BestStreak) }
+						<span class="muted unit">{ v.Tr("home.day_short") }</span>
+					</div>
+				</div>
+				<div class="stat">
+					<div class="k">{ v.Tr("profile.duels_won") }</div>
+					<div class="v num">{ fmt.Sprint(d.DuelsWon) }</div>
+				</div>
+			</div>
+			<div class="cols">
+				<div class="col-main stack-lg">
+					<section class="card pad">
+						<div class="card-head">
+							<h2>{ v.Tr("profile.mastery") }</h2>
+							<span class="help">{ v.Tr("profile.mastery_hint") }</span>
+						</div>
+						if len(d.Mastery) == 0 {
+							<p class="muted">{ v.Tr("profile.no_mastery") }</p>
+						} else {
+							<div class="mastery-top">
+								<span class="avg num">{ fmt.Sprint(d.Average) }%</span>
+								<span class="muted">{ v.Tr("profile.average_across", "count", len(d.Mastery)) }</span>
+								<span class="spacer"></span>
+								<div class="seg" role="group" aria-label={ v.Tr("profile.mastery") }>
+									for _, option := range []struct {
+										Value string
+										Key   string
+									}{{"played", "profile.sort.played"}, {"mastery", "profile.sort.strongest"}, {"weakest", "profile.sort.weakest"}} {
+										<a
+											class={ "seg-item", templ.KV("on", d.Sort == option.Value) }
+											href={ templ.URL("/profile?sort=" + option.Value) }
+											aria-pressed={ fmt.Sprint(d.Sort == option.Value) }
+										>{ v.Tr(option.Key) }</a>
+									}
+								</div>
+							</div>
+							<div class="acc" x-data="{ open: 0 }">
+								for i, dom := range d.Mastery {
+									<div class="acc-item">
+										<button
+											class="acc-head"
+											type="button"
+											x-on:click={ fmt.Sprintf("open = open === %d ? -1 : %d", i, i) }
+											x-bind:aria-expanded={ fmt.Sprintf("open === %d", i) }
+										>
+											<span class="cat-ic sm" style={ "--c:" + dom.Color }>
+												@components.Icon(dom.Icon)
+											</span>
+											<span class="grow min0">
+												<b class="block">{ dom.Name }</b>
+												<span class="help">
+													{ v.Tr("profile.categories", "count", len(dom.Categories)) }
+													if dom.Played > 0 {
+														{ " · " }
+														{ v.Tr("profile.played_times", "n", dom.Played) }
+													}
+												</span>
+											</span>
+											<span class="acc-meter">
+												<span class="bar thin"><i style={ fmt.Sprintf("--v:%d%%;--c:%s", dom.Mastery, dom.Color) }></i></span>
+												<b class="num">{ fmt.Sprint(dom.Mastery) }%</b>
+											</span>
+											@components.IconClass("chevR", "acc-chev flip")
+										</button>
+										<div class="acc-body" x-show={ fmt.Sprintf("open === %d", i) } x-cloak>
+											for _, cat := range dom.Categories {
+												<div>
+													<div class="row push-bottom-sm">
+														<span class="cat-ic sm" style={ "--c:" + cat.Color }>
+															@components.Icon(cat.Icon)
+														</span>
+														<span class="grow bold">{ cat.Name }</span>
+														<span class="num muted">{ fmt.Sprint(cat.Mastery) }%</span>
+													</div>
+													<div class="bar"><i style={ fmt.Sprintf("--v:%d%%;--c:%s", cat.Mastery, cat.Color) }></i></div>
+												</div>
+											}
+										</div>
+									</div>
+								}
+							</div>
+						}
+					</section>
+					<section class="card pad" id="ach">
+						<div class="card-head">
+							<h2>{ v.Tr("profile.achievements") }</h2>
+							<span class="muted small">{ v.Tr("profile.achievements_count", "done", d.Unlocked, "total", len(d.Achievements)) }</span>
+						</div>
+						<div class="grid-auto ach-grid">
+							for _, a := range d.Achievements {
+								<div class={ "ach", templ.KV("off", !a.Unlocked) }>
+									<span class="medal">
+										if a.Unlocked {
+											@components.Icon(a.Icon)
+										} else {
+											@components.Icon("lock")
+										}
+									</span>
+									<span class="an">{ a.Name }</span>
+									<span class="ad">
+										{ a.Body }
+										if !a.Unlocked && a.Target > 1 {
+											{ fmt.Sprintf(" · %d/%d", a.Progress, a.Target) }
+										}
+									</span>
+								</div>
+							}
+						</div>
+					</section>
+				</div>
+				<div class="col-side">
+					<section class="card pad">
+						<div class="card-head">
+							<h2>{ v.Tr("profile.last_12_weeks") }</h2>
+						</div>
+						<div class="heat">
+							for _, c := range d.Activity {
+								<i class={ fmt.Sprintf("l%d", c.Level) } title={ c.Label }></i>
+							}
+						</div>
+						<p class="help push-top-sm">{ v.Tr("profile.darker") }</p>
+					</section>
+					<section class="card">
+						<div class="card-head pad-head">
+							<h2>{ v.Tr("profile.recent") }</h2>
+						</div>
+						if len(d.Recent) == 0 {
+							@components.Empty("history", v.Tr("history.empty"), "")
+						} else {
+							<ul class="list">
+								for _, g := range d.Recent {
+									<li class="li">
+										<span class="cat-ic sm" style={ "--c:" + g.Color }>
+											@components.Icon(g.Icon)
+										</span>
+										<span class="grow">
+											<span class="t block">{ g.Title }</span>
+											<span class="s">{ g.Subtitle }</span>
+										</span>
+										<b class="num brand-ink">{ fmt.Sprintf("+%d", g.Points) }</b>
+									</li>
+								}
+							</ul>
+						}
+					</section>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+// shareData gives the Share button a tiny Alpine component that copies the profile
+// link and shows the toast (LB-02).
+func shareData(url string) string {
+	return "{ url: '" + url + "', copy() { navigator.clipboard?.writeText(this.url); window.sjToast?.(this.url) } }"
+}

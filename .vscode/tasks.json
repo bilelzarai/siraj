@@ -1,0 +1,94 @@
+{
+  // Terminal → Run Task… (works the same on Windows, macOS and Linux)
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "0 · App: up (database + server + worker)",
+      "type": "shell",
+      "command": "bash scripts/app.sh up",
+      "problemMatcher": []
+    },
+    {
+      "label": "0 · App: down (stop everything)",
+      "type": "shell",
+      "command": "bash scripts/app.sh down",
+      "problemMatcher": []
+    },
+    {
+      "label": "1 · Setup (first time)",
+      "type": "shell",
+      "command": "test -f .env || cp .env.example .env; go mod tidy && go install github.com/air-verse/air@latest && go install github.com/a-h/templ/cmd/templ@latest && go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest && bun install && bun run build",
+      "windows": {
+        "command": "if (!(Test-Path .env)) { Copy-Item .env.example .env }; go mod tidy; go install github.com/air-verse/air@latest; go install github.com/a-h/templ/cmd/templ@latest; go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest; bun install; bun run build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "2 · Database: start",
+      "type": "shell",
+      "command": "docker compose up -d --wait",
+      "problemMatcher": []
+    },
+    {
+      "label": "3 · Server: run",
+      "type": "shell",
+      "command": "bun run build && go run ./cmd/server",
+      "dependsOn": "2 · Database: start",
+      "isBackground": true,
+      "problemMatcher": { "pattern": { "regexp": "^x$" }, "background": { "activesBegin": ".", "beginsPattern": ".", "endsPattern": "is listening" } },
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "4 · Server: live reload (templ + Vite + air)",
+      "type": "shell",
+      "command": "templ generate --watch & bunx vite & VITE_DEV_SERVER=http://localhost:5173 air",
+      "dependsOn": "2 · Database: start",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "5 · Generate: SQL -> Go (sqlc) and templ -> Go",
+      "type": "shell",
+      "command": "sqlc generate && templ generate",
+      "problemMatcher": []
+    },
+    {
+      "label": "6 · Test",
+      "type": "shell",
+      "command": "go test ./...",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "7 · Database: open psql",
+      "type": "shell",
+      "command": "docker exec -it siraj-v2-postgres psql -U siraj -d siraj",
+      "problemMatcher": []
+    },
+    {
+      "label": "8 · Database: reset (deletes local data)",
+      "type": "shell",
+      "command": "docker compose down -v; docker compose up -d --wait",
+      "problemMatcher": []
+    },
+    {
+      "label": "9 · Worker: run",
+      "type": "shell",
+      "command": "go run ./cmd/worker",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "10 · Account: create the first staff user",
+      "type": "shell",
+      "command": "go run ./cmd/createuser -email=${input:adminEmail} -username=${input:adminUsername} -password=${input:adminPassword}",
+      "dependsOn": "2 · Database: start",
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    { "id": "adminEmail", "type": "promptString", "description": "Email of the staff account" },
+    { "id": "adminUsername", "type": "promptString", "description": "Username of the staff account" },
+    { "id": "adminPassword", "type": "promptString", "description": "Password (at least 8 characters)", "password": true }
+  ]
+}

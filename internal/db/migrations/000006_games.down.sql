@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS duel_ratings;
+ALTER TABLE games DROP CONSTRAINT IF EXISTS games_room_fk;
+DROP TABLE IF EXISTS room_members;
+DROP TABLE IF EXISTS rooms;
+DROP TABLE IF EXISTS game_answers;
+DROP TABLE IF EXISTS game_players;
+DROP TABLE IF EXISTS game_questions;
+DROP TABLE IF EXISTS games;
+DROP TYPE IF EXISTS game_status;
+DROP TYPE IF EXISTS game_mode;

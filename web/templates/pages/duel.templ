@@ -1,0 +1,337 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// DuelPlayer is one side of a duel: on P17's "opponent found" card and on P18's bar.
+type DuelPlayer struct {
+	Name     string
+	Initials string
+	Color    string
+	Level    int32
+	Rating   int32
+	Score    int32
+	Done     bool
+	// WinRate is the percentage under a name on P17b; HasRate is false for a player
+	// who has never finished a duel, and the card shows a dash instead of a zero.
+	WinRate  int
+	HasRate  bool
+	Answered bool
+	// Results is the run so far, one entry per answered question (DU-01's statuses).
+	Results []bool
+}
+
+// DuelData backs P17: idle, searching, or matched and ready to start (DU-01, DU-02).
+type DuelData struct {
+	Searching  bool
+	GameID     string
+	Rating     int32
+	Wins       int32
+	Losses     int32
+	DomainID   int64
+	DomainName string
+	Guest      bool
+	// Available is how many questions this domain holds, Need how many a duel takes:
+	// "Find an opponent" stays locked while the bank is short (DU-02).
+	Available int
+	Need      int
+	Seconds   int32
+	// Me and Them fill the "opponent found" card.
+	Me   DuelPlayer
+	Them DuelPlayer
+	// The three cards under it: how these two stand, the duel they played last, and
+	// the way to look for somebody else (DU-01).
+	H2HWins   int32
+	H2HLosses int32
+	HasLast   bool
+	LastWon  bool
+	LastMine int32
+	LastThem int32
+	LastWhen string
+	LastDom  string
+}
+
+// Duel is prototype screen 17.
+templ Duel(v *view.Ctx, d DuelData) {
+	@layouts.App(v, v.Tr("domain.duel")) {
+		<div
+			class="page mid duel-page"
+			id="duel"
+			if d.Searching {
+				hx-get="/duel"
+				hx-trigger="sj:live:duels from:body, every 15s"
+				hx-select="#duel"
+				hx-swap="outerHTML"
+			}
+		>
+			<a class="btn btn-ghost btn-sm back-link" href="/play">
+				@components.IconClass("arrowL", "flip")
+				{ v.Tr("play.title") }
+			</a>
+			if d.GameID != "" {
+				@duelMatched(v, d)
+			} else if d.Searching {
+				@duelSearching(v, d)
+			} else {
+				@duelIdle(v, d)
+			}
+		</div>
+	}
+}
+
+// duelIdle is the resting state: what a duel is, which domain it runs on, your record
+// and the one button that starts the search.
+templ duelIdle(v *view.Ctx, d DuelData) {
+	<section class="card pad stack center-text duel-card">
+		<span class="mode-ic blue lg">
+			@components.IconClass("swords", "i-lg")
+		</span>
+		<h1>{ v.Tr("domain.duel") }</h1>
+		<p class="muted">{ v.Tr("duel.idle_body", "n", d.Need, "seconds", d.Seconds) }</p>
+		@components.DomainSwitch(v, d.DomainID, duelSwitchHref)
+		if v.IsGuest() {
+			<div class="banner">
+				<span class="mode-ic gold sm">
+					@components.Icon("star")
+				</span>
+				<div class="grow start">{ v.Tr("duel.guest_banner") }</div>
+				<a class="btn btn-primary btn-sm" href="/signup">{ v.Tr("action.signup") }</a>
+			</div>
+		} else {
+			<div class="row wrap center gap-sm">
+				<span class="badge blue">{ v.Tr("duel.your_rating", "rating", d.Rating) }</span>
+				<span class="badge">{ v.Tr("duel.record", "wins", d.Wins, "losses", d.Losses) }</span>
+			</div>
+		}
+		if d.Available < d.Need {
+			<p class="err">{ v.Tr("setup.fewer_questions", "available", d.Available, "count", d.Need) }</p>
+		}
+		<form method="post" action="/duel/search">
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<input type="hidden" name="domain" value={ fmt.Sprint(d.DomainID) }/>
+			<button class="btn btn-primary btn-lg" type="submit" disabled?={ d.Available < d.Need }>
+				@components.Icon("search")
+				{ v.Tr("duel.find") }
+			</button>
+		</form>
+	</section>
+}
+
+// duelSearching is the radar: who is being looked for, and the way out.
+templ duelSearching(v *view.Ctx, d DuelData) {
+	<section class="card pad stack center-text duel-card">
+		<span class="radar" aria-hidden="true">
+			@components.Avatar(v, "lg")
+		</span>
+		<h1>{ v.Tr("duel.searching") }</h1>
+		<p class="muted">
+			if d.DomainName != "" {
+				{ d.DomainName }
+				{ " · " }
+			}
+			{ v.Tr("duel.searching_body", "rating", d.Rating) }
+		</p>
+		<form method="post" action="/duel/cancel">
+			<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+			<button class="btn" type="submit">{ v.Tr("action.cancel") }</button>
+		</form>
+	</section>
+}
+
+// duelMatched is "opponent found": both players side by side, and the duel starts by
+// itself a moment later so neither side waits on the other (DU-01).
+templ duelMatched(v *view.Ctx, d DuelData) {
+	<div class="stack gap-md">
+		<section class="card pad stack gap-md center-text duel-card matched">
+			<span class="eyebrow">{ v.Tr("duel.line", "n", d.Need) + duelDomainLine(d) }</span>
+			<div class="duel-vs">
+				@duelFace(v, d, d.Me, true)
+				<span class="vs-mid big">{ v.Tr("challenges.vs") }</span>
+				@duelFace(v, d, d.Them, false)
+			</div>
+			<div class="row center gap-sm">
+				<a class="btn btn-primary btn-lg" href={ templ.URL("/games/" + d.GameID) }>{ v.Tr("duel.start") }</a>
+				<form method="post" action="/duel/cancel">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="btn btn-lg" type="submit">{ v.Tr("action.cancel") }</button>
+				</form>
+			</div>
+			<p class="help">{ v.Tr("duel.matched_body") }</p>
+		</section>
+		<div class="duel-facts">
+			<section class="card pad stack gap-xs">
+				<span class="eyebrow">{ v.Tr("duel.head_to_head") }</span>
+				<b class="big num">{ fmt.Sprintf("%d – %d", d.H2HWins, d.H2HLosses) }</b>
+				<span class="help">
+					if d.H2HWins > d.H2HLosses {
+						{ v.Tr("duel.you_lead", "name", d.Them.Name) }
+					} else if d.H2HWins < d.H2HLosses {
+						{ v.Tr("duel.they_lead", "name", d.Them.Name) }
+					} else {
+						{ v.Tr("duel.even_record", "name", d.Them.Name) }
+					}
+				</span>
+			</section>
+			<section class="card pad stack gap-xs">
+				<span class="eyebrow">{ v.Tr("duel.last_duel") }</span>
+				if d.HasLast {
+					<b>{ lastDuelLine(v, d) }</b>
+					<span class="help">{ d.LastDom }{ " · " }{ d.LastWhen }</span>
+				} else {
+					<b>{ v.Tr("duel.first_meeting") }</b>
+					<span class="help">{ v.Tr("duel.first_meeting_sub") }</span>
+				}
+			</section>
+			<section class="card pad stack gap-xs">
+				<span class="eyebrow">{ v.Tr("duel.find_someone_new") }</span>
+				<form method="post" action="/duel/search" class="push-top-sm">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<input type="hidden" name="domain" value={ fmt.Sprint(d.DomainID) }/>
+					<input type="hidden" name="again" value="1"/>
+					<button class="btn" type="submit">{ v.Tr("duel.random_opponent") }</button>
+				</form>
+			</section>
+		</div>
+	</div>
+}
+
+// lastDuelLine reads the duel these two played last. A level score is a draw, not a
+// loss: the card says so rather than calling it one.
+func lastDuelLine(v *view.Ctx, d DuelData) string {
+	switch {
+	case d.LastMine > d.LastThem:
+		return v.Tr("duel.won_score", "mine", d.LastMine, "theirs", d.LastThem)
+	case d.LastMine < d.LastThem:
+		return v.Tr("duel.lost_score", "mine", d.LastMine, "theirs", d.LastThem)
+	}
+	return v.Tr("duel.drew_score", "mine", d.LastMine, "theirs", d.LastThem)
+}
+
+// faceLine is the line under a name on the matched card: the level, and the win rate
+// once there is one to show.
+func faceLine(v *view.Ctx, p DuelPlayer) string {
+	line := v.Tr("friends.level", "level", p.Level)
+	if p.HasRate {
+		line += " · " + v.Tr("duel.win_rate", "n", p.WinRate)
+	}
+	return line
+}
+
+// duelDomainLine adds the domain to the small line over the two faces, when there is
+// one to name.
+func duelDomainLine(d DuelData) string {
+	if d.DomainName == "" {
+		return ""
+	}
+	return " · " + d.DomainName
+}
+
+templ duelFace(v *view.Ctx, d DuelData, p DuelPlayer, me bool) {
+	<div class="duel-face">
+		if me {
+			@components.Avatar(v, "xl")
+		} else {
+			@components.PersonAvatar(p.Initials, p.Color, "xl", false)
+		}
+		<b>
+			if me {
+				{ v.Name() }
+			} else {
+				{ p.Name }
+			}
+		</b>
+		<span class="help">{ faceLine(v, p) }</span>
+		if me {
+			<span class="badge green">{ v.Tr("duel.ready") }</span>
+		} else {
+			<span class="badge gold">{ v.Tr("duel.joining") }</span>
+		}
+	</div>
+}
+
+// DuelBar is the score bar of P18: both players, both scores and both runs, refreshed
+// on its own while the question card stays untouched (DU-01).
+templ DuelBar(v *view.Ctx, gameID string, me DuelPlayer, them DuelPlayer) {
+	<div
+		class="duel-bar"
+		id="duel-bar"
+		hx-get={ "/duel/" + gameID + "/bar" }
+		hx-trigger="sj:live:duels from:body, every 15s"
+		hx-select="#duel-bar"
+		hx-swap="outerHTML"
+	>
+		<div class="duel-side me">
+			@components.Avatar(v, "sm")
+			<span class="min0">
+				<b class="block">{ v.Name() }</b>
+				<span class="help">{ v.Tr("home.you") + " · " + duelState(v, me) }</span>
+			</span>
+		</div>
+		<div class="duel-mid">
+			<span class="num sa">{ fmt.Sprint(me.Score) }</span>
+			<span class="num sb">{ fmt.Sprint(them.Score) }</span>
+		</div>
+		<div class="duel-side them">
+			<span class="min0 end">
+				<b class="block">
+					if them.Name != "" {
+						{ them.Name }
+					} else {
+						{ v.Tr("duel.opponent") }
+					}
+				</b>
+				<span class="help">{ duelState(v, them) }</span>
+			</span>
+			@components.PersonAvatar(them.Initials, them.Color, "sm", false)
+		</div>
+		<div class="tug duel-tug" role="img" aria-label={ fmt.Sprintf("%d – %d", me.Score, them.Score) }>
+			<i class="ta" style={ duelShare(me.Score, them.Score) }></i>
+			<i class="tb" style={ duelShare(them.Score, me.Score) }></i>
+		</div>
+	</div>
+}
+
+// duelState is what a side of the bar is doing right now (DU-01).
+func duelState(v *view.Ctx, p DuelPlayer) string {
+	switch {
+	case p.Done:
+		return v.Tr("duel.finished")
+	case p.Answered:
+		return v.Tr("rooms.answered")
+	}
+	return v.Tr("rooms.thinking")
+}
+
+// duelShare is one side's slice of the bar between the two scores.
+func duelShare(mine, theirs int32) string {
+	total := mine + theirs
+	if total <= 0 {
+		return "flex-basis:50%"
+	}
+	return fmt.Sprintf("flex-basis:%d%%", int(mine*100/total))
+}
+
+// duelMarks is one tick or cross per question answered so far.
+templ duelMarks(results []bool) {
+	<span class="duel-marks">
+		for _, ok := range results {
+			if ok {
+				<i class="ok">
+					@components.IconClass("check", "i-sm")
+				</i>
+			} else {
+				<i class="no">
+					@components.IconClass("x", "i-sm")
+				</i>
+			}
+		}
+	</span>
+}
+
+func duelSwitchHref(domainID int64) string {
+	return fmt.Sprintf("/duel?domain=%d", domainID)
+}

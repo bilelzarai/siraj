@@ -1,0 +1,552 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// DomainPage is prototype screen 7 (DM-06): hero with the domain's stats and its three
+// ways to play, its categories, "With others", the top five of the week, how questions
+// are made, and more domains.
+type DomainPageData struct {
+	Domain      view.Domain
+	Categories  []components.Category
+	More        []view.Domain
+	PlayersWeek int32
+	Top         []LeaderRow
+}
+
+// LeaderRow is one line of a small leaderboard card.
+type LeaderRow struct {
+	Rank     int
+	Name     string
+	Initials string
+	Color    string
+	Points   int64
+	Me       bool
+}
+
+templ DomainPage(v *view.Ctx, d DomainPageData) {
+	@layouts.App(v, d.Domain.Name) {
+		<div class="page domain-page">
+			<div class="row">
+				<a class="btn btn-ghost btn-sm" href="/home">
+					@components.IconClass("arrowL", "flip")
+					{ v.Tr("nav.home") }
+				</a>
+				<span class="spacer"></span>
+				if !d.Domain.IsMine {
+					<form method="post" action={ templ.SafeURL(fmt.Sprintf("/domains/%d/add", d.Domain.ID)) }>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="btn btn-sm btn-primary" type="submit">
+							@components.IconClass("plus", "i-sm")
+							{ v.Tr("domain.add_to_yours") }
+						</button>
+					</form>
+				}
+				<a class="btn btn-sm" href="/domains" hx-get="/domains" hx-target="#drawer-slot" hx-swap="outerHTML">
+					@components.IconClass("search", "i-sm")
+					{ v.Tr("domains.explore") }
+				</a>
+			</div>
+			if !d.Domain.IsMine {
+				<div class="mode-banner">
+					@components.Icon("info")
+					<span class="grow">{ v.Tr("domain.not_yours_yet") }</span>
+				</div>
+			}
+			@DomainHero(v, d)
+			<div class="cols">
+				<div class="col-main">
+					<section class="section">
+						<div class="section-head">
+							<h2>{ v.Tr("domain.categories") }</h2>
+							<span class="help">{ v.Tr("domain.pick_category") }</span>
+						</div>
+						@components.CategoryGrid(v, d.Domain.ID, d.Categories, true)
+					</section>
+					<section class="section">
+						<div class="section-head">
+							<h2>{ v.Tr("domain.with_others") }</h2>
+						</div>
+						@components.ModeTiles(v, d.Domain.ID, false)
+					</section>
+				</div>
+				<div class="col-side">
+					<section class="card pad">
+						<div class="card-head">
+							<h2 class="card-title">{ v.Tr("domain.top_week") }</h2>
+							<a class="link-btn" href={ templ.URL(fmt.Sprintf("/leaderboard?domain=%d", d.Domain.ID)) }>{ v.Tr("nav.leaderboard") }</a>
+						</div>
+						if len(d.Top) == 0 {
+							<p class="help">{ v.Tr("empty.title") }</p>
+						} else {
+							<ol class="list flush">
+								for _, row := range d.Top {
+									<li class={ "li", templ.KV("me", row.Me) }>
+										<span class={ "rank", templ.KV("r1", row.Rank == 1) }>{ fmt.Sprint(row.Rank) }</span>
+										@components.PersonAvatar(row.Initials, row.Color, "sm", false)
+										<span class="grow t">{ row.Name }</span>
+										<span class="num pts">{ fmt.Sprint(row.Points) }</span>
+									</li>
+								}
+							</ol>
+						}
+						<p class="help push-top-sm">{ v.Tr("domain.own_board") }</p>
+					</section>
+					<section class="card pad stack">
+						<h2 class="card-title">{ v.Tr("domain.how_made.title") }</h2>
+						for _, item := range []struct {
+							Icon string
+							Key  string
+						}{{"book", "domain.how_made.sources"}, {"languages", "domain.how_made.langs"}, {"shield", "domain.how_made.family"}} {
+							<div class="row top gap-sm">
+								@components.IconClass(item.Icon, "i-sm")
+								<span>{ v.Tr(item.Key) }</span>
+							</div>
+						}
+					</section>
+				</div>
+			</div>
+			if len(d.More) > 0 {
+				<section class="section">
+					<div class="section-head">
+						<h2>{ v.Tr("domain.more_domains") }</h2>
+					</div>
+					<div class="worlds">
+						for _, other := range d.More {
+							@components.WorldCard(v, other, false)
+						}
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
+
+// DomainHero is the themed head of a domain page (BR-02, BR-03, DM-06).
+templ DomainHero(v *view.Ctx, d DomainPageData) {
+	<section
+		class={ "dhero dscope", templ.KV("fam-islamic", d.Domain.IsIslamic()) }
+		style={ "--d:" + d.Domain.Color }
+		aria-labelledby={ fmt.Sprintf("dh-%d", d.Domain.ID) }
+	>
+		@components.Pattern(fmt.Sprintf("dh-pt-%d", d.Domain.ID))
+		@components.Motif(motifName(d.Domain))
+		<div class="in">
+			<div class="dh-copy">
+				<span class="dh-ic">
+					@components.Icon(d.Domain.Icon)
+				</span>
+				<div class="row wrap gap-sm">
+					if d.Domain.IsFeatured {
+						<span class="badge gold">
+							@components.IconClass("star", "i-sm")
+							{ v.Tr("domain.flagship") }
+						</span>
+					}
+					if d.Domain.IsNew {
+						<span class="badge gold">{ v.Tr("domain.new") }</span>
+					}
+				</div>
+				<h1 id={ fmt.Sprintf("dh-%d", d.Domain.ID) }>{ d.Domain.Name }</h1>
+				<p>{ d.Domain.Description }</p>
+				<div class="dh-stats">
+					<span><b class="num">{ fmt.Sprint(d.Domain.CategoryCount) }</b>{ v.Tr("domain.stat.categories") }</span>
+					<span><b class="num">{ fmt.Sprint(d.Domain.QuestionCount) }</b>{ v.Tr("domain.stat.questions") }</span>
+					if !v.IsGuest() {
+						<span><b class="num">{ fmt.Sprint(d.Domain.Mastery) }%</b>{ v.Tr("domain.stat.mastery") }</span>
+					}
+					<span><b class="num">{ fmt.Sprint(d.PlayersWeek) }</b>{ v.Tr("domain.stat.players") }</span>
+				</div>
+			</div>
+			<div class="dh-act">
+				<a class="btn btn-lg btn-onhero" href={ templ.URL(fmt.Sprintf("/play/quick?domain=%d", d.Domain.ID)) }>
+					@components.IconClass("tri", "flip")
+					{ v.Tr("domain.quick_game") }
+				</a>
+				<a class="btn btn-lg btn-hero-ghost" href={ templ.URL(fmt.Sprintf("/duel?domain=%d", d.Domain.ID)) }>
+					@components.Icon("swords")
+					{ v.Tr("domain.duel") }
+				</a>
+				<a class="btn btn-lg btn-hero-ghost" href={ templ.URL(fmt.Sprintf("/setup?domain=%d", d.Domain.ID)) }>
+					@components.Icon("sliders")
+					{ v.Tr("domain.custom") }
+				</a>
+			</div>
+		</div>
+	</section>
+}
+
+func motifName(d view.Domain) string {
+	if d.Motif != "" {
+		return d.Motif
+	}
+	return d.Icon
+}
+
+// ExploreData backs the Explore / Add a domain / Manage screens (DM-04, DM-05, DM-08).
+type ExploreData struct {
+	Mode          string // explore | add | manage
+	Domains       []view.Domain
+	Query         string
+	Page          int
+	Pages         int
+	Total         int
+	From          int
+	To            int
+	CategoryCount int
+	CanRemove     bool
+	// Changed says this render answers a card that was just tapped: the drawer marks
+	// itself dirty so closing it repaints the screen behind with the new list (DM-04).
+	Changed bool
+}
+
+// Explore lists every domain, 6 per page with a search box — the only place besides
+// onboarding and "Add a domain" that leaves Your domains (DM-04, DM-08).
+templ Explore(v *view.Ctx, d ExploreData) {
+	@layouts.App(v, exploreTitle(v, d.Mode)) {
+		<div class="page">
+			<div class="page-head">
+				<div>
+					<h1>{ exploreTitle(v, d.Mode) }</h1>
+				</div>
+				<form class="search-box" method="get" action="/domains" role="search">
+					<input type="hidden" name="ns" value={ d.Mode }/>
+					<label class="sr-only" for="q">{ v.Tr("domains.search_placeholder") }</label>
+					<div class="input-icon">
+						@components.IconClass("search", "i-sm")
+						<input
+							class="input"
+							id="q"
+							name="q"
+							value={ d.Query }
+							placeholder={ v.Tr("domains.search_placeholder") }
+							hx-get="/domains"
+							hx-trigger="input changed delay:300ms"
+							hx-target="#domain-list"
+							hx-select="#domain-list"
+							hx-swap="outerHTML"
+							hx-include="[name='ns']"
+						/>
+					</div>
+				</form>
+			</div>
+			@components.IslamicOnlyBanner(v)
+			<div id="domain-list">
+				if len(d.Domains) == 0 {
+					@components.Empty("search", v.Tr("domains.none_found", "query", d.Query), "") {
+					}
+				} else {
+					<div class="worlds">
+						for _, dom := range d.Domains {
+							<div class="world-wrap">
+								@components.WorldCard(v, dom, false)
+								if dom.IsMine {
+									<span class="badge in-yours">
+										@components.IconClass("check", "i-sm")
+										{ v.Tr("domains.in_yours") }
+									</span>
+								} else {
+									<form method="post" action={ templ.SafeURL(fmt.Sprintf("/domains/%d/add", dom.ID)) } class="world-add">
+										<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+										<button class="btn btn-sm btn-primary" type="submit">
+											@components.IconClass("plus", "i-sm")
+											{ v.Tr("action.add") }
+										</button>
+									</form>
+								}
+							</div>
+						}
+					</div>
+					@components.Pager(d.Page, d.Pages, exploreHref(d), v)
+				}
+			</div>
+		</div>
+	}
+}
+
+// exploreTitle names the one full page left: Explore, and the same list when it was
+// opened to add a domain. Manage is a dialog only (O03), never a page of its own.
+func exploreTitle(v *view.Ctx, mode string) string {
+	if mode == "add" {
+		return v.Tr("domains.add")
+	}
+	return v.Tr("domains.explore")
+}
+
+// sheetPagerHX keeps the drawer open while it turns the page: the new cards replace
+// the list, nothing navigates (DM-08).
+func sheetPagerHX(d ExploreData, page int) templ.Attributes {
+	return templ.Attributes{
+		"hx-get":    exploreHref(d)(page),
+		"hx-target": "#ds-list",
+		"hx-select": "#ds-list",
+		"hx-swap":   "outerHTML",
+	}
+}
+
+func exploreHref(d ExploreData) func(int) string {
+	return func(page int) string {
+		return fmt.Sprintf("/domains?ns=%s&q=%s&page=%d", d.Mode, d.Query, page)
+	}
+}
+
+// DomainSheet is O01 (Explore all domains) and O02 (Add to your domains): a drawer
+// over the screen that opened it, with a search box, the recent domains and the
+// catalog six at a time (DM-04, DM-08).
+templ DomainSheet(v *view.Ctx, d ExploreData) {
+	<div id="drawer-slot" x-data="sjOverlay" x-init="show()">
+		<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+		<aside
+			class="ov drawer sheet"
+			role="dialog"
+			aria-modal="true"
+			x-show="open"
+			x-on:keydown.escape.window="hide()"
+			x-trap="open"
+		>
+			<div class="drawer-head">
+				<div>
+					<h2>{ sheetTitle(v, d.Mode) }</h2>
+					<p>{ sheetSubtitle(v, d) }</p>
+				</div>
+				<span class="spacer"></span>
+				<button type="button" class="icon-btn sm" x-on:click="hide()" aria-label={ v.Tr("action.close") }>
+					@components.Icon("x")
+				</button>
+			</div>
+			<div class="ds-search">
+				<label class="input-icon">
+					@components.Icon("search")
+					<span class="sr-only">{ v.Tr("action.search") }</span>
+					<input
+						class="input"
+						type="search"
+						name="q"
+						value={ d.Query }
+						autocomplete="off"
+						placeholder={ sheetPlaceholder(v, d.Mode) }
+						hx-get={ "/domains?ns=" + d.Mode }
+						hx-trigger="input changed delay:300ms, search"
+						hx-target="#ds-list"
+						hx-select="#ds-list"
+						hx-swap="outerHTML"
+					/>
+				</label>
+			</div>
+			@DomainSheetList(v, d)
+			if d.Mode == "add" {
+				<div class="drawer-foot">
+					<span class="help" id="ds-count">{ v.Tr("domains.on_your_home", "count", len(v.MyDomains)) }</span>
+					<span class="spacer"></span>
+					<button class="btn btn-primary" type="button" x-on:click="hide()">{ v.Tr("action.done") }</button>
+				</div>
+			}
+		</aside>
+	</div>
+}
+
+// DomainSheetList is the swappable body of the sheet: the cards and the pager.
+templ DomainSheetList(v *view.Ctx, d ExploreData) {
+	<div class="drawer-body ds-list" id="ds-list">
+		if len(d.Domains) == 0 {
+			<div class="empty">
+				<p>{ v.Tr("setup.no_match") }</p>
+			</div>
+		} else {
+			<div class="ds-h row">
+				<span>
+					if d.Query != "" {
+						{ v.Tr("admin.domains") }
+					} else if d.Mode == "add" {
+						{ v.Tr("domains.yours_first_az") }
+					} else {
+						{ v.Tr("domains.all_az") }
+					}
+				</span>
+				<span class="spacer"></span>
+				<span class="num plain-case">{ v.Tr("domains.range_of", "from", d.From, "to", d.To, "total", d.Total) }</span>
+			</div>
+			<div class="dcard-grid">
+				for _, dom := range d.Domains {
+					if d.Mode == "add" {
+						<form
+							method="post"
+							action={ templ.SafeURL(sheetToggleHref(dom)) }
+							class="contents"
+							hx-post={ sheetToggleHref(dom) }
+							hx-target="#ds-list"
+							hx-swap="outerHTML"
+							x-on:htmx:after-request="touch()"
+						>
+							<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+							<input type="hidden" name="then" value="sheet"/>
+							<input type="hidden" name="ns" value="add"/>
+							<input type="hidden" name="q" value={ d.Query }/>
+							<input type="hidden" name="page" value={ fmt.Sprint(d.Page) }/>
+							<button
+								class={ "dcard", templ.KV("on", dom.IsMine) }
+								type="submit"
+								aria-pressed={ fmt.Sprint(dom.IsMine) }
+								disabled?={ dom.IsMine && len(v.MyDomains) < 2 }
+							>
+								@dcardBody(v, dom, "add")
+							</button>
+						</form>
+					} else {
+						<a class="dcard" href={ templ.URL(fmt.Sprintf("/domains/%d", dom.ID)) }>
+							@dcardBody(v, dom, "open")
+						</a>
+					}
+				}
+			</div>
+			if d.Pages > 1 {
+				<nav class="pager" aria-label={ v.Tr("action.next_page") }>
+					@components.PagerArrow(exploreHref(d)(d.Page-1), "chevL", v.Tr("action.previous_page"), d.Page > 1, sheetPagerHX(d, d.Page-1))
+					<span class="pg-info num">{ fmt.Sprintf("%d / %d", d.Page, d.Pages) }</span>
+					@components.PagerArrow(exploreHref(d)(d.Page+1), "chevR", v.Tr("action.next_page"), d.Page < d.Pages, sheetPagerHX(d, d.Page+1))
+				</nav>
+			}
+		}
+	</div>
+}
+
+// DomainSheetToggled is the answer to a card tapped in O02: the same cards, swapped
+// where they are, and the footer count following out of band. The drawer never
+// navigates, so a player can add several domains in a row (DM-04).
+templ DomainSheetToggled(v *view.Ctx, d ExploreData) {
+	@DomainSheetList(v, d)
+	<span class="help" id="ds-count" hx-swap-oob="true">{ v.Tr("domains.on_your_home", "count", len(v.MyDomains)) }</span>
+}
+
+templ dcardBody(v *view.Ctx, dom view.Domain, mode string) {
+	<span class="row gap-sm">
+		<span class="cat-ic sm" style={ "--c:" + dom.Color }>
+			@components.Icon(dom.Icon)
+		</span>
+		if dom.IsMine && mode == "add" {
+			<span class="dcard-ck">
+				@components.IconClass("check", "i-sm")
+			</span>
+		} else if mode == "add" {
+			<span class="dcard-add">
+				@components.IconClass("plus", "i-sm")
+			</span>
+		} else {
+			<span class="dcard-go">
+				@components.IconClass("chevR", "i-sm flip")
+			</span>
+		}
+	</span>
+	<b>{ dom.Name }</b>
+	<span class="help">
+		{ v.Tr("domain.categories_count", "count", dom.CategoryCount) } · { v.Tr("domain.questions_count", "count", dom.QuestionCount) }
+	</span>
+	if !v.IsGuest() {
+		<span class="bar thin-5"><i style={ fmt.Sprintf("--v:%d%%;--c:%s", dom.Mastery, dom.Color) }></i></span>
+	}
+}
+
+// ManageDomainsModal is O03: remove a domain, keeping at least one (DM-05).
+templ ManageDomainsModal(v *view.Ctx, d ExploreData) {
+	<div
+		id="drawer-slot"
+		x-data="sjOverlay"
+		if d.Changed {
+			x-init="show(); dirty = true"
+		} else {
+			x-init="show()"
+		}
+	>
+		<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+		<div
+			class="ov modal"
+			role="dialog"
+			aria-modal="true"
+			x-show="open"
+			x-on:keydown.escape.window="hide()"
+			x-trap="open"
+		>
+			<div class="m-ic">
+				@components.IconClass("sliders", "i-lg")
+			</div>
+			<h2>{ v.Tr("domains.manage") }</h2>
+			<p class="muted">{ v.Tr("domains.manage.help") }</p>
+			<div class="mg-list push-top-sm">
+				for _, dom := range d.Domains {
+					<div class="mg-row">
+						<span class="cat-ic sm" style={ "--c:" + dom.Color }>
+							@components.Icon(dom.Icon)
+						</span>
+						<span class="grow">
+							<b class="block">{ dom.Name }</b>
+							<span class="help">
+								{ v.Tr("domain.categories_count", "count", dom.CategoryCount) } · { v.Tr("domain.questions_count", "count", dom.QuestionCount) }
+							</span>
+						</span>
+						<form method="post" action={ templ.SafeURL(fmt.Sprintf("/domains/%d/remove", dom.ID)) }>
+							<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+							<input type="hidden" name="then" value="sheet"/>
+							<input type="hidden" name="ns" value="manage"/>
+							<button
+								class="icon-btn sm"
+								type="submit"
+								disabled?={ !d.CanRemove }
+								aria-label={ v.Tr("action.remove") + " " + dom.Name }
+								hx-post={ fmt.Sprintf("/domains/%d/remove", dom.ID) }
+								hx-target="#drawer-slot"
+								hx-swap="outerHTML"
+							>
+								@components.Icon("x")
+							</button>
+						</form>
+					</div>
+				}
+			</div>
+			<div class="actions">
+				<a
+					class="btn"
+					href="/domains?ns=add"
+					hx-get="/domains?ns=add"
+					hx-target="#drawer-slot"
+					hx-swap="outerHTML"
+				>
+					@components.Icon("plus")
+					{ v.Tr("domains.add") }
+				</a>
+				<button class="btn btn-primary" type="button" x-on:click="hide()">{ v.Tr("action.done") }</button>
+			</div>
+		</div>
+	</div>
+}
+
+func sheetTitle(v *view.Ctx, mode string) string {
+	if mode == "add" {
+		return v.Tr("domains.add_to_yours")
+	}
+	return v.Tr("domains.explore_all")
+}
+
+func sheetSubtitle(v *view.Ctx, d ExploreData) string {
+	if d.Mode == "add" {
+		return v.Tr("domains.add_help")
+	}
+	return v.Tr("domains.explore_help", "domains", d.Total, "categories", d.CategoryCount)
+}
+
+func sheetPlaceholder(v *view.Ctx, mode string) string {
+	if mode == "add" {
+		return v.Tr("domains.search_domains")
+	}
+	return v.Tr("domains.search_domains_categories")
+}
+
+func sheetToggleHref(dom view.Domain) string {
+	if dom.IsMine {
+		return fmt.Sprintf("/domains/%d/remove", dom.ID)
+	}
+	return fmt.Sprintf("/domains/%d/add", dom.ID)
+}

@@ -1,0 +1,146 @@
+package pages
+
+import (
+	"fmt"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+)
+
+// QOTD is the question of the day as the card needs it (HM-02, endpoints 22 and 23).
+// It is themed by its own domain, has one try a day, and shows the explanation, the
+// source and how many players got it right once it is answered.
+type QOTD struct {
+	QuestionID   int64
+	Day          string
+	Domain       view.Domain
+	CategoryName string
+	Difficulty   int32
+	Points       int32
+	Body         string
+	Answers      []string
+	Correct      int32
+	Explanation  string
+	Source       string
+	PercentRight int32
+	Answered     bool
+	Picked       int32
+	Lang         string
+}
+
+func (q QOTD) Right() bool { return q.Answered && q.Picked == q.Correct }
+
+// QotdCard is the lamp card shared by Welcome and Home.
+templ QotdCard(v *view.Ctx, q *QOTD, id string, compact bool) {
+	<section
+		class={ "lamp-card dscope", templ.KV("fam-islamic", q.Domain.IsIslamic()) }
+		aria-labelledby={ id }
+		style={ "--d:" + q.Domain.Color }
+		id={ "qotd-" + id }
+	>
+		@components.Pattern("kh-" + id)
+		<div class="in">
+			<div class="row wrap">
+				<span class="eyebrow">
+					@components.IconClass("bolt", "i-sm")
+					{ v.Tr("qotd.title") }
+				</span>
+				@components.DomainChip(q.Domain)
+				<span class="meta">
+					{ q.CategoryName } · { difficultyName(v, q.Difficulty) } · +{ fmt.Sprint(q.Points) } { v.Tr("game.points") }
+				</span>
+				if !compact {
+					<span class="meta push-end" x-data="sjNextQuestion" x-text={ nextQuestionLine(v) } x-cloak></span>
+				}
+			</div>
+			<h2 id={ id } lang={ q.Lang } dir="auto" class="qtext">{ q.Body }</h2>
+			<div class="answers">
+				for i, answer := range q.Answers {
+					<button
+						class={ "ans dark", answerState(q, i) }
+						if q.Answered {
+							disabled
+						}
+						hx-post={ fmt.Sprintf("/daily-question/answer?choice=%d&card=%s", i, id) }
+						hx-target={ "#qotd-" + id }
+						hx-swap="outerHTML"
+					>
+						<span class="k">{ answerLetter(v.Lang, i) }</span>
+						{ answer }
+					</button>
+				}
+			</div>
+			if q.Answered {
+				<div class="feedback on-dark">
+					<div class={ "ft", templ.KV("good", q.Right()), templ.KV("bad", !q.Right()) }>
+						if q.Right() {
+							{ v.Tr("game.correct") } · +{ fmt.Sprint(q.Points) } { v.Tr("game.points") }
+						} else {
+							{ v.Tr("game.answer_is") } { q.Answers[q.Correct] }
+						}
+					</div>
+					if q.Explanation != "" {
+						<p class="fx qtext" lang={ q.Lang }>{ q.Explanation }</p>
+					}
+					<div class="src">
+						if q.Source != "" {
+							<span>{ v.Tr("game.source") }: { q.Source }</span>
+						}
+						<span>{ v.Tr("qotd.percent_right", "percent", q.PercentRight) }</span>
+						if !v.SignedIn() {
+							<form method="post" action="/guest" class="push-end">
+								<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+								<input type="hidden" name="then" value="/play/quick"/>
+								<button class="btn btn-gold btn-sm" type="submit">{ v.Tr("welcome.guest_quick") }</button>
+							</form>
+						}
+					</div>
+				</div>
+			} else if v.IsMember() {
+				<p class="meta">{ v.Tr("qotd.one_try_streak") }</p>
+			} else {
+				<p class="meta">{ v.Tr("qotd.one_try_guest") }</p>
+			}
+		</div>
+	</section>
+}
+
+// nextQuestionLine builds "New question in 7 h 12 min" as an Alpine expression: the
+// countdown runs in the browser because the next question arrives at the next UTC day
+// and a cached page would otherwise show a stale figure.
+func nextQuestionLine(v *view.Ctx) string {
+	return "`" + v.Tr("qotd.next_in", "time", "`+left+`") + "`"
+}
+
+// answerState dims the answers that were not picked once the question is answered.
+func answerState(q *QOTD, i int) string {
+	if !q.Answered {
+		return ""
+	}
+	switch {
+	case int32(i) == q.Correct:
+		return "is-right"
+	case int32(i) == q.Picked:
+		return "is-wrong"
+	default:
+		return "is-dim"
+	}
+}
+
+// answerLetter is A–D, or أ ب ج د in Arabic.
+func answerLetter(lang string, i int) string {
+	if lang == "ar" {
+		return []string{"أ", "ب", "ج", "د"}[i%4]
+	}
+	return []string{"A", "B", "C", "D"}[i%4]
+}
+
+func difficultyName(v *view.Ctx, difficulty int32) string {
+	switch difficulty {
+	case 1:
+		return v.Tr("setup.easy")
+	case 3:
+		return v.Tr("setup.hard")
+	default:
+		return v.Tr("setup.medium")
+	}
+}

@@ -1,0 +1,910 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+	"siraj/internal/i18n"
+	"siraj/internal/platform/csvlimit"
+	"siraj/internal/view"
+	"siraj/web/templates/components"
+	"siraj/web/templates/layouts"
+)
+
+// SetCard is one set on P28.
+type SetCard struct {
+	ID        string
+	Name      string
+	MainLang  string
+	Questions int32
+	Plays     int32
+	Ready     bool
+	// Complete is true when the bank could take the set: five questions, each
+	// written in all three languages (MQ-06).
+	Complete bool
+	Missing  int
+	Updated  string
+}
+
+// MyQuestionsData backs P28 (MQ-01).
+type MyQuestionsData struct {
+	// Report is what an uploaded file turned out to be, when one was just tried.
+	Report ImportReport
+	// Page, Pages and Total walk a long shelf of sets a screenful at a time (MQ-01).
+	Page  int
+	Pages int
+	Total int
+	Min   int
+	Sets []SetCard
+}
+
+templ MyQuestions(v *view.Ctx, d MyQuestionsData) {
+	@layouts.App(v, v.Tr("sets.title")) {
+		<div class="page mid sets-page">
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("sets.title") }</h1>
+					<p class="sub">{ v.Tr("sets.sub", "min", d.Min) }</p>
+				</div>
+				<div class="row gap-sm">
+					@ImportButtons(v, "/my-questions/import")
+					<form method="post" action="/my-questions">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="btn btn-primary" type="submit">
+							@components.Icon("plus")
+							{ v.Tr("sets.new") }
+						</button>
+					</form>
+				</div>
+			</div>
+			@ImportProblems(v, d.Report)
+			<div class="grid-auto wide sets-grid">
+				for _, s := range d.Sets {
+					@setCard(v, s, d.Min)
+				}
+				<form method="post" action="/my-questions" class="contents">
+					<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+					<button class="tile col dashed" type="submit">
+						@components.IconClass("plus", "i-lg")
+						<span class="tt">{ v.Tr("sets.new") }</span>
+						<span class="ts">{ v.Tr("sets.new_help", "min", d.Min) }</span>
+					</button>
+				</form>
+			</div>
+			if d.Pages > 1 {
+				@components.Pager(d.Page, d.Pages, setsPageHref, v)
+			}
+			<div class="banner info push-top">
+				<div class="grow">
+					<b>{ v.Tr("sets.bank_banner") }</b>
+					{ " " }
+					{ v.Tr("sets.bank_banner_body") }
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ setCard(v *view.Ctx, s SetCard, min int) {
+	<article class="card pad stack set-card">
+		<div class="row">
+			<span class="cat-ic" style="--c:var(--brand)">
+				@components.Icon("pen")
+			</span>
+			<div class="grow min0">
+				<b class="block" lang={ s.MainLang } dir="auto">{ s.Name }</b>
+				<span class="help">
+					{ fmt.Sprintf("%s · %s %d× · %s", countOfQuestions(v, int(s.Questions)), v.Tr("sets.played"), s.Plays, s.Updated) }
+				</span>
+			</div>
+			if s.Ready {
+				<span class="badge green">{ v.Tr("sets.ready") }</span>
+			} else {
+				<span class="badge gold">{ fmt.Sprintf("%s · %d/%d", v.Tr("sets.draft"), s.Questions, min) }</span>
+			}
+		</div>
+		<div class="bar thin">
+			<i style={ fmt.Sprintf("--v:%d%%;--c:%s", percentOf(int(s.Questions), min), barTone(s.Ready)) }></i>
+		</div>
+		<div class="row wrap gap-xs">
+			if s.Ready {
+				<a class="btn btn-sm btn-primary" href={ templ.URL("/play/set/" + s.ID) }>
+					@components.IconClass("tri", "i-sm flip")
+					{ v.Tr("sets.play") }
+				</a>
+				<a class="btn btn-sm" href={ templ.URL("/challenges/new?source=set&set_id=" + s.ID) }>
+					@components.IconClass("users", "i-sm")
+					{ v.Tr("sets.play_others") }
+				</a>
+			} else {
+				<button class="btn btn-sm btn-primary" type="button" disabled title={ v.Tr("sets.need_more", "n", min-int(s.Questions)) }>
+					@components.IconClass("tri", "i-sm flip")
+					{ v.Tr("sets.play") }
+				</button>
+			}
+			<a class="btn btn-sm btn-ghost" href={ templ.URL("/my-questions/" + s.ID) }>
+				@components.IconClass("pen", "i-sm")
+				if s.Ready {
+					{ v.Tr("sets.edit") }
+				} else {
+					{ v.Tr("sets.add_questions") }
+				}
+			</a>
+			<span class="spacer"></span>
+			<form method="post" action={ templ.SafeURL("/my-questions/" + s.ID + "/delete") }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<button class="icon-btn sm" type="submit" aria-label={ v.Tr("sets.delete") }>
+					@components.IconClass("trash", "i-sm")
+				</button>
+			</form>
+		</div>
+	</article>
+}
+
+// SetQuestionRow is one question in the editor list: what the row shows is what the
+// design's q-row shows — the number, the question, its category, its level, the right
+// answer and the languages it has.
+type SetQuestionRow struct {
+	ID           int64
+	Position     int32
+	Body         string
+	Lang         string
+	Answers      []string
+	Correct      int32
+	CorrectText  string
+	Langs        []string
+	CategoryID   int64
+	CategoryName string
+	CategoryIcon string
+	Color        string
+	Difficulty   int32
+}
+
+// SetEditorData backs P28b: the set editor.
+type SetEditorData struct {
+	// Report is what an uploaded file turned out to be, when one was just tried.
+	Report ImportReport
+	// Page and Pages walk a long set a screenful at a time (MQ-05).
+	Page  int
+	Pages int
+	Set       SetCard
+	Min       int
+	Questions []SetQuestionRow
+	// Domains and Categories fill the question editor's two selects; Categories is
+	// keyed by domain id so changing the domain narrows the list.
+	Domains    []view.Domain
+	Categories map[int64][]components.Category
+	// Back is where Cancel and Save return to: the set editor, or the round that
+	// borrowed the editor to write its own questions (MQ-05).
+	Back string
+}
+
+templ SetEditor(v *view.Ctx, d SetEditorData) {
+	@layouts.App(v, d.Set.Name) {
+		<div class="page mid set-editor">
+			<a class="btn btn-ghost btn-sm push-bottom-sm" href="/my-questions">
+				@components.IconClass("arrowL", "flip")
+				{ v.Tr("sets.title") }
+			</a>
+			<div class="page-head">
+				<div>
+					<h1>{ v.Tr("sets.edit_title") }</h1>
+					<p class="sub">{ v.Tr("sets.edit_sub") }</p>
+				</div>
+				<div class="row gap-sm">
+					<form method="post" action={ templ.SafeURL("/my-questions/" + d.Set.ID + "/suggest") }>
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<button class="btn" type="submit" disabled?={ !d.Set.Complete }>
+							@components.Icon("send")
+							{ v.Tr("sets.suggest") }
+						</button>
+					</form>
+					if !d.Set.Complete {
+						<span class="help">{ suggestWhy(v, d) }</span>
+					}
+					@ImportButtons(v, "/my-questions/"+d.Set.ID+"/import")
+					<button class="btn btn-primary" type="submit" form="set-form">{ v.Tr("action.save") }</button>
+				</div>
+			</div>
+			<form class="card pad stack push-bottom" id="set-form" method="post" action={ templ.SafeURL("/my-questions/" + d.Set.ID) }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				<div class="form-grid">
+					<div class="field">
+						<label class="label" for="set-name">{ v.Tr("sets.name") }</label>
+						<input class="input" id="set-name" name="name" value={ d.Set.Name } maxlength="40"/>
+					</div>
+					<div class="field">
+						<label class="label" for="set-lang">{ v.Tr("sets.main_lang") }</label>
+						<select class="select" id="set-lang" name="main_lang">
+							for _, code := range i18n.Langs {
+								<option value={ code } selected?={ d.Set.MainLang == code }>{ i18n.Native[code] }</option>
+							}
+						</select>
+					</div>
+				</div>
+				@SetProgressBlock(v, d)
+			</form>
+			@ImportProblems(v, d.Report)
+			@SetQuestions(v, d)
+		</div>
+	}
+}
+
+// SetQuestions is the part of the set that grows as questions are written: the list
+// and the way to add one more. "Save and add another" swaps it without touching the
+// drawer over it (MQ-05).
+templ SetQuestions(v *view.Ctx, d SetEditorData) {
+	<div id="set-body">
+		// The way to add a question stays at the top of the list and sticks there, so
+		// it is on screen however far down a long set the player has scrolled (MQ-05).
+		<div class="q-add-bar">
+			@AddQuestionButton(v, "/my-questions/"+d.Set.ID+"/q/new", "")
+		</div>
+		if len(d.Questions) > 0 {
+			<section class="card q-list push-bottom-sm">
+				for _, q := range d.Questions {
+					@QuestionRow(v, q, "/my-questions/"+d.Set.ID, "")
+				}
+			</section>
+			if d.Pages > 1 {
+				@components.Pager(d.Page, d.Pages, setPageHref(d), v)
+			}
+		}
+	</div>
+}
+
+// setPageHref walks the question list a page at a time, keeping everything else on
+// the screen where it was.
+func setPageHref(d SetEditorData) func(int) string {
+	return func(page int) string {
+		return fmt.Sprintf("/my-questions/%s?qpage=%d", d.Set.ID, page)
+	}
+}
+
+// SetProgress is the design's minBar: how far a set is from the five questions a
+// round needs (MQ-02).
+// SetProgressBlock wraps the bar so the drawer can swap it by id.
+templ SetProgressBlock(v *view.Ctx, d SetEditorData) {
+	<div id="set-progress">
+		@SetProgress(v, int(d.Set.Questions), d.Min)
+	</div>
+}
+
+templ SetProgress(v *view.Ctx, n int, min int) {
+	<div class={ "set-progress", templ.KV("ok", n >= min) }>
+		<div class="row">
+			<b>
+				if n >= min {
+					{ v.Tr("sets.ready_to_play") }
+				} else {
+					{ v.Tr("sets.progress", "n", n, "min", min) }
+				}
+			</b>
+			<span class="spacer"></span>
+			<span class="help">
+				if n >= min {
+					{ countOfQuestions(v, n) }
+				} else {
+					{ v.Tr("sets.add_more", "n", min-n, "min", min) }
+				}
+			</span>
+		</div>
+		<div class="bar">
+			<i style={ fmt.Sprintf("--v:%d%%;--c:%s", percentOf(n, min), barTone(n >= min)) }></i>
+		</div>
+	</div>
+}
+
+// QuestionRow is one line of a question list: base is the set's address and back the
+// screen to return to after an edit (the set editor, or the round that is writing).
+templ QuestionRow(v *view.Ctx, q SetQuestionRow, base string, back string) {
+	<div class="q-row">
+		<span class="q-num num">{ fmt.Sprint(q.Position) }</span>
+		<a class="q-main" href={ templ.URL(editQuestionHref(base, q.ID, back)) } { questionDrawerHX(base, q.ID, back)... }>
+			<b lang={ q.Lang } dir="auto">
+				if q.Body != "" {
+					{ q.Body }
+				} else {
+					<span class="muted">{ v.Tr("sets.untitled") }</span>
+				}
+			</b>
+			<span class="q-meta">
+				if q.CategoryName != "" {
+					<span class="q-cat" style={ "--c:" + q.Color }>
+						@components.IconClass(q.CategoryIcon, "i-sm")
+						{ q.CategoryName }
+					</span>
+				}
+				<span class={ "q-lvl", fmt.Sprintf("l%d", q.Difficulty) }>{ levelLabel(v, q.Difficulty) }</span>
+				if q.CorrectText != "" {
+					<span class="q-ok">
+						@components.IconClass("check", "i-sm")
+						{ q.CorrectText }
+					</span>
+				}
+				<span class="q-langs">
+					for _, l := range q.Langs {
+						<span>{ l }</span>
+					}
+				</span>
+			</span>
+		</a>
+		<div class="q-acts">
+			<a class="icon-btn sm" href={ templ.URL(editQuestionHref(base, q.ID, back)) } aria-label={ v.Tr("sets.edit_hint") } title={ v.Tr("sets.edit_hint") } { questionDrawerHX(base, q.ID, back)... }>
+				@components.IconClass("pen", "i-sm")
+			</a>
+			<form method="post" action={ templ.SafeURL(fmt.Sprintf("%s/q/%d/duplicate", base, q.ID)) }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				if back != "" {
+					<input type="hidden" name="then" value={ back }/>
+				}
+				<button class="icon-btn sm" type="submit" aria-label={ v.Tr("sets.duplicate_hint") } title={ v.Tr("sets.duplicate_hint") }>
+					@components.IconClass("copy", "i-sm")
+				</button>
+			</form>
+			<form method="post" action={ templ.SafeURL(fmt.Sprintf("%s/q/%d/delete", base, q.ID)) }>
+				<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+				if back != "" {
+					<input type="hidden" name="then" value={ back }/>
+				}
+				<button class="icon-btn sm" type="submit" aria-label={ v.Tr("sets.delete_hint") } title={ v.Tr("sets.delete_hint") }>
+					@components.IconClass("trash", "i-sm")
+				</button>
+			</form>
+		</div>
+	</div>
+}
+
+// AddQuestionButton opens the question editor: the drawer when htmx is there, the
+// editor's own page when it is not.
+templ AddQuestionButton(v *view.Ctx, href string, back string) {
+	<a class="add-q" href={ templ.URL(withBack(href, back)) } { drawerHX(withBack(href, back))... }>
+		<span class="mode-ic green">
+			@components.Icon("plus")
+		</span>
+		<span>
+			<b>{ v.Tr("sets.add_question") }</b>
+			<span class="help">{ v.Tr("sets.add_question_help") }</span>
+		</span>
+	</a>
+}
+
+// SetQuestionDrawerAgain is what "Save and add another" answers with: the same drawer,
+// empty and ready for the next question, plus the set behind it refreshed in place so
+// the counter and the list of questions follow along (MQ-05).
+templ SetQuestionDrawerAgain(v *view.Ctx, d QuestionEditorData) {
+	@SetQuestionDrawer(v, d)
+	<div hx-swap-oob="outerHTML:#set-body">
+		@SetQuestions(v, d.Set)
+	</div>
+	<div hx-swap-oob="outerHTML:#set-progress">
+		@SetProgressBlock(v, d.Set)
+	</div>
+}
+
+// QuestionEditorData is one question open in the editor, in every language it has.
+type QuestionEditorData struct {
+	// Errors is what the server refused, by field, so the drawer can say what is
+	// wrong where it is wrong instead of only in a toast (MQ-03).
+	Errors   map[string]string
+	Set      SetEditorData
+	Action   string
+	Position int
+	New      bool
+	Question SetQuestionRow
+	DomainID int64
+	Bodies   map[string]string
+	Answers  map[string][]string
+	Explain  map[string]string
+	Error    string
+}
+
+// SetQuestionDrawer is overlay O04 over the screen that opened it.
+templ SetQuestionDrawer(v *view.Ctx, d QuestionEditorData) {
+	<div id="drawer-slot" x-data="sjOverlay" x-init="show()">
+		<div class="ov scrim" x-show="open" x-on:click="hide()" x-transition.opacity></div>
+		<aside
+			class="ov drawer sheet"
+			role="dialog"
+			aria-modal="true"
+			x-show="open"
+			x-on:keydown.escape.window="hide()"
+			x-trap="open"
+		>
+			<form method="post" action={ templ.SafeURL(d.Action) } hx-post={ d.Action } hx-target="#drawer-slot" hx-swap="outerHTML">
+				<div class="drawer-head">
+					<div>
+						<h2>
+							if d.New {
+								{ v.Tr("sets.editor_add") }
+							} else {
+								{ v.Tr("sets.editor_edit") }
+							}
+						</h2>
+						<p>{ v.Tr("sets.editor_position", "n", d.Position, "set", d.Set.Set.Name) }</p>
+					</div>
+					<span class="spacer"></span>
+					<a class="icon-btn sm" href={ templ.URL(d.Set.Back) } x-on:click.prevent="hide()" aria-label={ v.Tr("action.close") }>
+						@components.Icon("x")
+					</a>
+				</div>
+				<div class="drawer-body qe">
+					@questionEditorFields(v, d)
+				</div>
+				<div class="drawer-foot">
+					<a class="btn" href={ templ.URL(d.Set.Back) } x-on:click.prevent="hide()">{ v.Tr("action.cancel") }</a>
+					if d.New {
+						<button
+							class="btn"
+							type="submit"
+							name="again"
+							value="1"
+							x-bind:disabled="!ready"
+							title={ v.Tr("sets.save_hint") }
+						>{ v.Tr("sets.save_and_add") }</button>
+					}
+					<button
+						class="btn btn-primary"
+						type="submit"
+						x-bind:disabled="!ready"
+						title={ v.Tr("sets.save_hint") }
+					>{ v.Tr("sets.save_question") }</button>
+				</div>
+			</form>
+		</aside>
+	</div>
+}
+
+// SetQuestionEditor is the same editor as its own page: the fallback when the drawer
+// cannot open (no JavaScript), and a direct link to a question (NF-02).
+templ SetQuestionEditor(v *view.Ctx, d QuestionEditorData) {
+	@layouts.App(v, v.Tr("sets.editor_title")) {
+		<div class="page narrow set-editor">
+			<a class="btn btn-ghost btn-sm push-bottom-sm" href={ templ.URL(d.Set.Back) }>
+				@components.IconClass("arrowL", "flip")
+				{ d.Set.Set.Name }
+			</a>
+			<div class="page-head">
+				<div>
+					<h1>
+						if d.New {
+							{ v.Tr("sets.editor_add") }
+						} else {
+							{ v.Tr("sets.editor_edit") }
+						}
+					</h1>
+					<p class="sub">{ v.Tr("sets.editor_position", "n", d.Position, "set", d.Set.Set.Name) }</p>
+				</div>
+			</div>
+			<form class="card pad qe" method="post" action={ templ.SafeURL(d.Action) }>
+				@questionEditorFields(v, d)
+				<div class="actions push-top">
+					<a class="btn" href={ templ.URL(d.Set.Back) }>{ v.Tr("action.cancel") }</a>
+					if d.New {
+						<button
+							class="btn"
+							type="submit"
+							name="again"
+							value="1"
+							x-bind:disabled="!ready"
+							title={ v.Tr("sets.save_hint") }
+						>{ v.Tr("sets.save_and_add") }</button>
+					}
+					<button
+						class="btn btn-primary"
+						type="submit"
+						x-bind:disabled="!ready"
+						title={ v.Tr("sets.save_hint") }
+					>{ v.Tr("sets.save_question") }</button>
+				</div>
+			</form>
+		</div>
+	}
+}
+
+// questionEditorFields is the editor itself, shared by the drawer and the page: the
+// topic, the level, then one tab per language with the question, four answers and an
+// explanation (MQ-04).
+templ questionEditorFields(v *view.Ctx, d QuestionEditorData) {
+	<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+	<input type="hidden" name="main_lang" value={ mainLangOf(d) }/>
+	if d.Set.Back != "" {
+		<input type="hidden" name="then" value={ d.Set.Back }/>
+	}
+	<div x-data={ fmt.Sprintf("sjQuestionEditor('%s', %d, '%d', %d)", mainLangOf(d), d.Question.Correct, d.DomainID, levelOf(d)) }>
+		<div class="form-grid">
+			<div class="field">
+				<label class="label" for="qe-dom">{ v.Tr("sets.domain") }</label>
+				<select class="select" id="qe-dom" x-model="domain">
+					for _, dom := range d.Set.Domains {
+						<option value={ fmt.Sprint(dom.ID) } selected?={ dom.ID == d.DomainID }>{ dom.Name }</option>
+					}
+				</select>
+			</div>
+			<div class="field">
+				<label class="label" for="qe-cat">{ v.Tr("sets.category") }</label>
+				<select class="select" id="qe-cat" name="category_id" required>
+					<option value="">{ v.Tr("sets.choose") }</option>
+					for _, dom := range d.Set.Domains {
+						for _, cat := range d.Set.Categories[dom.ID] {
+							<option
+								value={ fmt.Sprint(cat.ID) }
+								selected?={ cat.ID == d.Question.CategoryID }
+								x-bind:hidden={ fmt.Sprintf("domain !== '%d'", dom.ID) }
+							>{ cat.Name }</option>
+						}
+					}
+				</select>
+			</div>
+		</div>
+		<div class="form-grid push-top">
+			<div class="field">
+				<span class="label">{ v.Tr("sets.difficulty") }</span>
+				<div class="seg full">
+					for _, n := range []int32{1, 2, 3} {
+						<button type="button" x-on:click={ fmt.Sprintf("level = %d", n) } x-bind:aria-pressed={ fmt.Sprintf("level === %d", n) }>{ levelLabel(v, n) }</button>
+					}
+				</div>
+				<input type="hidden" name="difficulty" x-bind:value="level" value={ fmt.Sprint(levelOf(d)) }/>
+			</div>
+			<div class="field">
+				<span class="label">{ v.Tr("sets.points") }</span>
+				<div class="pts-box num" x-text="level * 10">{ fmt.Sprint(levelOf(d) * 10) }</div>
+				<span class="help">{ v.Tr("sets.points_help") }</span>
+			</div>
+		</div>
+		<div class="qe-tabs" role="tablist">
+			for _, code := range editorLangs(d) {
+				<button
+					type="button"
+					role="tab"
+					x-bind:aria-selected={ fmt.Sprintf("tab === '%s'", code) }
+					x-on:click={ fmt.Sprintf("tab = '%s'", code) }
+				>
+					<span lang={ code }>{ i18n.Native[code] }</span>
+					if code == mainLangOf(d) {
+						<span class="qe-tag main">{ v.Tr("sets.main_tag") }</span>
+					} else if d.Bodies[code] != "" {
+						<span class="qe-dot"></span>
+					} else {
+						<span class="qe-tag">{ v.Tr("sets.optional") }</span>
+					}
+				</button>
+			}
+		</div>
+		for _, code := range editorLangs(d) {
+			<div
+				x-show={ fmt.Sprintf("tab === '%s'", code) }
+				if code != mainLangOf(d) {
+					x-cloak
+				}
+			>
+				if code == mainLangOf(d) {
+					<div class="row qe-main">
+						<span class="help">{ v.Tr("sets.main_language") }</span>
+					</div>
+				} else {
+					<p class="help qe-note">
+						@components.IconClass("info", "i-sm")
+						{ v.Tr("sets.translation_note") }
+					</p>
+				}
+				<div class="field">
+					<div class="row">
+						<label class="label" for={ "qe-q-" + code }>{ v.Tr("sets.body") }</label>
+						<span class="spacer"></span>
+						<span class="help num" x-text={ fmt.Sprintf("count('%s') + ' / 160'", code) }>0 / 160</span>
+					</div>
+					if why, bad := d.Errors["body"]; bad && code == mainLangOf(d) {
+						<span class="err">{ why }</span>
+					}
+					<textarea
+						class="textarea"
+						id={ "qe-q-" + code }
+						name={ "body_" + code }
+						maxlength="160"
+						rows="3"
+						lang={ code }
+						dir={ i18n.Dir(code) }
+						x-ref={ "body_" + code }
+						x-on:input={ fmt.Sprintf("lengths['%s'] = $event.target.value.length", code) }
+						placeholder={ v.Tr("sets.body_placeholder") }
+					>{ d.Bodies[code] }</textarea>
+				</div>
+				<div class="label push-top-sm push-bottom-xs">
+					{ v.Tr("sets.answers") }
+					<span class="muted normal">{ " · " + v.Tr("sets.select_correct") }</span>
+				</div>
+				<div class="stack gap-xs">
+					for i := 0; i < 4; i++ {
+						<div class="qe-ans" x-bind:class={ fmt.Sprintf("{ ok: correct === %d }", i) }>
+							<input
+								type="radio"
+								name="correct_index"
+								value={ fmt.Sprint(i) }
+								checked?={ d.Question.Correct == int32(i) }
+								x-model.number="correct"
+								aria-label={ fmt.Sprintf("%s %d", v.Tr("sets.correct"), i+1) }
+							/>
+							<input
+								class="input"
+								name={ fmt.Sprintf("answer_%s_%d", code, i) }
+								value={ answerAt(d.Answers[code], i) }
+								maxlength="60"
+								lang={ code }
+								dir={ i18n.Dir(code) }
+								aria-label={ fmt.Sprintf("%s %d", v.Tr("sets.answers"), i+1) }
+							/>
+						</div>
+					}
+					if why, bad := d.Errors["answers_"+code]; bad {
+						<span class="err">{ why }</span>
+					}
+				</div>
+				<div class="field push-top">
+					<label class="label" for={ "qe-x-" + code }>
+						{ v.Tr("sets.explanation") }
+						<span class="muted normal">{ " · " + v.Tr("sets.optional") }</span>
+					</label>
+					<textarea
+						class="textarea"
+						id={ "qe-x-" + code }
+						name={ "explanation_" + code }
+						rows="3"
+						maxlength="300"
+						lang={ code }
+						dir={ i18n.Dir(code) }
+						placeholder={ v.Tr("sets.explanation_placeholder") }
+					>{ d.Explain[code] }</textarea>
+				</div>
+			</div>
+		}
+	</div>
+	if d.Error != "" {
+		<p class="err push-top-sm" role="alert">{ d.Error }</p>
+	}
+}
+
+// drawerHX opens a drawer over the current screen; the href behind it is the page.
+func drawerHX(href string) templ.Attributes {
+	return templ.Attributes{
+		"hx-get":    href,
+		"hx-target": "#drawer-slot",
+		"hx-swap":   "outerHTML",
+	}
+}
+
+func questionDrawerHX(base string, id int64, back string) templ.Attributes {
+	return drawerHX(editQuestionHref(base, id, back))
+}
+
+func editQuestionHref(base string, id int64, back string) string {
+	return withBack(fmt.Sprintf("%s/q/%d", base, id), back)
+}
+
+// WithBack is withBack for the handlers: the address of the editor, remembering the
+// screen to return to.
+func WithBack(href string, back string) string { return withBack(href, back) }
+
+func withBack(href string, back string) string {
+	if back == "" {
+		return href
+	}
+	return withQuery(href, "then", back)
+}
+
+func mainLangOf(d QuestionEditorData) string {
+	if d.Question.Lang != "" {
+		return d.Question.Lang
+	}
+	return d.Set.Set.MainLang
+}
+
+func levelOf(d QuestionEditorData) int32 {
+	if d.Question.Difficulty >= 1 && d.Question.Difficulty <= 3 {
+		return d.Question.Difficulty
+	}
+	return 2
+}
+
+func levelLabel(v *view.Ctx, n int32) string {
+	switch n {
+	case 1:
+		return v.Tr("setup.easy")
+	case 3:
+		return v.Tr("setup.hard")
+	default:
+		return v.Tr("setup.medium")
+	}
+}
+
+func answerAt(answers []string, i int) string {
+	if i < len(answers) {
+		return answers[i]
+	}
+	return ""
+}
+
+func percentOf(n, min int) int {
+	if min <= 0 {
+		return 100
+	}
+	p := n * 100 / min
+	if p > 100 {
+		return 100
+	}
+	return p
+}
+
+func barTone(ready bool) string {
+	if ready {
+		return "var(--brand)"
+	}
+	return "var(--lamp)"
+}
+
+// editorLangs puts the question's main language first, the way the design draws the
+// tab row: the one that has to be filled is the one already open, and the optional
+// translations follow in menu order (MQ-03, LG-05).
+func editorLangs(d QuestionEditorData) []string {
+	main := mainLangOf(d)
+	out := make([]string, 0, len(i18n.Langs))
+	out = append(out, main)
+	for _, code := range i18n.Langs {
+		if code != main {
+			out = append(out, code)
+		}
+	}
+	return out
+}
+
+// ImportButtons is what replaced the upload screen: pick a file and it is checked
+// and imported in one step, or take the template away and fill it in first (MQ-05).
+templ ImportButtons(v *view.Ctx, action string) {
+	<div class="row gap-sm" x-data="sjUpload">
+		<button class="btn" type="button" x-on:click="open = true" title={ v.Tr("sets.import_hint") }>
+			@components.Icon("clip")
+			{ v.Tr("sets.import_cta") }
+		</button>
+		<a class="btn btn-ghost" href={ templ.URL(templateHref(action)) } download title={ v.Tr("sets.template_hint") }>
+			@components.Icon("upload")
+			{ v.Tr("sets.import_template") }
+		</a>
+		// What a file must hold, said before one is picked rather than after it is
+		// refused (MQ-05).
+		<div x-show="open" x-cloak>
+			<div class="ov scrim" x-on:click="open = false" x-transition.opacity></div>
+			<div class="ov modal" role="dialog" aria-modal="true" x-on:keydown.escape.window="open = false" x-trap="open">
+				<div class="modal-head">
+					<h2>{ v.Tr("sets.import_cta") }</h2>
+					<button class="icon-btn" type="button" x-on:click="open = false" aria-label={ v.Tr("action.close") }>
+						@components.Icon("x")
+					</button>
+				</div>
+				<div class="modal-body">
+					<p class="muted">{ v.Tr("sets.import_rules_intro") }</p>
+					<ul class="rule-list">
+						<li>{ v.Tr("sets.import_rule_rows", "n", csvlimit.Rows) }</li>
+						<li>{ v.Tr("sets.import_rule_size", "n", csvlimit.MB) }</li>
+						<li>{ v.Tr("sets.import_rule_correct") }</li>
+						<li>{ v.Tr("sets.import_rule_langs") }</li>
+						<li>{ v.Tr("sets.import_rule_category") }</li>
+						<li>{ v.Tr("sets.import_rule_name") }</li>
+						<li>{ v.Tr("sets.import_rule_atomic") }</li>
+					</ul>
+					<div>
+						<b class="block push-bottom-xs">{ v.Tr("sets.import_header_is") }</b>
+						<div class="row wrap gap-xs">
+							for _, column := range importColumns() {
+								<code class={ "col-chip", templ.KV("need", column == "correct" || column == "set_name") }>{ column }</code>
+							}
+						</div>
+					</div>
+				</div>
+				<div class="actions">
+					<a class="btn btn-ghost" href={ templ.URL(templateHref(action)) } download>
+						@components.Icon("upload")
+						{ v.Tr("sets.import_template") }
+					</a>
+					<form method="post" action={ templ.SafeURL(action) } enctype="multipart/form-data" x-ref="form">
+						<input type="hidden" name="csrf_token" value={ v.CSRF }/>
+						<label class="btn btn-primary">
+							<input
+								class="sr-only"
+								type="file"
+								name="file"
+								accept=".csv,text/csv"
+								x-ref="file"
+								x-on:change="send()"
+							/>
+							@components.Icon("clip")
+							{ v.Tr("sets.import_choose") }
+						</label>
+					</form>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+// importColumns is the header the dialog prints, short enough to read: the three that
+// describe the question, then one language's worth to show the shape of the rest.
+func importColumns() []string {
+	return []string{
+		"set_name", "main_lang", "correct", "category", "difficulty",
+		"question_en", "answer_1_en", "answer_2_en", "answer_3_en", "answer_4_en",
+		"explanation_en", "…_ar", "…_fr",
+	}
+}
+
+// setsPageHref walks the shelf of sets a page at a time (MQ-01).
+func setsPageHref(page int) string {
+	return fmt.Sprintf("/my-questions?page=%d", page)
+}
+
+// templateHref is the file the button hands over: from My questions it is the shape a
+// new set is written in; from inside a set it is that set, so a player can edit what
+// they already have and send it back (MQ-05).
+func templateHref(action string) string {
+	if strings.HasPrefix(action, "/my-questions/") && strings.HasSuffix(action, "/import") {
+		return strings.TrimSuffix(action, "/import") + "/export.csv"
+	}
+	return "/my-questions/import/template.csv"
+}
+
+// ImportProblems is what an unreadable file leaves behind on the screen it was
+// dropped on: every line that stopped it, and the promise that nothing went in.
+templ ImportProblems(v *view.Ctx, r ImportReport) {
+	if len(r.Problems) > 0 {
+		<section class="card pad stack gap-sm push-bottom">
+			<div class="row">
+				<b class="err">{ v.Tr("sets.import_problems", "n", len(r.Problems)) }</b>
+				<span class="spacer"></span>
+				<span class="help">{ v.Tr("sets.import_nothing_written") }</span>
+			</div>
+			<ul class="problem-list">
+				for _, p := range r.Problems {
+					<li>
+						if p.Line > 0 {
+							<span class="pl-line num">{ v.Tr("sets.import_line", "n", p.Line) }</span>
+						}
+						if p.Column != "" {
+							<code class="col-chip">{ p.Column }</code>
+						}
+						<span class="grow">{ p.Why }</span>
+					</li>
+				}
+			</ul>
+		</section>
+	}
+}
+
+// ImportProblem is one thing wrong with one line of an uploaded file (MQ-05).
+type ImportProblem struct {
+	Line   int
+	Column string
+	Why    string
+}
+
+// ImportReport is what the upload screen shows after reading a file.
+type ImportReport struct {
+	Rows     int
+	Ready    bool
+	Problems []ImportProblem
+}
+
+// countOfQuestions reads one question as one question, not as "1 questions".
+func countOfQuestions(v *view.Ctx, n int) string {
+	if n == 1 {
+		return v.Tr("sets.questions_count_one")
+	}
+	return v.Tr("sets.questions_count", "count", n)
+}
+
+// suggestWhy says what still stands between a set and the bank: five questions, and
+// all three languages on every one of them (MQ-06, LG-05).
+func suggestWhy(v *view.Ctx, d SetEditorData) string {
+	if !d.Set.Ready {
+		return v.Tr("sets.add_more", "n", d.Min-int(d.Set.Questions), "min", d.Min)
+	}
+	return v.Tr("sets.suggest_needs_langs", "n", d.Set.Missing)
+}
